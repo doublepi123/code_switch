@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ type ProviderPreset struct {
 	Name      string
 	BaseURL   string
 	Model     string
+	Models    []string
 	Haiku     string
 	Sonnet    string
 	Opus      string
@@ -35,11 +38,17 @@ type AppConfig struct {
 	Providers map[string]StoredProvider `json:"providers"`
 }
 
+type ConfigureSelection struct {
+	Provider string
+	Model    string
+}
+
 var providerPresets = map[string]ProviderPreset{
-	"minimax": {
+	"minimax-cn": {
 		Name:      "MiniMax CN Token Plan",
 		BaseURL:   "https://api.minimaxi.com/anthropic",
 		Model:     "MiniMax-M2.7",
+		Models:    []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
 		Haiku:     "MiniMax-M2.7",
 		Sonnet:    "MiniMax-M2.7",
 		Opus:      "MiniMax-M2.7",
@@ -50,10 +59,26 @@ var providerPresets = map[string]ProviderPreset{
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
 		},
 	},
+	"minimax-global": {
+		Name:      "MiniMax Global Token Plan",
+		BaseURL:   "https://api.minimax.io/anthropic",
+		Model:     "MiniMax-M2.7",
+		Models:    []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
+		Haiku:     "MiniMax-M2.7",
+		Sonnet:    "MiniMax-M2.7",
+		Opus:      "MiniMax-M2.7",
+		Website:   "https://platform.minimax.io",
+		APIKeyURL: "https://platform.minimax.io/docs/token-plan/claude-code",
+		ExtraEnv: map[string]any{
+			"API_TIMEOUT_MS": "3000000",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
+		},
+	},
 	"openrouter": {
 		Name:      "OpenRouter",
 		BaseURL:   "https://openrouter.ai/api",
 		Model:     "anthropic/claude-sonnet-4.6",
+		Models:    []string{"anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5", "anthropic/claude-opus-4.7"},
 		Haiku:     "anthropic/claude-haiku-4.5",
 		Sonnet:    "anthropic/claude-sonnet-4.6",
 		Opus:      "anthropic/claude-opus-4.7",
@@ -64,6 +89,7 @@ var providerPresets = map[string]ProviderPreset{
 		Name:      "OpenCode Go",
 		BaseURL:   "https://opencode.ai/zen/go",
 		Model:     "minimax-m2.7",
+		Models:    []string{"minimax-m2.7", "minimax-m2.5"},
 		Haiku:     "minimax-m2.7",
 		Sonnet:    "minimax-m2.7",
 		Opus:      "minimax-m2.7",
@@ -73,8 +99,9 @@ var providerPresets = map[string]ProviderPreset{
 }
 
 var providerAliases = map[string]string{
-	"minimax-cn":       "minimax",
-	"minimax-cn-token": "minimax",
+	"minimax":             "minimax-cn",
+	"minimax-cn-token":    "minimax-cn",
+	"minimax-global-token": "minimax-global",
 }
 
 var managedEnvKeys = []string{
@@ -146,11 +173,21 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 
+	currentProvider, currentModel := currentConfiguredProvider(*claudeDir)
 	reader := bufio.NewReader(in)
-	provider, err := promptProviderSelection(reader, out, cfg, currentConfiguredProvider(*claudeDir))
-	if err != nil {
-		return err
+	var selection ConfigureSelection
+	if file, ok := in.(*os.File); ok && shouldUseArrowTUI(file) {
+		selection, err = runArrowTUI(file, out, cfg, currentProvider, currentModel)
+		if err != nil {
+			return err
+		}
+	} else {
+		selection, err = promptConfigureSelectionFallback(reader, out, cfg, currentProvider, currentModel)
+		if err != nil {
+			return err
+		}
 	}
+	provider := selection.Provider
 
 	existingKey := strings.TrimSpace(cfg.Providers[provider].APIKey)
 	apiKey := existingKey
@@ -168,7 +205,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
 
-	if err := switchProvider(provider, apiKey, "", *claudeDir); err != nil {
+	if err := switchProvider(provider, apiKey, selection.Model, *claudeDir); err != nil {
 		return err
 	}
 	return nil
@@ -299,10 +336,11 @@ Usage:
   claude-switch set-key <provider> <api-key>
   claude-switch switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
 
-Providers:
-  minimax
-  openrouter
-  opencode-go`)
+	Providers:
+	  minimax-cn
+	  minimax-global
+	  openrouter
+	  opencode-go`)
 }
 
 func sortedProviderNames() []string {
@@ -328,8 +366,10 @@ func canonicalProviderName(name string) string {
 
 func detectProvider(baseURL, model string) string {
 	switch {
-	case strings.Contains(baseURL, "minimax"):
-		return "minimax"
+	case strings.Contains(baseURL, "api.minimaxi.com"):
+		return "minimax-cn"
+	case strings.Contains(baseURL, "api.minimax.io"):
+		return "minimax-global"
 	case strings.Contains(baseURL, "openrouter.ai"):
 		return "openrouter"
 	case strings.Contains(baseURL, "opencode.ai") || strings.HasPrefix(model, "opencode-go/"):
@@ -346,21 +386,92 @@ func effectiveModel(preset ProviderPreset, override string) string {
 	return preset.Model
 }
 
-func promptProviderSelection(reader *bufio.Reader, out io.Writer, cfg *AppConfig, currentProvider string) (string, error) {
+func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
 	names := sortedProviderNames()
 
 	for {
-		renderConfigureScreen(out, names, cfg, currentProvider)
+		renderConfigureScreen(out, names, cfg, currentProvider, currentModel, 0, 0, "")
 		fmt.Fprint(out, "Provider: ")
 		text, err := readLine(reader)
 		if err != nil {
-			return "", err
+			return ConfigureSelection{}, err
 		}
 		provider, err := resolveProviderSelection(text, names)
 		if err == nil {
-			return provider, nil
+			return ConfigureSelection{
+				Provider: provider,
+				Model:    defaultSelectionModel(provider, currentProvider, currentModel),
+			}, nil
 		}
 		fmt.Fprintf(out, "\nInvalid provider: %s\n", strings.TrimSpace(text))
+	}
+}
+
+func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
+	restore, err := enterRawMode(in)
+	if err != nil {
+		return promptConfigureSelectionFallback(bufio.NewReader(in), out, cfg, currentProvider, currentModel)
+	}
+	defer restore()
+
+	names := sortedProviderNames()
+	if len(names) == 0 {
+		return ConfigureSelection{}, errors.New("no providers configured")
+	}
+
+	reader := bufio.NewReader(in)
+	selectedProvider := 0
+	for i, name := range names {
+		if name == currentProvider {
+			selectedProvider = i
+			break
+		}
+	}
+	selectedModel := modelIndex(names[selectedProvider], currentProvider, currentModel)
+	status := ""
+
+	for {
+		renderConfigureScreen(out, names, cfg, currentProvider, currentModel, selectedProvider, selectedModel, status)
+		key, err := readKey(reader)
+		if err != nil {
+			return ConfigureSelection{}, err
+		}
+
+		switch key {
+		case "up":
+			if selectedProvider > 0 {
+				selectedProvider--
+				selectedModel = modelIndex(names[selectedProvider], currentProvider, currentModel)
+			}
+			status = ""
+		case "down":
+			if selectedProvider < len(names)-1 {
+				selectedProvider++
+				selectedModel = modelIndex(names[selectedProvider], currentProvider, currentModel)
+			}
+			status = ""
+		case "left":
+			if selectedModel > 0 {
+				selectedModel--
+			}
+			status = ""
+		case "right":
+			models := providerModels(names[selectedProvider])
+			if selectedModel < len(models)-1 {
+				selectedModel++
+			}
+			status = ""
+		case "enter":
+			models := providerModels(names[selectedProvider])
+			return ConfigureSelection{
+				Provider: names[selectedProvider],
+				Model:    models[selectedModel],
+			}, nil
+		case "quit":
+			return ConfigureSelection{}, errors.New("cancelled")
+		default:
+			status = "Use arrow keys to choose provider/model, Enter to apply, q to quit."
+		}
 	}
 }
 
@@ -380,13 +491,17 @@ func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string,
 	}
 }
 
-func renderConfigureScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider string) {
+func renderConfigureScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider, currentModel string, selectedProvider, selectedModel int, statusLine string) {
 	fmt.Fprint(out, "\033[H\033[2J")
 	fmt.Fprintln(out, "claude-switch")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Configure provider")
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Select a provider by number or name:")
+	fmt.Fprintln(out, "Use ↑ ↓ to choose provider, ← → to choose model, Enter to apply, q to quit.")
+	if statusLine != "" {
+		fmt.Fprintln(out, statusLine)
+		fmt.Fprintln(out)
+	}
 	for i, name := range names {
 		preset := providerPresets[name]
 		status := []string{}
@@ -402,25 +517,53 @@ func renderConfigureScreen(out io.Writer, names []string, cfg *AppConfig, curren
 			label = " [" + strings.Join(status, ", ") + "]"
 		}
 
-		fmt.Fprintf(out, "  %d) %s%s\n", i+1, name, label)
+		cursor := " "
+		if i == selectedProvider {
+			cursor = ">"
+		}
+		fmt.Fprintf(out, "%s %d) %s%s\n", cursor, i+1, name, label)
 		fmt.Fprintf(out, "     %s\n", preset.BaseURL)
 		fmt.Fprintf(out, "     default model: %s\n", preset.Model)
 	}
 	fmt.Fprintln(out)
+
+	if len(names) == 0 {
+		return
+	}
+	provider := names[selectedProvider]
+	preset := providerPresets[provider]
+	models := providerModels(provider)
+	if selectedModel < 0 || selectedModel >= len(models) {
+		selectedModel = 0
+	}
+	fmt.Fprintf(out, "Selected provider: %s\n", provider)
+	fmt.Fprintf(out, "Provider name: %s\n", preset.Name)
+	fmt.Fprintf(out, "Base URL: %s\n", preset.BaseURL)
+	fmt.Fprintf(out, "Saved key: %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
+	fmt.Fprintf(out, "Current active: %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
+	fmt.Fprintln(out, "Models:")
+	for i, model := range models {
+		cursor := " "
+		if i == selectedModel {
+			cursor = ">"
+		}
+		fmt.Fprintf(out, "%s %s\n", cursor, model)
+	}
+	fmt.Fprintln(out)
 }
 
-func currentConfiguredProvider(claudeDir string) string {
+func currentConfiguredProvider(claudeDir string) (string, string) {
 	root, err := readJSONMap(claudeSettingsPath(claudeDir))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	env := nestedMap(root, "env")
 	if env == nil {
-		return ""
+		return "", ""
 	}
 	baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
 	model, _ := env["ANTHROPIC_MODEL"].(string)
-	return detectProvider(baseURL, model)
+	return detectProvider(baseURL, model), model
 }
 
 func readLine(reader *bufio.Reader) (string, error) {
@@ -452,6 +595,131 @@ func resolveProviderSelection(input string, names []string) (string, error) {
 		return "", errors.New("unsupported provider")
 	}
 	return provider, nil
+}
+
+func defaultSelectionModel(provider, currentProvider, currentModel string) string {
+	if provider == currentProvider && currentModel != "" {
+		for _, model := range providerModels(provider) {
+			if model == currentModel {
+				return currentModel
+			}
+		}
+	}
+	return providerPresets[provider].Model
+}
+
+func providerModels(provider string) []string {
+	preset := providerPresets[provider]
+	if len(preset.Models) == 0 {
+		return []string{preset.Model}
+	}
+	return preset.Models
+}
+
+func modelIndex(provider, currentProvider, currentModel string) int {
+	selected := defaultSelectionModel(provider, currentProvider, currentModel)
+	for i, model := range providerModels(provider) {
+		if model == selected {
+			return i
+		}
+	}
+	return 0
+}
+
+func maskAPIKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "not saved"
+	}
+	if len(key) <= 8 {
+		return strings.Repeat("*", len(key))
+	}
+	return key[:4] + strings.Repeat("*", len(key)-8) + key[len(key)-4:]
+}
+
+func currentProviderLabel(provider string) string {
+	if provider == "" {
+		return "none"
+	}
+	return provider
+}
+
+func currentModelLabel(model string) string {
+	if model == "" {
+		return "none"
+	}
+	return model
+}
+
+func shouldUseArrowTUI(in *os.File) bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	if os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	info, err := in.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func enterRawMode(in *os.File) (func(), error) {
+	stateCmd := exec.Command("stty", "-g")
+	stateCmd.Stdin = in
+	savedState, err := stateCmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	rawCmd := exec.Command("stty", "raw", "-echo")
+	rawCmd.Stdin = in
+	if err := rawCmd.Run(); err != nil {
+		return nil, err
+	}
+
+	return func() {
+		restoreCmd := exec.Command("stty", strings.TrimSpace(string(savedState)))
+		restoreCmd.Stdin = in
+		_ = restoreCmd.Run()
+	}, nil
+}
+
+func readKey(reader *bufio.Reader) (string, error) {
+	b, err := reader.ReadByte()
+	if err != nil {
+		return "", err
+	}
+	switch b {
+	case '\r', '\n':
+		return "enter", nil
+	case 'q', 'Q':
+		return "quit", nil
+	case 27:
+		next, err := reader.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		if next != '[' {
+			return "", nil
+		}
+		arrow, err := reader.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		switch arrow {
+		case 'A':
+			return "up", nil
+		case 'B':
+			return "down", nil
+		case 'C':
+			return "right", nil
+		case 'D':
+			return "left", nil
+		}
+	}
+	return "", nil
 }
 
 func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideModel string) {
@@ -516,7 +784,18 @@ func loadAppConfig() (*AppConfig, string, error) {
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]StoredProvider{}
 	}
+	migrateLegacyProviders(cfg)
 	return cfg, path, nil
+}
+
+func migrateLegacyProviders(cfg *AppConfig) {
+	legacy, ok := cfg.Providers["minimax"]
+	if ok {
+		if _, exists := cfg.Providers["minimax-cn"]; !exists && strings.TrimSpace(legacy.APIKey) != "" {
+			cfg.Providers["minimax-cn"] = legacy
+		}
+		delete(cfg.Providers, "minimax")
+	}
 }
 
 func readJSONMap(path string) (map[string]any, error) {

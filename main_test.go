@@ -43,7 +43,7 @@ func TestApplyPresetPreservesUnmanagedFields(t *testing.T) {
 
 func TestApplyPresetOverrideModel(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["minimax"], "sk-test", "custom-model")
+	applyPreset(root, providerPresets["minimax-cn"], "sk-test", "custom-model")
 
 	env := root["env"].(map[string]any)
 	for _, key := range []string{
@@ -64,7 +64,8 @@ func TestDetectProvider(t *testing.T) {
 		model   string
 		want    string
 	}{
-		{baseURL: "https://api.minimaxi.com/anthropic", want: "minimax"},
+		{baseURL: "https://api.minimaxi.com/anthropic", want: "minimax-cn"},
+		{baseURL: "https://api.minimax.io/anthropic", want: "minimax-global"},
 		{baseURL: "https://openrouter.ai/api", want: "openrouter"},
 		{baseURL: "https://opencode.ai/zen/go", model: "minimax-m2.7", want: "opencode-go"},
 		{baseURL: "https://example.com", model: "opencode-go/kimi-k2.5", want: "opencode-go"},
@@ -88,7 +89,7 @@ func TestResolveProviderSelection(t *testing.T) {
 	}{
 		{input: "1", want: names[0], ok: true},
 		{input: " openrouter ", want: "openrouter", ok: true},
-		{input: "minimax-cn-token", want: "minimax", ok: true},
+		{input: "minimax-cn-token", want: "minimax-cn", ok: true},
 		{input: "99", ok: false},
 		{input: "unknown", ok: false},
 	}
@@ -113,10 +114,11 @@ func TestResolveProviderSelection(t *testing.T) {
 
 func TestCanonicalProviderName(t *testing.T) {
 	cases := map[string]string{
-		"minimax":          "minimax",
-		"MiniMax-CN":       "minimax",
-		"minimax-cn-token": "minimax",
-		" openrouter ":     "openrouter",
+		"minimax":              "minimax-cn",
+		"MiniMax-CN":           "minimax-cn",
+		"minimax-cn-token":     "minimax-cn",
+		"minimax-global-token": "minimax-global",
+		" openrouter ":         "openrouter",
 	}
 
 	for input, want := range cases {
@@ -183,7 +185,7 @@ func TestCmdConfigureReusesExistingAPIKeyWithoutPrompting(t *testing.T) {
 
 	cfg := AppConfig{
 		Providers: map[string]StoredProvider{
-			"minimax": {APIKey: "sk-existing"},
+			"minimax-cn": {APIKey: "sk-existing"},
 		},
 	}
 	configPath := filepath.Join(home, ".claude-switch", "config.json")
@@ -191,7 +193,7 @@ func TestCmdConfigureReusesExistingAPIKeyWithoutPrompting(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	input := strings.NewReader("minimax\n")
+	input := strings.NewReader("minimax-cn\n")
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure(nil, input, output); err != nil {
@@ -207,14 +209,14 @@ func TestCmdConfigureReusesExistingAPIKeyWithoutPrompting(t *testing.T) {
 	if err := json.Unmarshal(configBytes, &updated); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
-	if got := updated.Providers["minimax"].APIKey; got != "sk-existing" {
+	if got := updated.Providers["minimax-cn"].APIKey; got != "sk-existing" {
 		t.Fatalf("stored api key = %q, want %q", got, "sk-existing")
 	}
 
 	if strings.Contains(output.String(), "API key:") {
 		t.Fatalf("did not expect api key prompt, got %q", output.String())
 	}
-	if !strings.Contains(output.String(), "using saved api key for minimax") {
+	if !strings.Contains(output.String(), "using saved api key for minimax-cn") {
 		t.Fatalf("expected saved-key reuse message, got %q", output.String())
 	}
 }
@@ -225,7 +227,7 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 
 	cfg := AppConfig{
 		Providers: map[string]StoredProvider{
-			"minimax": {APIKey: "sk-existing"},
+			"minimax-cn": {APIKey: "sk-existing"},
 		},
 	}
 	configPath := filepath.Join(home, ".claude-switch", "config.json")
@@ -233,7 +235,7 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	input := strings.NewReader("minimax\nsk-new\n")
+	input := strings.NewReader("minimax-cn\nsk-new\n")
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure([]string{"--reset-key"}, input, output); err != nil {
@@ -249,7 +251,7 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 	if err := json.Unmarshal(configBytes, &updated); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
-	if got := updated.Providers["minimax"].APIKey; got != "sk-new" {
+	if got := updated.Providers["minimax-cn"].APIKey; got != "sk-new" {
 		t.Fatalf("stored api key = %q, want %q", got, "sk-new")
 	}
 
@@ -266,13 +268,28 @@ func TestRenderConfigureScreenShowsSavedState(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderConfigureScreen(output, sortedProviderNames(), cfg, "minimax")
+	renderConfigureScreen(output, sortedProviderNames(), cfg, "minimax-cn", "MiniMax-M2.7", 0, 0, "")
 
 	text := output.String()
-	if !strings.Contains(text, "minimax [current]") {
+	if !strings.Contains(text, "minimax-cn [current]") {
 		t.Fatalf("expected current provider marker, got %q", text)
 	}
 	if !strings.Contains(text, "openrouter [saved-key]") {
 		t.Fatalf("expected saved-key marker, got %q", text)
+	}
+	if !strings.Contains(text, "Saved key: not saved") {
+		t.Fatalf("expected saved key summary, got %q", text)
+	}
+	if !strings.Contains(text, "> MiniMax-M2.7") {
+		t.Fatalf("expected selected model marker, got %q", text)
+	}
+}
+
+func TestMaskAPIKey(t *testing.T) {
+	if got := maskAPIKey(""); got != "not saved" {
+		t.Fatalf("maskAPIKey(empty) = %q", got)
+	}
+	if got := maskAPIKey("sk-1234567890"); got != "sk-1*****7890" {
+		t.Fatalf("maskAPIKey = %q", got)
 	}
 }

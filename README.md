@@ -19,6 +19,8 @@ cd claude_switch
 - 支持查看当前 Claude Code 指向的供应商
 - 支持保存各供应商 API Key
 - 支持 TUI 交互式选择供应商并配置 API Key
+- 支持方向键选择 provider 和模型
+- 支持显示已保存 API Key 的掩码摘要
 - 支持一键切换 `~/.claude/settings.json`
 - 切换前自动备份原始配置
 - 仅更新受管理的 `env` 字段，避免覆盖其他自定义配置
@@ -27,11 +29,17 @@ cd claude_switch
 
 | Provider | Base URL | 默认模型 |
 | --- | --- | --- |
-| `minimax` | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.7` |
+| `minimax-cn` | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.7` |
+| `minimax-global` | `https://api.minimax.io/anthropic` | `MiniMax-M2.7` |
 | `openrouter` | `https://openrouter.ai/api` | `anthropic/claude-sonnet-4.6` |
 | `opencode-go` | `https://opencode.ai/zen/go` | `minimax-m2.7` |
 
-其中 `minimax` 按 MiniMax CN Token Plan 配置，参考官方 CN 文档：
+其中：
+
+- `minimax-cn` 对应 MiniMax 中国区 Token Plan
+- `minimax-global` 对应 MiniMax 国际区 Token Plan
+
+MiniMax 中国区参考官方 CN 文档：
 
 - 文本生成: https://platform.minimaxi.com/docs/guides/text-generation
 - Claude Code: https://platform.minimaxi.com/docs/token-plan/claude-code
@@ -119,8 +127,10 @@ cs configure
 
 命令会以 TUI 方式引导你：
 
-- 选择供应商
+- 用方向键选择供应商
+- 在 TUI 内切换模型
 - 首次为该供应商输入 API Key
+- 显示当前已保存 API Key 的掩码摘要
 - 自动保存配置
 - 立即切换当前 Claude Code 到所选供应商
 
@@ -156,6 +166,13 @@ cs
 cs configure
 ```
 
+TUI 操作方式：
+
+- `↑` / `↓`：切换 provider
+- `←` / `→`：切换模型
+- `Enter`：确认并应用
+- `q`：退出
+
 如果你已经保存过某个供应商的 API Key，重新执行 `cs configure` 时会直接复用。
 
 如果你想强制重填该供应商的 API Key：
@@ -185,15 +202,17 @@ cs current --claude-dir /path/to/.claude
 ### 4. 保存 API Key
 
 ```bash
-cs set-key minimax sk-xxx
+cs set-key minimax-cn sk-xxx
+cs set-key minimax-global sk-xxx
 cs set-key openrouter sk-or-xxx
 ```
 
-`minimax` 也支持以下别名：
+历史兼容别名：
 
 ```bash
-cs set-key minimax-cn sk-xxx
+cs set-key minimax sk-xxx
 cs set-key minimax-cn-token sk-xxx
+cs set-key minimax-global-token sk-xxx
 ```
 
 保存后会写入：
@@ -207,22 +226,22 @@ cs set-key minimax-cn-token sk-xxx
 ### 5. 切换供应商
 
 ```bash
-cs switch minimax
+cs switch minimax-cn
+cs switch minimax-global
 cs switch openrouter
 cs switch opencode-go
 ```
 
-`minimax` 默认按 MiniMax 中国区 Token Plan 接入：
-
-```bash
-cs switch minimax
-```
-
-等价别名：
+MiniMax 中国区：
 
 ```bash
 cs switch minimax-cn
-cs switch minimax-cn-token
+```
+
+MiniMax 国际区：
+
+```bash
+cs switch minimax-global
 ```
 
 如果没有提前保存 API Key，也可以在切换时直接传入：
@@ -253,7 +272,7 @@ cs switch opencode-go --model minimax-m2.5
 ### 7. 指定 Claude 配置目录
 
 ```bash
-cs switch minimax --claude-dir /path/to/.claude
+cs switch minimax-cn --claude-dir /path/to/.claude
 ```
 
 这对测试环境、多套 Claude 配置，或者首次调试很有用。
@@ -289,13 +308,13 @@ API Key 会写入 `ANTHROPIC_API_KEY`。工具也会清理旧的 `ANTHROPIC_AUTH
 先保存 Key：
 
 ```bash
-cs set-key minimax sk-xxx
+cs set-key minimax-cn sk-xxx
 ```
 
 再切换：
 
 ```bash
-cs switch minimax
+cs switch minimax-cn
 cs current
 ```
 
