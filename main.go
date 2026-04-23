@@ -492,15 +492,14 @@ func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string,
 }
 
 func renderConfigureScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider, currentModel string, selectedProvider, selectedModel int, statusLine string) {
-	fmt.Fprint(out, "\033[H\033[2J")
-	fmt.Fprintln(out, "claude-switch")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Configure provider")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Use ↑ ↓ to choose provider, ← → to choose model, Enter to apply, q to quit.")
+	var b strings.Builder
+	b.WriteString("\033[H\033[2J")
+	b.WriteString("claude-switch\n\n")
+	b.WriteString("Configure provider\n\n")
+	b.WriteString("Use ↑ ↓ to choose provider, ← → to choose model, Enter to apply, q to quit.\n")
 	if statusLine != "" {
-		fmt.Fprintln(out, statusLine)
-		fmt.Fprintln(out)
+		b.WriteString(statusLine)
+		b.WriteString("\n\n")
 	}
 	for i, name := range names {
 		preset := providerPresets[name]
@@ -521,13 +520,14 @@ func renderConfigureScreen(out io.Writer, names []string, cfg *AppConfig, curren
 		if i == selectedProvider {
 			cursor = ">"
 		}
-		fmt.Fprintf(out, "%s %d) %s%s\n", cursor, i+1, name, label)
-		fmt.Fprintf(out, "     %s\n", preset.BaseURL)
-		fmt.Fprintf(out, "     default model: %s\n", preset.Model)
+		fmt.Fprintf(&b, "%s %d) %s%s\n", cursor, i+1, name, label)
+		fmt.Fprintf(&b, "     %s\n", preset.BaseURL)
+		fmt.Fprintf(&b, "     default model: %s\n", preset.Model)
 	}
-	fmt.Fprintln(out)
+	b.WriteString("\n")
 
 	if len(names) == 0 {
+		writeTerminalFrame(out, b.String())
 		return
 	}
 	provider := names[selectedProvider]
@@ -536,20 +536,22 @@ func renderConfigureScreen(out io.Writer, names []string, cfg *AppConfig, curren
 	if selectedModel < 0 || selectedModel >= len(models) {
 		selectedModel = 0
 	}
-	fmt.Fprintf(out, "Selected provider: %s\n", provider)
-	fmt.Fprintf(out, "Provider name: %s\n", preset.Name)
-	fmt.Fprintf(out, "Base URL: %s\n", preset.BaseURL)
-	fmt.Fprintf(out, "Saved key: %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
-	fmt.Fprintf(out, "Current active: %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
-	fmt.Fprintln(out, "Models:")
+	fmt.Fprintf(&b, "Selected provider: %s\n", provider)
+	fmt.Fprintf(&b, "Provider name: %s\n", preset.Name)
+	fmt.Fprintf(&b, "Base URL: %s\n", preset.BaseURL)
+	fmt.Fprintf(&b, "Saved key: %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
+	fmt.Fprintf(&b, "Current active: %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
+	b.WriteString("Models:\n")
 	for i, model := range models {
 		cursor := " "
 		if i == selectedModel {
 			cursor = ">"
 		}
-		fmt.Fprintf(out, "%s %s\n", cursor, model)
+		fmt.Fprintf(&b, "%s %s\n", cursor, model)
 	}
-	fmt.Fprintln(out)
+	b.WriteString("\n")
+
+	writeTerminalFrame(out, b.String())
 }
 
 func currentConfiguredProvider(claudeDir string) (string, string) {
@@ -720,6 +722,10 @@ func readKey(reader *bufio.Reader) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func writeTerminalFrame(out io.Writer, content string) {
+	fmt.Fprint(out, strings.ReplaceAll(content, "\n", "\r\n"))
 }
 
 func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideModel string) {
