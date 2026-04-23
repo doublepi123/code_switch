@@ -33,11 +33,11 @@ func TestApplyPresetPreservesUnmanagedFields(t *testing.T) {
 	if got := env["ANTHROPIC_BASE_URL"]; got != "https://openrouter.ai/api" {
 		t.Fatalf("unexpected base url: %v", got)
 	}
-	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-test" {
-		t.Fatalf("unexpected auth token: %v", got)
-	}
 	if got := env["ANTHROPIC_API_KEY"]; got != "sk-test" {
 		t.Fatalf("unexpected api key: %v", got)
+	}
+	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Fatalf("expected auth token to be unset")
 	}
 }
 
@@ -149,11 +149,11 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 	if got := env["ANTHROPIC_BASE_URL"]; got != "https://openrouter.ai/api" {
 		t.Fatalf("base url = %v, want %v", got, "https://openrouter.ai/api")
 	}
-	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-interactive" {
-		t.Fatalf("auth token = %v, want %v", got, "sk-interactive")
-	}
 	if got := env["ANTHROPIC_API_KEY"]; got != "sk-interactive" {
 		t.Fatalf("api key = %v, want %v", got, "sk-interactive")
+	}
+	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Fatalf("expected auth token to be unset")
 	}
 
 	if !strings.Contains(output.String(), "saved api key for openrouter") {

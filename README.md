@@ -242,7 +242,6 @@ cs switch minimax --claude-dir /path/to/.claude
 
 - `ANTHROPIC_BASE_URL`
 - `ANTHROPIC_API_KEY`
-- `ANTHROPIC_AUTH_TOKEN`
 - `ANTHROPIC_MODEL`
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL`
 - `ANTHROPIC_DEFAULT_SONNET_MODEL`
@@ -250,12 +249,7 @@ cs switch minimax --claude-dir /path/to/.claude
 - `API_TIMEOUT_MS`
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
 
-其中 API Key 会同时写入：
-
-- `ANTHROPIC_API_KEY`
-- `ANTHROPIC_AUTH_TOKEN`
-
-这样可以同时兼容只读取 `X-Api-Key` 或 `Authorization: Bearer` 的 Anthropic 兼容上游。
+API Key 会写入 `ANTHROPIC_API_KEY`。工具也会清理旧的 `ANTHROPIC_AUTH_TOKEN`，避免 Claude Code 出现鉴权冲突提示。
 
 ## 示例
 

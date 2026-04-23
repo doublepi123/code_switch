@@ -450,7 +450,6 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideMod
 
 	env["ANTHROPIC_BASE_URL"] = preset.BaseURL
 	env["ANTHROPIC_API_KEY"] = apiKey
-	env["ANTHROPIC_AUTH_TOKEN"] = apiKey
 	env["ANTHROPIC_MODEL"] = effectiveModel(preset, overrideModel)
 	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = preset.Haiku
 	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = preset.Sonnet
