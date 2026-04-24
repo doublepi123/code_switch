@@ -44,13 +44,47 @@ MiniMax 中国区参考官方 CN 文档：
 - 文本生成: https://platform.minimaxi.com/docs/guides/text-generation
 - Claude Code: https://platform.minimaxi.com/docs/token-plan/claude-code
 
-## 安装
+## 一键安装（推荐）
 
-要求：
+直接复制对应平台的命令到终端执行：
 
-- Go 1.20 或更高版本
+### macOS Intel
 
-推荐先克隆仓库，再执行安装脚本。
+```bash
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-amd64.tar.gz | tar xz && mv claude-switch-darwin-amd64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+```
+
+### macOS Apple Silicon
+
+```bash
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-arm64.tar.gz | tar xz && mv claude-switch-darwin-arm64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+```
+
+### Linux x86_64
+
+```bash
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-amd64.tar.gz | tar xz && mv claude-switch-linux-amd64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+```
+
+### Linux ARM64
+
+```bash
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-arm64.tar.gz | tar xz && mv claude-switch-linux-arm64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+```
+
+### Windows x86_64 (PowerShell)
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-windows-amd64.zip" -OutFile "$env:TEMP\claude-switch.zip"; Expand-Archive -Path "$env:TEMP\claude-switch.zip" -DestinationPath "$env:TEMP\claude-switch"; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$env:LOCALAPPDATA\Programs\claude-switch\bin\" -Force; New-Item -Path "$env:LOCALAPPDATA\Programs\claude-switch\bin" -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$env:LOCALAPPDATA\Programs\claude-switch\bin\" -Force; Remove-Item -Path "$env:TEMP\claude-switch.zip" -Force -ErrorAction SilentlyContinue; Remove-Item -Path "$env:TEMP\claude-switch" -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+安装完成后验证：
+
+```bash
+cs list
+```
+
+## 从源码安装
 
 ### macOS / Linux
 
@@ -77,31 +111,19 @@ cs list
 INSTALL_DIR=/usr/local/bin ./scripts/install.sh
 ```
 
-### Windows PowerShell
+### 从源码构建
 
-```powershell
-.\scripts\install.ps1
-```
+需要 Go 1.20+。
 
-默认会安装到：
-
-```text
-$HOME\AppData\Local\Programs\claude-switch\bin\cs.exe
-```
-
-安装完成后可验证：
-
-```powershell
-cs.exe list
+```bash
+go build -o cs .
 ```
 
 如需自定义安装目录：
 
-```powershell
-.\scripts\install.ps1 -InstallDir 'C:\Tools\claude-switch'
+```bash
+INSTALL_DIR=/usr/local/bin ./scripts/install.sh
 ```
-
-### 手动构建
 
 如果你不想使用安装脚本，也可以直接构建：
 
