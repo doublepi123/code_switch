@@ -58,30 +58,18 @@ MiniMax 中国区参考官方 CN 文档：
 
 ## 一键安装（推荐）
 
-直接复制对应平台的命令到终端执行：
-
-### macOS Intel
+macOS / Linux 直接执行：
 
 ```bash
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+curl -fsSL https://raw.githubusercontent.com/doublepi123/claude_switch/main/scripts/install-release.sh | sh
 ```
 
-### macOS Apple Silicon
+脚本会自动识别 macOS / Linux 和 CPU 架构，默认安装到 `~/.local/bin/cs`。如果安装目录不在 `PATH`，脚本会写入当前 shell 的 profile，并打印当前终端立即生效所需的 `export` 命令。
+
+如需自定义安装目录：
 
 ```bash
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
-```
-
-### Linux x86_64
-
-```bash
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
-```
-
-### Linux ARM64
-
-```bash
-mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+curl -fsSL https://raw.githubusercontent.com/doublepi123/claude_switch/main/scripts/install-release.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
 ### Windows x86_64 (PowerShell)
@@ -102,6 +90,8 @@ Invoke-WebRequest -Uri "https://github.com/doublepi123/claude_switch/releases/la
 cs list
 cs --version
 ```
+
+如果脚本提示当前终端需要执行 `export PATH=...`，先执行提示中的命令，或者重新打开一个终端。
 
 后续升级到 GitHub Release 最新版本：
 
