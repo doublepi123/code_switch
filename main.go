@@ -165,6 +165,15 @@ func run(args []string) error {
 }
 
 func runWithIO(args []string, in io.Reader, out io.Writer) error {
+	// Check for --version or version anywhere in args so that
+	// "cs switch --version" and "cs configure --version" work.
+	for _, arg := range args {
+		if arg == "--version" || arg == "version" {
+			printVersion(out)
+			return nil
+		}
+	}
+
 	if len(args) == 0 {
 		return cmdConfigure(nil, in, out)
 	}
@@ -180,9 +189,6 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdSetKey(args[1:])
 	case "switch":
 		return cmdSwitch(args[1:])
-	case "--version", "version":
-		printVersion(out)
-		return nil
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -589,7 +595,7 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 		provider, err := resolveProviderSelection(text, names)
 		if err == nil {
 			if provider == customProviderOption {
-				return promptCustomProviderFallback(reader, out)
+				return promptCustomProviderFallback(reader, out, cfg)
 			}
 
 			defaultModel := defaultSelectionModel(cfg, provider, currentProvider, currentModel)
@@ -662,7 +668,11 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 	}
 
 	finishSelection := func(provider, model string) {
-		savedModel := strings.TrimSpace(customModels[provider])
+		customModel := strings.TrimSpace(customModels[provider])
+		savedModel := ""
+		if model == customModel && !containsString(providerModels(cfg, provider), model) {
+			savedModel = model
+		}
 		result = ConfigureSelection{
 			Provider:   provider,
 			Model:      model,
@@ -1055,7 +1065,7 @@ func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string,
 	}
 }
 
-func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer) (ConfigureSelection, error) {
+func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig) (ConfigureSelection, error) {
 	fmt.Fprintln(out, "Create custom provider")
 	fmt.Fprint(out, "Name: ")
 	name, err := readLine(reader)
@@ -1095,7 +1105,7 @@ func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer) (Configur
 	}
 
 	return ConfigureSelection{
-		Provider: makeCustomProviderKey(name),
+		Provider: uniqueCustomProviderKey(cfg, makeCustomProviderKey(name)),
 		Name:     name,
 		BaseURL:  baseURL,
 		APIKey:   apiKey,
@@ -1170,103 +1180,6 @@ func uniqueCustomProviderKey(cfg *AppConfig, base string) string {
 	}
 }
 
-func renderProviderListScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider string, selectedProvider int, statusLine string) {
-	var b strings.Builder
-	b.WriteString("Providers\n")
-	if statusLine != "" {
-		b.WriteString(statusLine + "\n")
-	}
-	for i, name := range names {
-		if name == customProviderOption {
-			prefix := "  "
-			if i == selectedProvider {
-				prefix = "> "
-			}
-			fmt.Fprintf(&b, "%scustom...\n", prefix)
-			continue
-		}
-		preset, err := resolveProviderPreset(name, cfg)
-		if err != nil {
-			continue
-		}
-		prefix := "  "
-		if i == selectedProvider {
-			prefix = "> "
-		}
-		markers := []string{}
-		if name == currentProvider {
-			markers = append(markers, "current")
-		}
-		if strings.TrimSpace(cfg.Providers[name].APIKey) != "" {
-			markers = append(markers, "saved")
-		}
-		if len(markers) > 0 {
-			fmt.Fprintf(&b, "%s%s [%s]\n", prefix, providerTitle(name, cfg), strings.Join(markers, ", "))
-		} else {
-			fmt.Fprintf(&b, "%s%s\n", prefix, providerTitle(name, cfg))
-		}
-		fmt.Fprintf(&b, "  %s\n", preset.BaseURL)
-	}
-	fmt.Fprint(out, b.String())
-}
-
-func renderProviderInfoScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider, currentModel string, selectedProvider int, statusLine string, resetKey bool) {
-	if selectedProvider < 0 || selectedProvider >= len(names) {
-		return
-	}
-	provider := names[selectedProvider]
-	preset, err := resolveProviderPreset(provider, cfg)
-	if err != nil {
-		return
-	}
-	var b strings.Builder
-	b.WriteString("Provider details\n")
-	if statusLine != "" {
-		b.WriteString(statusLine + "\n")
-	}
-	fmt.Fprintf(&b, "Provider %s\n", providerTitle(provider, cfg))
-	fmt.Fprintf(&b, "Preset %s\n", preset.Name)
-	fmt.Fprintf(&b, "Base URL %s\n", preset.BaseURL)
-	fmt.Fprintf(&b, "Saved Key %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
-	fmt.Fprintf(&b, "Active %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
-	if resetKey {
-		fmt.Fprintf(&b, "Key Action re-enter on apply\n")
-	}
-	fmt.Fprint(out, b.String())
-}
-
-func renderProviderModelsScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider, currentModel string, selectedProvider, selectedModel int, statusLine string, resetKey bool) {
-	if selectedProvider < 0 || selectedProvider >= len(names) {
-		return
-	}
-	provider := names[selectedProvider]
-	models := providerModels(cfg, provider)
-	if len(models) == 0 {
-		return
-	}
-	if selectedModel < 0 || selectedModel >= len(models) {
-		selectedModel = 0
-	}
-	var b strings.Builder
-	b.WriteString("Models\n")
-	if statusLine != "" {
-		b.WriteString(statusLine + "\n")
-	}
-	fmt.Fprintf(&b, "Provider %s\n", providerTitle(provider, cfg))
-	fmt.Fprintf(&b, "Saved Key %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
-	fmt.Fprintf(&b, "Active %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
-	if resetKey {
-		b.WriteString("Key Action re-enter on apply\n")
-	}
-	for i, model := range models {
-		prefix := "  "
-		if i == selectedModel {
-			prefix = "> "
-		}
-		fmt.Fprintf(&b, "%s%s\n", prefix, model)
-	}
-	fmt.Fprint(out, b.String())
-}
 
 func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
 	root, err := readJSONMap(claudeSettingsPath(claudeDir))
@@ -1534,7 +1447,7 @@ func backupIfExists(path string) error {
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return err
 	}
-	backupPath := fmt.Sprintf("%s.bak.%s", path, time.Now().Format("20060102_150405"))
+	backupPath := fmt.Sprintf("%s.bak.%s", path, time.Now().Format("20060102_150405.000"))
 	return os.WriteFile(backupPath, data, 0o600)
 }
 
