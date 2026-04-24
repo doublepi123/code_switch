@@ -31,6 +31,7 @@ cd claude_switch
 
 | Provider | Base URL | 默认模型 |
 | --- | --- | --- |
+| `deepseek` | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro[1m]` |
 | `minimax-cn` | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.7` |
 | `minimax-global` | `https://api.minimax.io/anthropic` | `MiniMax-M2.7` |
 | `openrouter` | `https://openrouter.ai/api` | `anthropic/claude-sonnet-4.6` |
@@ -48,6 +49,7 @@ cd claude_switch
 - `minimax-cn` 对应 MiniMax 中国区 Token Plan
 - `minimax-global` 对应 MiniMax 国际区 Token Plan
 - `openrouter` 默认使用 OpenRouter 官方 Claude 映射：haiku、sonnet、opus 会分别写入对应的官方模型；如果输入自定义模型名，则三档都会使用这个自定义模型
+- `deepseek` 使用 DeepSeek Anthropic 兼容接口，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
 
 MiniMax 中国区参考官方 CN 文档：
 
@@ -92,6 +94,7 @@ Invoke-WebRequest -Uri "https://github.com/doublepi123/claude_switch/releases/la
 
 ```bash
 cs list
+cs --version
 ```
 
 ## 从源码安装
@@ -189,6 +192,12 @@ cs list
 
 输出包含供应商名称、Base URL 和默认模型。
 
+查看当前版本：
+
+```bash
+cs --version
+```
+
 ### 2. 交互式配置
 
 直接运行 `cs` 即可进入 TUI：
@@ -248,6 +257,7 @@ cs current --claude-dir /path/to/.claude
 cs set-key minimax-cn sk-xxx
 cs set-key minimax-global sk-xxx
 cs set-key openrouter sk-or-xxx
+cs set-key deepseek sk-xxx
 ```
 
 历史兼容别名：
@@ -274,6 +284,7 @@ cs set-key minimax-global-token sk-xxx
 cs switch minimax-cn
 cs switch minimax-global
 cs switch openrouter
+cs switch deepseek
 cs switch opencode-go
 ```
 
@@ -354,9 +365,12 @@ cs switch minimax-cn --claude-dir /path/to/.claude
 - `ANTHROPIC_DEFAULT_SONNET_MODEL`
 - `ANTHROPIC_DEFAULT_OPUS_MODEL`
 - `API_TIMEOUT_MS`
+- `CLAUDE_CODE_SUBAGENT_MODEL`
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+- `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK`
+- `CLAUDE_CODE_EFFORT_LEVEL`
 
-API Key 会写入 `ANTHROPIC_API_KEY`。工具也会清理旧的 `ANTHROPIC_AUTH_TOKEN`，避免 Claude Code 出现鉴权冲突提示。
+大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`。`deepseek` 会写入 `ANTHROPIC_AUTH_TOKEN`。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
 
 ## 示例
 

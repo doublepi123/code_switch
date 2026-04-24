@@ -27,6 +27,8 @@ type ProviderPreset struct {
 	Haiku     string
 	Sonnet    string
 	Opus      string
+	Subagent  string
+	AuthEnv   string
 	ExtraEnv  map[string]any
 	Website   string
 	APIKeyURL string
@@ -95,6 +97,24 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://openrouter.ai",
 		APIKeyURL: "https://openrouter.ai/keys",
 	},
+	"deepseek": {
+		Name:      "DeepSeek",
+		BaseURL:   "https://api.deepseek.com/anthropic",
+		Model:     "deepseek-v4-pro[1m]",
+		Models:    []string{"deepseek-v4-pro[1m]", "deepseek-v4-pro", "deepseek-v4-flash"},
+		Haiku:     "deepseek-v4-flash",
+		Sonnet:    "deepseek-v4-pro",
+		Opus:      "deepseek-v4-pro",
+		Subagent:  "deepseek-v4-pro",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://platform.deepseek.com",
+		APIKeyURL: "https://platform.deepseek.com/api_keys",
+		ExtraEnv: map[string]any{
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":  "1",
+			"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
+			"CLAUDE_CODE_EFFORT_LEVEL":                  "max",
+		},
+	},
 	"opencode-go": {
 		Name:      "OpenCode Go",
 		BaseURL:   "https://opencode.ai/zen/go",
@@ -116,6 +136,8 @@ var providerAliases = map[string]string{
 
 const customProviderOption = "__custom__"
 
+var version = "v0.0.4"
+
 var managedEnvKeys = []string{
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_API_KEY",
@@ -125,7 +147,10 @@ var managedEnvKeys = []string{
 	"ANTHROPIC_DEFAULT_SONNET_MODEL",
 	"ANTHROPIC_DEFAULT_OPUS_MODEL",
 	"API_TIMEOUT_MS",
+	"CLAUDE_CODE_SUBAGENT_MODEL",
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+	"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",
+	"CLAUDE_CODE_EFFORT_LEVEL",
 }
 
 func main() {
@@ -136,27 +161,38 @@ func main() {
 }
 
 func run(args []string) error {
+	return runWithIO(args, os.Stdin, os.Stdout)
+}
+
+func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
-		return cmdConfigure(nil, os.Stdin, os.Stdout)
+		return cmdConfigure(nil, in, out)
 	}
 
 	switch args[0] {
 	case "list":
 		return cmdList()
 	case "configure":
-		return cmdConfigure(args[1:], os.Stdin, os.Stdout)
+		return cmdConfigure(args[1:], in, out)
 	case "current":
 		return cmdCurrent(args[1:])
 	case "set-key":
 		return cmdSetKey(args[1:])
 	case "switch":
 		return cmdSwitch(args[1:])
+	case "--version", "version":
+		printVersion(out)
+		return nil
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func printVersion(out io.Writer) {
+	fmt.Fprintf(out, "claude-switch %s\n", version)
 }
 
 func cmdList() error {
@@ -290,25 +326,26 @@ func cmdSetKey(args []string) error {
 }
 
 func cmdSwitch(args []string) error {
+	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("switch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	model := fs.String("model", "", "override model id")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if providerArg == "" || fs.NArg() != 0 {
 		return errors.New("usage: claude-switch switch <provider> [--api-key sk-xxx] [--model model-id]")
 	}
 
-	provider := canonicalProviderName(fs.Arg(0))
+	provider := canonicalProviderName(providerArg)
 	cfg, _, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
 	if _, err := resolveProviderPreset(provider, cfg); err != nil {
-		return fmt.Errorf("unsupported provider %q", fs.Arg(0))
+		return fmt.Errorf("unsupported provider %q", providerArg)
 	}
 
 	key := strings.TrimSpace(*apiKey)
@@ -320,6 +357,36 @@ func cmdSwitch(args []string) error {
 	}
 
 	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir)
+}
+
+func splitSwitchArgs(args []string) (string, []string) {
+	provider := ""
+	flagArgs := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if provider == "" && !strings.HasPrefix(arg, "-") {
+			provider = arg
+			continue
+		}
+		flagArgs = append(flagArgs, arg)
+		if switchFlagNeedsValue(arg) && i+1 < len(args) {
+			i++
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+	return provider, flagArgs
+}
+
+func switchFlagNeedsValue(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return false
+	}
+	switch arg {
+	case "-api-key", "--api-key", "-model", "--model", "-claude-dir", "--claude-dir":
+		return true
+	default:
+		return false
+	}
 }
 
 func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string) error {
@@ -354,6 +421,7 @@ func printUsage() {
 	fmt.Println(`claude-switch
 
 Usage:
+  cs --version
   cs list
   cs [--reset-key]                     # interactive TUI
   cs current [--claude-dir DIR]
@@ -361,6 +429,7 @@ Usage:
   cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
 
 	Providers:
+	  deepseek
 	  minimax-cn
 	  minimax-global
 	  openrouter
@@ -417,13 +486,14 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 		model = "custom-model"
 	}
 	return ProviderPreset{
-		Name:    firstNonEmpty(stored.Name, provider),
-		BaseURL: strings.TrimSpace(stored.BaseURL),
-		Model:   model,
-		Models:  []string{model},
-		Haiku:   model,
-		Sonnet:  model,
-		Opus:    model,
+		Name:     firstNonEmpty(stored.Name, provider),
+		BaseURL:  strings.TrimSpace(stored.BaseURL),
+		Model:    model,
+		Models:   []string{model},
+		Haiku:    model,
+		Sonnet:   model,
+		Opus:     model,
+		Subagent: model,
 	}, nil
 }
 
@@ -464,6 +534,8 @@ func detectProvider(baseURL, model string) string {
 		return "minimax-global"
 	case strings.Contains(baseURL, "openrouter.ai"):
 		return "openrouter"
+	case strings.Contains(baseURL, "api.deepseek.com"):
+		return "deepseek"
 	case strings.Contains(baseURL, "opencode.ai") || strings.HasPrefix(model, "opencode-go/"):
 		return "opencode-go"
 	default:
@@ -484,6 +556,7 @@ func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 		preset.Haiku = model
 		preset.Sonnet = model
 		preset.Opus = model
+		preset.Subagent = model
 	}
 	return preset
 }
@@ -1339,11 +1412,18 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideMod
 
 	preset = withSelectedModel(preset, overrideModel)
 	env["ANTHROPIC_BASE_URL"] = preset.BaseURL
-	env["ANTHROPIC_API_KEY"] = apiKey
+	authEnv := strings.TrimSpace(preset.AuthEnv)
+	if authEnv == "" {
+		authEnv = "ANTHROPIC_API_KEY"
+	}
+	env[authEnv] = apiKey
 	env["ANTHROPIC_MODEL"] = preset.Model
 	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = preset.Haiku
 	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = preset.Sonnet
 	env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = preset.Opus
+	if preset.Subagent != "" {
+		env["CLAUDE_CODE_SUBAGENT_MODEL"] = preset.Subagent
+	}
 
 	for key, value := range preset.ExtraEnv {
 		env[key] = value

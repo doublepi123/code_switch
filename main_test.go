@@ -10,6 +10,29 @@ import (
 	"testing"
 )
 
+func TestRunVersion(t *testing.T) {
+	oldVersion := version
+	version = "v-test"
+	t.Cleanup(func() {
+		version = oldVersion
+	})
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"--version"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO(--version) returned error: %v", err)
+	}
+
+	if got, want := output.String(), "claude-switch v-test\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultVersionMatchesCurrentGitHubTag(t *testing.T) {
+	if version != "v0.0.4" {
+		t.Fatalf("version = %q, want current GitHub tag %q", version, "v0.0.4")
+	}
+}
+
 func TestApplyPresetPreservesUnmanagedFields(t *testing.T) {
 	root := map[string]any{
 		"permissions": map[string]any{
@@ -92,6 +115,74 @@ func TestApplyPresetOpenRouterCustomModelOverridesAllTiers(t *testing.T) {
 		if got := env[key]; got != "openrouter/custom-model" {
 			t.Fatalf("expected %s to be openrouter/custom-model, got %v", key, got)
 		}
+	}
+}
+
+func TestApplyPresetDeepSeekUsesAuthTokenAndExtraEnv(t *testing.T) {
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_API_KEY":                         "stale-api-key",
+			"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "0",
+			"CLAUDE_CODE_EFFORT_LEVEL":                  "low",
+		},
+	}
+
+	applyPreset(root, providerPresets["deepseek"], "sk-deepseek", "")
+
+	env := root["env"].(map[string]any)
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected api key to be unset")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-deepseek" {
+		t.Fatalf("auth token = %v, want %v", got, "sk-deepseek")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://api.deepseek.com/anthropic" {
+		t.Fatalf("base url = %v, want %v", got, "https://api.deepseek.com/anthropic")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "deepseek-v4-pro[1m]" {
+		t.Fatalf("model = %v, want %v", got, "deepseek-v4-pro[1m]")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "deepseek-v4-flash" {
+		t.Fatalf("haiku model = %v, want %v", got, "deepseek-v4-flash")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "deepseek-v4-pro" {
+		t.Fatalf("sonnet model = %v, want %v", got, "deepseek-v4-pro")
+	}
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "deepseek-v4-pro" {
+		t.Fatalf("opus model = %v, want %v", got, "deepseek-v4-pro")
+	}
+	if got := env["CLAUDE_CODE_SUBAGENT_MODEL"]; got != "deepseek-v4-pro" {
+		t.Fatalf("subagent model = %v, want %v", got, "deepseek-v4-pro")
+	}
+	if got := env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"]; got != "1" {
+		t.Fatalf("disable traffic = %v, want %v", got, "1")
+	}
+	if got := env["CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"]; got != "1" {
+		t.Fatalf("disable fallback = %v, want %v", got, "1")
+	}
+	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "max" {
+		t.Fatalf("effort level = %v, want %v", got, "max")
+	}
+}
+
+func TestApplyPresetDeepSeekCustomModelOverridesAllModels(t *testing.T) {
+	root := map[string]any{}
+	applyPreset(root, providerPresets["deepseek"], "sk-deepseek", "deepseek-custom")
+
+	env := root["env"].(map[string]any)
+	for _, key := range []string{
+		"ANTHROPIC_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+	} {
+		if got := env[key]; got != "deepseek-custom" {
+			t.Fatalf("expected %s to be deepseek-custom, got %v", key, got)
+		}
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-deepseek" {
+		t.Fatalf("auth token = %v, want %v", got, "sk-deepseek")
 	}
 }
 
@@ -196,6 +287,7 @@ func TestDetectProvider(t *testing.T) {
 		{baseURL: "https://api.minimaxi.com/anthropic", want: "minimax-cn"},
 		{baseURL: "https://api.minimax.io/anthropic", want: "minimax-global"},
 		{baseURL: "https://openrouter.ai/api", want: "openrouter"},
+		{baseURL: "https://api.deepseek.com/anthropic", want: "deepseek"},
 		{baseURL: "https://opencode.ai/zen/go", model: "minimax-m2.7", want: "opencode-go"},
 		{baseURL: "https://example.com", model: "opencode-go/kimi-k2.5", want: "opencode-go"},
 		{baseURL: "https://example.com", want: "custom"},
@@ -217,6 +309,7 @@ func TestResolveProviderSelection(t *testing.T) {
 		ok    bool
 	}{
 		{input: "1", want: names[0], ok: true},
+		{input: " deepseek ", want: "deepseek", ok: true},
 		{input: " openrouter ", want: "openrouter", ok: true},
 		{input: "minimax-cn-token", want: "minimax-cn", ok: true},
 		{input: "99", ok: false},
@@ -314,6 +407,37 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 
 	if !strings.Contains(output.String(), "saved provider config for openrouter") {
 		t.Fatalf("expected save message in output, got %q", output.String())
+	}
+}
+
+func TestCmdSwitchAcceptsProviderBeforeFlagsForDeepSeek(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	if err := cmdSwitch([]string{"deepseek", "--api-key", "sk-deepseek", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+
+	env := settings["env"].(map[string]any)
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected api key to be unset")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-deepseek" {
+		t.Fatalf("auth token = %v, want %v", got, "sk-deepseek")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "deepseek-v4-pro[1m]" {
+		t.Fatalf("model = %v, want %v", got, "deepseek-v4-pro[1m]")
 	}
 }
 
@@ -447,7 +571,8 @@ func TestRenderProviderModelsScreenShowsModelList(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderProviderModelsScreen(output, sortedProviderNames(cfg, true), cfg, "minimax-cn", "MiniMax-M2.7", 0, 0, "", false)
+	names := sortedProviderNames(cfg, true)
+	renderProviderModelsScreen(output, names, cfg, "minimax-cn", "MiniMax-M2.7", providerIndexForTest(t, names, "minimax-cn"), 0, "", false)
 
 	text := stripANSI(output.String())
 	if !strings.Contains(text, "> MiniMax-M2.7") {
@@ -463,7 +588,8 @@ func TestRenderProviderInfoScreenShowsKeyResetState(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderProviderInfoScreen(output, sortedProviderNames(cfg, true), cfg, "openrouter", "anthropic/claude-sonnet-4.6", 3, "", true)
+	names := sortedProviderNames(cfg, true)
+	renderProviderInfoScreen(output, names, cfg, "openrouter", "anthropic/claude-sonnet-4.6", providerIndexForTest(t, names, "openrouter"), "", true)
 
 	text := stripANSI(output.String())
 	if !strings.Contains(text, "Key Action re-enter on apply") {
@@ -503,4 +629,15 @@ func TestHasConfigurableKey(t *testing.T) {
 func stripANSI(text string) string {
 	re := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	return re.ReplaceAllString(text, "")
+}
+
+func providerIndexForTest(t *testing.T, names []string, provider string) int {
+	t.Helper()
+	for i, name := range names {
+		if name == provider {
+			return i
+		}
+	}
+	t.Fatalf("provider %q not found in %v", provider, names)
+	return 0
 }
