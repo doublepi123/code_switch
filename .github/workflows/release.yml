@@ -73,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate tag
+      - name: Create and push tag
         id: tag
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
@@ -84,9 +84,8 @@ jobs:
           NEW_TAG="v${major}.${minor}.${new_patch}"
           echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Created tag: $NEW_TAG"
-
-      - name: Push tag
-        run: git push origin ${{ steps.tag.outputs.tag }}
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
