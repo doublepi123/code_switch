@@ -81,7 +81,7 @@ func TestDetectProvider(t *testing.T) {
 }
 
 func TestResolveProviderSelection(t *testing.T) {
-	names := sortedProviderNames()
+	names := sortedProviderNames(&AppConfig{Providers: map[string]StoredProvider{}}, true)
 
 	cases := []struct {
 		input string
@@ -175,7 +175,7 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 		t.Fatalf("expected auth token to be unset")
 	}
 
-	if !strings.Contains(output.String(), "saved api key for openrouter") {
+	if !strings.Contains(output.String(), "saved provider config for openrouter") {
 		t.Fatalf("expected save message in output, got %q", output.String())
 	}
 }
@@ -269,7 +269,7 @@ func TestRenderProviderListScreenShowsSavedState(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderProviderListScreen(output, sortedProviderNames(), cfg, "minimax-cn", 0, "")
+	renderProviderListScreen(output, sortedProviderNames(cfg, true), cfg, "minimax-cn", 0, "")
 
 	text := stripANSI(output.String())
 	if !strings.Contains(text, "minimax-cn") || !strings.Contains(text, "current") {
@@ -291,7 +291,7 @@ func TestRenderProviderInfoScreenShowsSummaryOnly(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderProviderInfoScreen(output, sortedProviderNames(), cfg, "minimax-cn", "MiniMax-M2.7", 0, "", false)
+	renderProviderInfoScreen(output, sortedProviderNames(cfg, true), cfg, "minimax-cn", "MiniMax-M2.7", 0, "", false)
 
 	text := stripANSI(output.String())
 	if !strings.Contains(text, "Saved Key not saved") {
@@ -310,7 +310,7 @@ func TestRenderProviderModelsScreenShowsModelList(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderProviderModelsScreen(output, sortedProviderNames(), cfg, "minimax-cn", "MiniMax-M2.7", 0, 0, "", false)
+	renderProviderModelsScreen(output, sortedProviderNames(cfg, true), cfg, "minimax-cn", "MiniMax-M2.7", 0, 0, "", false)
 
 	text := stripANSI(output.String())
 	if !strings.Contains(text, "> MiniMax-M2.7") {
@@ -326,7 +326,7 @@ func TestRenderProviderInfoScreenShowsKeyResetState(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderProviderInfoScreen(output, sortedProviderNames(), cfg, "openrouter", "anthropic/claude-sonnet-4.6", 3, "", true)
+	renderProviderInfoScreen(output, sortedProviderNames(cfg, true), cfg, "openrouter", "anthropic/claude-sonnet-4.6", 3, "", true)
 
 	text := stripANSI(output.String())
 	if !strings.Contains(text, "Key Action re-enter on apply") {

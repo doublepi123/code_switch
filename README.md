@@ -18,6 +18,8 @@ cd claude_switch
 - 支持列出当前内置供应商
 - 支持查看当前 Claude Code 指向的供应商
 - 支持保存各供应商 API Key
+- 支持自定义供应商名称和 Base URL
+- 支持为任意供应商保存自定义模型名
 - 支持 TUI 交互式选择供应商并配置 API Key
 - 支持方向键选择 provider 和模型
 - 支持显示已保存 API Key 的掩码摘要
@@ -33,6 +35,13 @@ cd claude_switch
 | `minimax-global` | `https://api.minimax.io/anthropic` | `MiniMax-M2.7` |
 | `openrouter` | `https://openrouter.ai/api` | `anthropic/claude-sonnet-4.6` |
 | `opencode-go` | `https://opencode.ai/zen/go` | `minimax-m2.7` |
+
+此外也支持自定义供应商。自定义供应商会保存：
+
+- 显示名称
+- `ANTHROPIC_BASE_URL`
+- API Key
+- 默认模型名
 
 其中：
 
@@ -153,6 +162,8 @@ cs
 - 首次为该供应商保存 API Key
 - 再进入模型选择页
 - 在 TUI 内切换模型
+- 也可以创建自定义供应商
+- 也可以输入任意自定义模型名
 - 显示当前已保存 API Key 的掩码摘要
 - 自动保存配置
 - 立即切换当前 Claude Code 到所选供应商
@@ -190,6 +201,7 @@ TUI 操作方式：
 - 一级 `Providers`
   - `↑` / `↓`：切换 provider
   - `Enter` / `→`：进入 provider 详情页
+  - 选择 `custom...` 可创建自定义供应商
 - 二级 `Provider details`
   - `Enter` / `→`：进入下一步
   - 如果当前 provider 还没有已保存 key，会先要求输入并保存 API Key，再进入模型页
@@ -197,6 +209,7 @@ TUI 操作方式：
   - `←` / `q`：返回 provider 列表
 - 三级 `Models`
   - `↑` / `↓`：切换模型
+  - `c`：输入任意自定义模型名，并保存为该 provider 的默认模型
   - `Enter`：确认并应用
   - `k`：立即修改 API Key
   - `←` / `q`：返回 provider 详情页
@@ -252,6 +265,8 @@ cs set-key minimax-global-token sk-xxx
 
 如果你不想落盘保存，也可以在切换时临时传入 `--api-key`。
 
+自定义供应商建议通过 `cs` TUI 创建，因为它需要同时保存名称、Base URL、API Key 和模型名。
+
 ### 5. 切换供应商
 
 ```bash
@@ -297,6 +312,8 @@ cs switch opencode-go --model minimax-m2.5
 不要传 `opencode-go/minimax-m2.7` 这类前缀形式；那是 OpenCode 自身配置里使用的格式，不是这里这个 Anthropic 兼容接口要的模型 ID。
 
 这个工具当前把 `opencode-go` 作为 Anthropic 兼容供应商接入，因此应使用文档中对应 `https://opencode.ai/zen/go/v1/messages` 的模型，例如 `minimax-m2.7`、`minimax-m2.5`。
+
+对于预设 provider，如果你想使用未内置的模型名，也可以在 TUI 的模型页按 `c` 直接输入任意模型名，后续会作为该 provider 的默认模型保存。
 
 ### 7. 指定 Claude 配置目录
 

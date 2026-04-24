@@ -31,7 +31,10 @@ type ProviderPreset struct {
 }
 
 type StoredProvider struct {
-	APIKey string `json:"apiKey,omitempty"`
+	Name    string `json:"name,omitempty"`
+	BaseURL string `json:"baseUrl,omitempty"`
+	Model   string `json:"model,omitempty"`
+	APIKey  string `json:"apiKey,omitempty"`
 }
 
 type AppConfig struct {
@@ -43,6 +46,8 @@ type ConfigureSelection struct {
 	Model    string
 	ResetKey bool
 	APIKey   string
+	Name     string
+	BaseURL  string
 }
 
 type tuiPage int
@@ -114,6 +119,8 @@ var providerAliases = map[string]string{
 	"minimax-global-token": "minimax-global",
 }
 
+const customProviderOption = "__custom__"
+
 var managedEnvKeys = []string{
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_API_KEY",
@@ -127,29 +134,22 @@ var managedEnvKeys = []string{
 }
 
 func main() {
-	resetKey := false
-	args := os.Args[1:]
-	for i, a := range args {
-		if a == "--reset-key" {
-			resetKey = true
-			args = append(args[:i], args[i+1:]...)
-			break
-		}
-	}
-	if err := run(args, resetKey); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string, resetKey bool) error {
+func run(args []string) error {
 	if len(args) == 0 {
-		return cmdConfigure(nil, os.Stdin, os.Stdout, resetKey)
+		return cmdConfigure(nil, os.Stdin, os.Stdout)
 	}
 
 	switch args[0] {
 	case "list":
 		return cmdList()
+	case "configure":
+		return cmdConfigure(args[1:], os.Stdin, os.Stdout)
 	case "current":
 		return cmdCurrent(args[1:])
 	case "set-key":
@@ -165,29 +165,36 @@ func run(args []string, resetKey bool) error {
 }
 
 func cmdList() error {
-	names := sortedProviderNames()
+	cfg, _, err := loadAppConfig()
+	if err != nil {
+		return err
+	}
+	names := sortedProviderNames(cfg, false)
 	for _, name := range names {
-		preset := providerPresets[name]
+		preset, err := resolveProviderPreset(name, cfg)
+		if err != nil {
+			return err
+		}
 		fmt.Printf("%s\t%s\t%s\n", name, preset.BaseURL, preset.Model)
 	}
 	return nil
 }
 
-func cmdConfigure(args []string, in io.Reader, out io.Writer, resetKeyFlag bool) error {
-	fs := flag.NewFlagSet("claude-switch", flag.ContinueOnError)
+func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
+	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
+	resetKey := fs.Bool("reset-key", false, "force re-enter api key for the selected provider")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	resetKey := resetKeyFlag
 
 	cfg, configPath, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
 
-	currentProvider, currentModel := currentConfiguredProvider(*claudeDir)
+	currentProvider, currentModel := currentConfiguredProvider(cfg, *claudeDir)
 	reader := bufio.NewReader(in)
 	var selection ConfigureSelection
 	if file, ok := in.(*os.File); ok && shouldUseArrowTUI(file) {
@@ -207,26 +214,21 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer, resetKeyFlag bool)
 	apiKey := existingKey
 	if selection.APIKey != "" {
 		apiKey = selection.APIKey
-		cfg.Providers[provider] = StoredProvider{APIKey: apiKey}
-		if err := writeJSONAtomic(configPath, cfg); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "saved api key for %s in %s\n", provider, configPath)
-	} else if apiKey == "" || resetKey || selection.ResetKey {
+	} else if apiKey == "" || *resetKey || selection.ResetKey {
 		apiKey, err = promptAPIKey(reader, out, provider)
 		if err != nil {
 			return err
 		}
-		cfg.Providers[provider] = StoredProvider{APIKey: apiKey}
-		if err := writeJSONAtomic(configPath, cfg); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "saved api key for %s in %s\n", provider, configPath)
 	} else {
 		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
+	upsertProviderConfig(cfg, selection, apiKey)
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
 
-	if err := switchProvider(provider, apiKey, selection.Model, *claudeDir); err != nil {
+	if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir); err != nil {
 		return err
 	}
 	return nil
@@ -268,16 +270,17 @@ func cmdSetKey(args []string) error {
 	if len(args) != 2 {
 		return errors.New("usage: claude-switch set-key <provider> <api-key>")
 	}
-	provider := canonicalProviderName(args[0])
-	if _, ok := providerPresets[provider]; !ok {
-		return fmt.Errorf("unsupported provider %q", args[0])
-	}
-
 	cfg, path, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	cfg.Providers[provider] = StoredProvider{APIKey: args[1]}
+	provider := canonicalProviderName(args[0])
+	if _, err := resolveProviderPreset(provider, cfg); err != nil {
+		return fmt.Errorf("unsupported provider %q", args[0])
+	}
+	stored := cfg.Providers[provider]
+	stored.APIKey = args[1]
+	cfg.Providers[provider] = stored
 	if err := writeJSONAtomic(path, cfg); err != nil {
 		return err
 	}
@@ -300,29 +303,29 @@ func cmdSwitch(args []string) error {
 	}
 
 	provider := canonicalProviderName(fs.Arg(0))
-	if _, ok := providerPresets[provider]; !ok {
+	cfg, _, err := loadAppConfig()
+	if err != nil {
+		return err
+	}
+	if _, err := resolveProviderPreset(provider, cfg); err != nil {
 		return fmt.Errorf("unsupported provider %q", fs.Arg(0))
 	}
 
 	key := strings.TrimSpace(*apiKey)
 	if key == "" {
-		cfg, _, err := loadAppConfig()
-		if err != nil {
-			return err
-		}
 		key = strings.TrimSpace(cfg.Providers[provider].APIKey)
 	}
 	if key == "" {
 		return fmt.Errorf("missing api key for %s, run `claude-switch set-key %s <api-key>` or pass --api-key", provider, provider)
 	}
 
-	return switchProvider(provider, key, strings.TrimSpace(*model), *claudeDir)
+	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir)
 }
 
-func switchProvider(provider, apiKey, modelOverride, claudeDir string) error {
-	preset, ok := providerPresets[provider]
-	if !ok {
-		return fmt.Errorf("unsupported provider %q", provider)
+func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string) error {
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		return err
 	}
 
 	settingsPath := claudeSettingsPath(claudeDir)
@@ -364,12 +367,24 @@ Usage:
 	  opencode-go`)
 }
 
-func sortedProviderNames() []string {
-	names := make([]string, 0, len(providerPresets))
+func sortedProviderNames(cfg *AppConfig, includeCustomOption bool) []string {
+	names := make([]string, 0, len(providerPresets)+len(cfg.Providers)+1)
 	for name := range providerPresets {
 		names = append(names, name)
 	}
+	for name, stored := range cfg.Providers {
+		if _, ok := providerPresets[name]; ok {
+			continue
+		}
+		if strings.TrimSpace(stored.BaseURL) == "" {
+			continue
+		}
+		names = append(names, name)
+	}
 	sort.Strings(names)
+	if includeCustomOption {
+		names = append(names, customProviderOption)
+	}
 	return names
 }
 
@@ -383,6 +398,49 @@ func canonicalProviderName(name string) string {
 		return canonical
 	}
 	return normalized
+}
+
+func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, error) {
+	if preset, ok := providerPresets[provider]; ok {
+		if stored, ok := cfg.Providers[provider]; ok && strings.TrimSpace(stored.Model) != "" {
+			preset.Model = strings.TrimSpace(stored.Model)
+			if !containsString(preset.Models, preset.Model) {
+				preset.Models = append([]string{preset.Model}, preset.Models...)
+			}
+		}
+		return preset, nil
+	}
+
+	stored, ok := cfg.Providers[provider]
+	if !ok || strings.TrimSpace(stored.BaseURL) == "" {
+		return ProviderPreset{}, fmt.Errorf("unsupported provider %q", provider)
+	}
+	model := strings.TrimSpace(stored.Model)
+	if model == "" {
+		model = "custom-model"
+	}
+	return ProviderPreset{
+		Name:    firstNonEmpty(stored.Name, provider),
+		BaseURL: strings.TrimSpace(stored.BaseURL),
+		Model:   model,
+		Models:  []string{model},
+		Haiku:   model,
+		Sonnet:  model,
+		Opus:    model,
+	}, nil
+}
+
+func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey string) {
+	stored := cfg.Providers[selection.Provider]
+	stored.APIKey = apiKey
+	stored.Model = strings.TrimSpace(selection.Model)
+	if selection.Name != "" {
+		stored.Name = strings.TrimSpace(selection.Name)
+	}
+	if selection.BaseURL != "" {
+		stored.BaseURL = strings.TrimSpace(selection.BaseURL)
+	}
+	cfg.Providers[selection.Provider] = stored
 }
 
 func detectProvider(baseURL, model string) string {
@@ -408,7 +466,7 @@ func effectiveModel(preset ProviderPreset, override string) string {
 }
 
 func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
-	names := sortedProviderNames()
+	names := sortedProviderNames(cfg, true)
 
 	for {
 		renderProviderListScreen(out, names, cfg, currentProvider, 0, "")
@@ -419,6 +477,9 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 		}
 		provider, err := resolveProviderSelection(text, names)
 		if err == nil {
+			if provider == customProviderOption {
+				return promptCustomProviderFallback(reader, out)
+			}
 			return ConfigureSelection{
 				Provider: provider,
 				Model:    defaultSelectionModel(provider, currentProvider, currentModel),
@@ -435,7 +496,7 @@ func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, cu
 	}
 	defer restore()
 
-	names := sortedProviderNames()
+	names := sortedProviderNames(cfg, true)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
 	}
@@ -500,6 +561,9 @@ func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, cu
 			status = ""
 		case "right":
 			if page == tuiPageProviders {
+				if names[selectedProvider] == customProviderOption {
+					return promptCustomProviderWizard(reader, out, cfg)
+				}
 				page = tuiPageProviderDetail
 			} else if page == tuiPageProviderDetail {
 				if !hasConfigurableKey(strings.TrimSpace(cfg.Providers[names[selectedProvider]].APIKey), typedAPIKey, resetKey) {
@@ -517,6 +581,9 @@ func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, cu
 			status = ""
 		case "enter":
 			if page == tuiPageProviders {
+				if names[selectedProvider] == customProviderOption {
+					return promptCustomProviderWizard(reader, out, cfg)
+				}
 				page = tuiPageProviderDetail
 				status = ""
 				continue
@@ -574,6 +641,19 @@ func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, cu
 				resetKey = true
 				status = "New API key captured. It will be saved on apply."
 			}
+		case "custom_model":
+			if page == tuiPageModels {
+				modelValue, promptErr := promptTextInput(reader, out, "Custom Model", "Model", "Enter any model name. It will be saved as this provider's default model.", false)
+				if promptErr != nil {
+					status = "Custom model input cancelled."
+					continue
+				}
+				stored := cfg.Providers[names[selectedProvider]]
+				stored.Model = modelValue
+				cfg.Providers[names[selectedProvider]] = stored
+				selectedModel = 0
+				status = "Custom model captured."
+			}
 		}
 	}
 }
@@ -594,9 +674,89 @@ func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string,
 	}
 }
 
+func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer) (ConfigureSelection, error) {
+	fmt.Fprintln(out, "Create custom provider")
+	fmt.Fprint(out, "Name: ")
+	name, err := readLine(reader)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ConfigureSelection{}, errors.New("custom provider name cannot be empty")
+	}
+	fmt.Fprint(out, "Base URL: ")
+	baseURL, err := readLine(reader)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return ConfigureSelection{}, errors.New("custom provider base url cannot be empty")
+	}
+	fmt.Fprint(out, "API Key: ")
+	apiKey, err := readLine(reader)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return ConfigureSelection{}, errors.New("custom provider api key cannot be empty")
+	}
+	fmt.Fprint(out, "Model: ")
+	model, err := readLine(reader)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ConfigureSelection{}, errors.New("custom provider model cannot be empty")
+	}
+
+	return ConfigureSelection{
+		Provider: makeCustomProviderKey(name),
+		Name:     name,
+		BaseURL:  baseURL,
+		APIKey:   apiKey,
+		Model:    model,
+	}, nil
+}
+
+func promptCustomProviderWizard(reader *bufio.Reader, out io.Writer, cfg *AppConfig) (ConfigureSelection, error) {
+	name, err := promptTextInput(reader, out, "Custom Provider", "Provider name", "Enter a display name for this provider.", false)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	baseURL, err := promptTextInput(reader, out, "Custom Provider", "Base URL", "Enter the Anthropic-compatible base URL.", false)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	apiKey, err := promptTextInput(reader, out, "Custom Provider", "API Key", "Type the API key. Characters are hidden.", true)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	model, err := promptTextInput(reader, out, "Custom Provider", "Model", "Enter the default model name for this provider.", false)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+
+	key := uniqueCustomProviderKey(cfg, makeCustomProviderKey(name))
+	return ConfigureSelection{
+		Provider: key,
+		Name:     name,
+		BaseURL:  baseURL,
+		APIKey:   apiKey,
+		Model:    model,
+	}, nil
+}
+
 func promptAPIKeyMasked(reader *bufio.Reader, out io.Writer, provider string) (string, error) {
+	return promptTextInput(reader, out, "Edit API Key", "API key", "Provider: "+provider+"\nType a new key. Characters are hidden. Press Enter to confirm, Esc to cancel.", true)
+}
+
+func promptTextInput(reader *bufio.Reader, out io.Writer, title, label, hint string, secret bool) (string, error) {
 	var value []byte
-	writeTerminalFrame(out, "\033[H\033[2J"+styleTitle("claude-switch")+"\n"+styleSection("Edit API Key")+"\n\n"+styleMuted("Type a new key. Characters are hidden. Press Enter to confirm, Esc to cancel.")+"\n\n"+styleLabel("Provider")+" "+provider+"\n\nAPI key: ")
+	writeTerminalFrame(out, "\033[H\033[2J"+styleTitle("claude-switch")+"\n"+styleSection(title)+"\n\n"+styleMuted(hint)+"\n\n"+styleLabel(label)+": ")
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
@@ -605,8 +765,8 @@ func promptAPIKeyMasked(reader *bufio.Reader, out io.Writer, provider string) (s
 		switch b {
 		case '\r', '\n':
 			if len(value) == 0 {
-				writeTerminalFrame(out, "\r\n"+styleWarning("API key cannot be empty.")+"\r\n")
-				writeTerminalFrame(out, "API key: ")
+				writeTerminalFrame(out, "\r\n"+styleWarning("Value cannot be empty.")+"\r\n")
+				writeTerminalFrame(out, styleLabel(label)+": ")
 				continue
 			}
 			writeTerminalFrame(out, "\r\n")
@@ -621,7 +781,11 @@ func promptAPIKeyMasked(reader *bufio.Reader, out io.Writer, provider string) (s
 		default:
 			if b >= 32 && b <= 126 {
 				value = append(value, b)
-				writeTerminalFrame(out, "*")
+				if secret {
+					writeTerminalFrame(out, "*")
+				} else {
+					writeTerminalFrame(out, string(b))
+				}
 			}
 		}
 	}
@@ -635,6 +799,63 @@ func hasConfigurableKey(savedKey, typedKey string, resetKey bool) bool {
 		return false
 	}
 	return strings.TrimSpace(savedKey) != ""
+}
+
+func providerTitle(name string, cfg *AppConfig) string {
+	if name == customProviderOption {
+		return "custom..."
+	}
+	if stored, ok := cfg.Providers[name]; ok && strings.TrimSpace(stored.Name) != "" && !isPresetProvider(name) {
+		return strings.TrimSpace(stored.Name)
+	}
+	return name
+}
+
+func isPresetProvider(name string) bool {
+	_, ok := providerPresets[name]
+	return ok
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func makeCustomProviderKey(name string) string {
+	normalized := normalizeProviderName(name)
+	normalized = strings.ReplaceAll(normalized, " ", "-")
+	normalized = strings.ReplaceAll(normalized, "/", "-")
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	normalized = strings.Trim(normalized, "-")
+	if normalized == "" {
+		return "custom-provider"
+	}
+	return normalized
+}
+
+func uniqueCustomProviderKey(cfg *AppConfig, base string) string {
+	if _, exists := cfg.Providers[base]; !exists && !isPresetProvider(base) {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if _, exists := cfg.Providers[candidate]; !exists && !isPresetProvider(candidate) {
+			return candidate
+		}
+	}
 }
 
 func renderProviderListScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider string, selectedProvider int, statusLine string) {
@@ -655,7 +876,22 @@ func renderProviderListScreen(out io.Writer, names []string, cfg *AppConfig, cur
 		b.WriteString("\n\n")
 	}
 	for i, name := range names {
-		preset := providerPresets[name]
+		if name == customProviderOption {
+			cursor := styleMuted(" ")
+			title := "custom..."
+			if i == selectedProvider {
+				cursor = styleSelected(">")
+				title = styleSelected(title)
+			}
+			fmt.Fprintf(&b, "  %s %s\n", cursor, title)
+			fmt.Fprintf(&b, "    %s\n", styleMuted("Add a custom Anthropic-compatible provider"))
+			fmt.Fprintf(&b, "    %s\n", styleDim("Save name, base URL, key, and model"))
+			continue
+		}
+		preset, err := resolveProviderPreset(name, cfg)
+		if err != nil {
+			continue
+		}
 		status := []string{}
 		if name == currentProvider {
 			status = append(status, styleBadgeCurrent("current"))
@@ -670,10 +906,10 @@ func renderProviderListScreen(out io.Writer, names []string, cfg *AppConfig, cur
 		}
 
 		cursor := styleMuted(" ")
-		title := name
+		title := providerTitle(name, cfg)
 		if i == selectedProvider {
 			cursor = styleSelected(">")
-			title = styleSelected(name)
+			title = styleSelected(title)
 		}
 		fmt.Fprintf(&b, "  %s %s%s\n", cursor, title, label)
 		fmt.Fprintf(&b, "    %s\n", styleMuted(preset.Name))
@@ -700,7 +936,11 @@ func renderProviderInfoScreen(out io.Writer, names []string, cfg *AppConfig, cur
 		return
 	}
 	provider := names[selectedProvider]
-	preset := providerPresets[provider]
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		writeTerminalFrame(out, b.String())
+		return
+	}
 	hasSavedKey := strings.TrimSpace(cfg.Providers[provider].APIKey) != ""
 	b.WriteString(styleRule())
 	b.WriteString("\n")
@@ -710,7 +950,7 @@ func renderProviderInfoScreen(out io.Writer, names []string, cfg *AppConfig, cur
 		b.WriteString(styleWarning(statusLine))
 		b.WriteString("\n\n")
 	}
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Provider"), styleSelected(provider))
+	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Provider"), styleSelected(providerTitle(provider, cfg)))
 	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Preset"), preset.Name)
 	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Base URL"), styleDim(preset.BaseURL))
 	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Saved Key"), maskAPIKey(cfg.Providers[provider].APIKey))
@@ -752,7 +992,11 @@ func renderProviderModelsScreen(out io.Writer, names []string, cfg *AppConfig, c
 		return
 	}
 	provider := names[selectedProvider]
-	preset := providerPresets[provider]
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		writeTerminalFrame(out, b.String())
+		return
+	}
 	models := providerModels(provider)
 	if selectedModel < 0 || selectedModel >= len(models) {
 		selectedModel = 0
@@ -765,7 +1009,7 @@ func renderProviderModelsScreen(out io.Writer, names []string, cfg *AppConfig, c
 		b.WriteString(styleWarning(statusLine))
 		b.WriteString("\n\n")
 	}
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Provider"), styleSelected(provider))
+	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Provider"), styleSelected(providerTitle(provider, cfg)))
 	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Saved Key"), maskAPIKey(cfg.Providers[provider].APIKey))
 	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Active"), currentProviderLabel(currentProvider)+" / "+currentModelLabel(currentModel))
 	if resetKey {
@@ -787,12 +1031,12 @@ func renderProviderModelsScreen(out io.Writer, names []string, cfg *AppConfig, c
 	b.WriteString("\n")
 	b.WriteString(styleRule())
 	b.WriteString("\n")
-	b.WriteString(styleMuted("↑↓ model   enter apply   k edit key   ← back   q back"))
+	b.WriteString(styleMuted("↑↓ model   enter apply   c custom model   k edit key   ← back   q back"))
 	b.WriteString("\n")
 	writeTerminalFrame(out, b.String())
 }
 
-func currentConfiguredProvider(claudeDir string) (string, string) {
+func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
 	root, err := readJSONMap(claudeSettingsPath(claudeDir))
 	if err != nil {
 		return "", ""
@@ -803,7 +1047,15 @@ func currentConfiguredProvider(claudeDir string) (string, string) {
 	}
 	baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
 	model, _ := env["ANTHROPIC_MODEL"].(string)
-	return detectProvider(baseURL, model), model
+	if provider := detectProvider(baseURL, model); provider != "custom" {
+		return provider, model
+	}
+	for name, stored := range cfg.Providers {
+		if strings.TrimSpace(stored.BaseURL) == strings.TrimSpace(baseURL) {
+			return name, model
+		}
+	}
+	return "custom", model
 }
 
 func readLine(reader *bufio.Reader) (string, error) {
@@ -831,7 +1083,15 @@ func resolveProviderSelection(input string, names []string) (string, error) {
 	}
 
 	provider := canonicalProviderName(text)
+	if provider == "custom" || provider == "custom..." {
+		return customProviderOption, nil
+	}
 	if _, ok := providerPresets[provider]; !ok {
+		for _, name := range names {
+			if name == provider {
+				return provider, nil
+			}
+		}
 		return "", errors.New("unsupported provider")
 	}
 	return provider, nil
@@ -934,38 +1194,63 @@ func readKey(reader *bufio.Reader) (string, error) {
 	switch b {
 	case '\r', '\n':
 		return "enter", nil
+	case 'c', 'C':
+		return "custom_model", nil
 	case 'k', 'K':
 		return "key", nil
 	case 'q', 'Q':
 		return "quit", nil
 	case 27:
-		next, err := reader.ReadByte()
-		if err != nil {
-			return "", err
+		// ESC key: may be standalone or start of escape sequence.
+		// For standalone ESC, the next ReadByte would block.
+		// Use a goroutine to detect if a sequence follows within 50ms.
+		type result struct {
+			b   byte
+			err error
 		}
-		if next != '[' {
+		ch := make(chan result, 1)
+		go func() {
+			b, err := reader.ReadByte()
+			ch <- result{b, err}
+		}()
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				return "", r.err
+			}
+			if r.b != '[' {
+				// Not an arrow key sequence; unread by returning empty
+				return "", nil
+			}
+			arrow, err := reader.ReadByte()
+			if err != nil {
+				return "", err
+			}
+			switch arrow {
+			case 'A':
+				return "up", nil
+			case 'B':
+				return "down", nil
+			case 'C':
+				return "right", nil
+			case 'D':
+				return "left", nil
+			}
 			return "", nil
-		}
-		arrow, err := reader.ReadByte()
-		if err != nil {
-			return "", err
-		}
-		switch arrow {
-		case 'A':
-			return "up", nil
-		case 'B':
-			return "down", nil
-		case 'C':
-			return "right", nil
-		case 'D':
-			return "left", nil
+		case <-time.After(50 * time.Millisecond):
+			// No follow-up byte within 50ms; treat as standalone ESC
+			return "escape", nil
 		}
 	}
 	return "", nil
 }
 
 func writeTerminalFrame(out io.Writer, content string) {
-	fmt.Fprint(out, strings.ReplaceAll(content, "\n", "\r\n"))
+	if runtime.GOOS == "windows" {
+		fmt.Fprint(out, strings.ReplaceAll(content, "\n", "\r\n"))
+	} else {
+		fmt.Fprint(out, content)
+	}
 }
 
 func styleTitle(text string) string {
