@@ -136,7 +136,7 @@ var providerAliases = map[string]string{
 
 const customProviderOption = "__custom__"
 
-var version = "v0.0.4"
+var version = "dev"
 
 var managedEnvKeys = []string{
 	"ANTHROPIC_BASE_URL",

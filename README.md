@@ -198,6 +198,8 @@ cs list
 cs --version
 ```
 
+从 GitHub Release 安装的二进制会显示对应 release tag。从源码直接构建时，如果当前提交没有 tag，版本会显示为 `dev`；发布构建会通过 `-ldflags` 注入 tag。
+
 ### 2. 交互式配置
 
 直接运行 `cs` 即可进入 TUI：

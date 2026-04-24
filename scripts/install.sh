@@ -26,8 +26,13 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 
+VERSION=${VERSION:-dev}
+if [ "$VERSION" = "dev" ] && command -v git >/dev/null 2>&1; then
+  VERSION=$(git -C "$REPO_ROOT" describe --tags --exact-match 2>/dev/null || echo dev)
+fi
+
 echo "Building $PROJECT_NAME..."
-GOCACHE="${GOCACHE:-$REPO_ROOT/.gocache}" go build -o "$BIN_PATH" "$REPO_ROOT"
+GOCACHE="${GOCACHE:-$REPO_ROOT/.gocache}" go build -ldflags="-X main.version=$VERSION" -o "$BIN_PATH" "$REPO_ROOT"
 chmod +x "$BIN_PATH"
 
 echo "Installed to: $BIN_PATH"

@@ -14,9 +14,17 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
+$version = if ($env:VERSION) { $env:VERSION } else { 'dev' }
+if ($version -eq 'dev' -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    $tag = git -C $repoRoot describe --tags --exact-match 2>$null
+    if ($LASTEXITCODE -eq 0 -and $tag) {
+        $version = $tag.Trim()
+    }
+}
+
 Write-Host "Building claude-switch..."
 $env:GOCACHE = if ($env:GOCACHE) { $env:GOCACHE } else { Join-Path $repoRoot '.gocache' }
-go build -o $binaryPath $repoRoot
+go build -ldflags "-X main.version=$version" -o $binaryPath $repoRoot
 
 Write-Host "Installed to: $binaryPath"
 

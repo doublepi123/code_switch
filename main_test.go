@@ -27,9 +27,9 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
-func TestDefaultVersionMatchesCurrentGitHubTag(t *testing.T) {
-	if version != "v0.0.4" {
-		t.Fatalf("version = %q, want current GitHub tag %q", version, "v0.0.4")
+func TestDefaultVersionIsDev(t *testing.T) {
+	if version != "dev" {
+		t.Fatalf("version = %q, want %q", version, "dev")
 	}
 }
 

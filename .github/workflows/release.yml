@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 env:
@@ -13,8 +11,50 @@ env:
   PROJECT_NAME: claude-switch
 
 jobs:
+  tag:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          git fetch --tags --force
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            CURRENT_TAG="${GITHUB_REF_NAME}"
+            echo "tag=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
+            echo "Using pushed tag: $CURRENT_TAG"
+          elif CURRENT_TAG=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n 1); [ -n "$CURRENT_TAG" ]; then
+            echo "tag=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
+            echo "Commit already tagged as $CURRENT_TAG"
+          else
+            LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)
+            LAST_TAG=${LAST_TAG:-v0.0.0}
+            major=$(echo "$LAST_TAG" | cut -d. -f1 | tr -d v)
+            minor=$(echo "$LAST_TAG" | cut -d. -f2)
+            patch=$(echo "$LAST_TAG" | cut -d. -f3)
+            new_patch=$((patch + 1))
+            NEW_TAG="v${major}.${minor}.${new_patch}"
+            while git rev-parse -q --verify "refs/tags/$NEW_TAG" >/dev/null; do
+              new_patch=$((new_patch + 1))
+              NEW_TAG="v${major}.${minor}.${new_patch}"
+            done
+            echo "tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+            echo "Created tag: $NEW_TAG"
+            git tag "$NEW_TAG"
+            git push origin "$NEW_TAG"
+          fi
+
   build:
     runs-on: ubuntu-latest
+    needs: tag
     strategy:
       matrix:
         goos:
@@ -39,6 +79,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.tag.outputs.tag }}
         run: |
           EXTENSION=""
           if [ "$GOOS" = "windows" ]; then
@@ -46,7 +87,7 @@ jobs:
           fi
           OUTPUT_NAME="${{ env.PROJECT_NAME }}-${GOOS}-${GOARCH}${EXTENSION}"
           echo "OUTPUT_NAME=$OUTPUT_NAME" >> $GITHUB_ENV
-          go build -ldflags="-s -w" -o "$OUTPUT_NAME" .
+          go build -ldflags="-s -w -X main.version=${VERSION}" -o "$OUTPUT_NAME" .
 
           # Rename binary to "cs" before packaging so tarball extracts directly to "cs"
           if [ "$GOOS" = "windows" ]; then
@@ -68,40 +109,16 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs:
+      - tag
+      - build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Create and push tag
-        id: tag
-        run: |
-          git fetch --tags --force
-          CURRENT_TAG=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n 1)
-          if [ -n "$CURRENT_TAG" ]; then
-            echo "tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
-            echo "Commit already tagged as $CURRENT_TAG"
-          else
-            LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)
-            LAST_TAG=${LAST_TAG:-v0.0.0}
-            major=$(echo "$LAST_TAG" | cut -d. -f1 | tr -d v)
-            minor=$(echo "$LAST_TAG" | cut -d. -f2)
-            patch=$(echo "$LAST_TAG" | cut -d. -f3)
-            new_patch=$((patch + 1))
-            NEW_TAG="v${major}.${minor}.${new_patch}"
-            while git rev-parse -q --verify "refs/tags/$NEW_TAG" >/dev/null; do
-              new_patch=$((new_patch + 1))
-              NEW_TAG="v${major}.${minor}.${new_patch}"
-            done
-            echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
-            echo "Created tag: $NEW_TAG"
-            git tag "$NEW_TAG"
-            git push origin "$NEW_TAG"
-          fi
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -111,8 +128,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.tag.outputs.tag }}
+          name: ${{ needs.tag.outputs.tag }}
           draft: false
           generate_release_notes: true
           files: |
