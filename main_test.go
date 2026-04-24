@@ -134,7 +134,7 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	claudeDir := filepath.Join(home, "custom-claude")
-	input := strings.NewReader("openrouter\nsk-interactive\n")
+	input := strings.NewReader("openrouter\n\nsk-interactive\n")
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure([]string{"--claude-dir", claudeDir}, input, output); err != nil {
@@ -194,7 +194,7 @@ func TestCmdConfigureReusesExistingAPIKeyWithoutPrompting(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	input := strings.NewReader("minimax-cn\n")
+	input := strings.NewReader("minimax-cn\n\n")
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure(nil, input, output); err != nil {
@@ -236,7 +236,7 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	input := strings.NewReader("minimax-cn\nsk-new\n")
+	input := strings.NewReader("minimax-cn\n\nsk-new\n")
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure([]string{"--reset-key"}, input, output); err != nil {

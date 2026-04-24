@@ -44,12 +44,13 @@ type AppConfig struct {
 }
 
 type ConfigureSelection struct {
-	Provider string
-	Model    string
-	ResetKey bool
-	APIKey   string
-	Name     string
-	BaseURL  string
+	Provider   string
+	Model      string
+	ResetKey   bool
+	APIKey     string
+	Name       string
+	BaseURL    string
+	SavedModel string
 }
 
 var providerPresets = map[string]ProviderPreset{
@@ -64,8 +65,8 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://platform.minimaxi.com",
 		APIKeyURL: "https://platform.minimaxi.com/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
-			"API_TIMEOUT_MS": "3000000",
-			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
+			"API_TIMEOUT_MS":                      "3000000",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
 	"minimax-global": {
@@ -79,8 +80,8 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://platform.minimax.io",
 		APIKeyURL: "https://platform.minimax.io/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
-			"API_TIMEOUT_MS": "3000000",
-			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
+			"API_TIMEOUT_MS":                      "3000000",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
 	"openrouter": {
@@ -192,7 +193,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	reader := bufio.NewReader(in)
 	var selection ConfigureSelection
 	if file, ok := in.(*os.File); ok && shouldUseArrowTUI(file) {
-		selection, err = runArrowTUI(file, out, cfg, currentProvider, currentModel)
+		selection, err = runArrowTUI(cfg, currentProvider, currentModel)
 		if err != nil {
 			return err
 		}
@@ -217,6 +218,11 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
 	upsertProviderConfig(cfg, selection, apiKey)
+	if selection.SavedModel != "" {
+		stored := cfg.Providers[provider]
+		stored.Model = selection.SavedModel
+		cfg.Providers[provider] = stored
+	}
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		return err
 	}
@@ -489,23 +495,40 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 			if provider == customProviderOption {
 				return promptCustomProviderFallback(reader, out)
 			}
+
+			defaultModel := defaultSelectionModel(cfg, provider, currentProvider, currentModel)
+			preset, _ := resolveProviderPreset(provider, cfg)
+
+			fmt.Fprintf(out, "Model (default: %s): ", defaultModel)
+			modelText, err := readLine(reader)
+			if err != nil {
+				return ConfigureSelection{}, err
+			}
+			modelText = strings.TrimSpace(modelText)
+			if modelText == "" {
+				modelText = defaultModel
+			}
+
+			savedModel := ""
+			if modelText != defaultModel && !containsString(preset.Models, modelText) {
+				savedModel = modelText
+			}
+
 			return ConfigureSelection{
-				Provider: provider,
-				Model:    defaultSelectionModel(cfg, provider, currentProvider, currentModel),
+				Provider:   provider,
+				Model:      modelText,
+				SavedModel: savedModel,
 			}, nil
 		}
 		fmt.Fprintf(out, "\nInvalid provider: %s\n", strings.TrimSpace(text))
 	}
 }
 
-func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
+func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
 	names := sortedProviderNames(cfg, true)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
 	}
-
-	_ = in
-	_ = out
 
 	app := tview.NewApplication()
 	pages := tview.NewPages()
@@ -543,11 +566,13 @@ func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, cu
 	}
 
 	finishSelection := func(provider, model string) {
+		savedModel := strings.TrimSpace(customModels[provider])
 		result = ConfigureSelection{
-			Provider: provider,
-			Model:    model,
-			ResetKey: resetKeys[provider],
-			APIKey:   strings.TrimSpace(typedAPIKeys[provider]),
+			Provider:   provider,
+			Model:      model,
+			ResetKey:   resetKeys[provider],
+			APIKey:     strings.TrimSpace(typedAPIKeys[provider]),
+			SavedModel: savedModel,
 		}
 		resultErr = nil
 		app.Stop()
@@ -728,9 +753,6 @@ func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, cu
 		})
 		form.AddButton("Save", func() {
 			keyValue = strings.TrimSpace(keyValue)
-			if keyValue == "" {
-				return
-			}
 			typedAPIKeys[provider] = keyValue
 			resetKeys[provider] = true
 			onSave()
@@ -1407,6 +1429,10 @@ func backupIfExists(path string) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		return err
+	}
+	backupDir := filepath.Dir(path)
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return err
 	}
 	backupPath := fmt.Sprintf("%s.bak.%s", path, time.Now().Format("20060102_150405"))
