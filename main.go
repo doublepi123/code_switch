@@ -436,11 +436,29 @@ func performUpgrade(opts upgradeOptions) error {
 	if err != nil {
 		return err
 	}
-	downloadURL := releaseDownloadURL(opts.baseURL, opts.repo, opts.tag, asset)
 	if opts.installPath == "" {
 		return errors.New("missing install path")
 	}
 
+	targetTag := strings.TrimSpace(opts.tag)
+	if targetTag == "" || targetTag == "latest" {
+		targetTag, err = latestReleaseTag(opts.client, opts.baseURL, opts.repo)
+		if err != nil {
+			return err
+		}
+	}
+	if shouldSkipUpgrade(version, targetTag) {
+		fmt.Fprintf(opts.out, "claude-switch is already up to date (%s)\n", version)
+		return nil
+	}
+	if strings.TrimSpace(version) != "" && version != "dev" {
+		fmt.Fprintf(opts.out, "current: %s\n", version)
+	}
+	if targetTag != "" {
+		fmt.Fprintf(opts.out, "latest: %s\n", targetTag)
+	}
+
+	downloadURL := releaseDownloadURL(opts.baseURL, opts.repo, targetTag, asset)
 	fmt.Fprintf(opts.out, "target: %s\n", opts.installPath)
 	fmt.Fprintf(opts.out, "download: %s\n", downloadURL)
 	if opts.dryRun {
@@ -485,6 +503,134 @@ func performUpgrade(opts upgradeOptions) error {
 
 	fmt.Fprintf(opts.out, "upgraded claude-switch to latest release\n")
 	return nil
+}
+
+func latestReleaseTag(client *http.Client, baseURL, repo string) (string, error) {
+	latestURL := fmt.Sprintf("%s/%s/releases/latest", strings.TrimRight(strings.TrimSpace(baseURL), "/"), strings.Trim(strings.TrimSpace(repo), "/"))
+	req, err := http.NewRequest(http.MethodGet, latestURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "claude-switch/"+version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return "", fmt.Errorf("check latest release failed: %s", resp.Status)
+	}
+	tag := tagFromReleaseURL(resp.Request.URL)
+	if tag == "" {
+		return "", fmt.Errorf("could not determine latest release tag from %s", resp.Request.URL.String())
+	}
+	return tag, nil
+}
+
+func tagFromReleaseURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] != "tag" {
+			continue
+		}
+		tag, err := url.PathUnescape(parts[i+1])
+		if err != nil {
+			return ""
+		}
+		return tag
+	}
+	return ""
+}
+
+func shouldSkipUpgrade(current, target string) bool {
+	current = strings.TrimSpace(current)
+	target = strings.TrimSpace(target)
+	if current == "" || current == "dev" || target == "" {
+		return false
+	}
+	cmp, ok := compareReleaseVersions(current, target)
+	if !ok {
+		return current == target
+	}
+	return cmp >= 0
+}
+
+func compareReleaseVersions(current, target string) (int, bool) {
+	currentVersion, ok := parseReleaseVersion(current)
+	if !ok {
+		return 0, false
+	}
+	targetVersion, ok := parseReleaseVersion(target)
+	if !ok {
+		return 0, false
+	}
+	for i := 0; i < len(currentVersion.numbers) || i < len(targetVersion.numbers); i++ {
+		left := 0
+		if i < len(currentVersion.numbers) {
+			left = currentVersion.numbers[i]
+		}
+		right := 0
+		if i < len(targetVersion.numbers) {
+			right = targetVersion.numbers[i]
+		}
+		switch {
+		case left > right:
+			return 1, true
+		case left < right:
+			return -1, true
+		}
+	}
+	switch {
+	case currentVersion.preRelease == "" && targetVersion.preRelease != "":
+		return 1, true
+	case currentVersion.preRelease != "" && targetVersion.preRelease == "":
+		return -1, true
+	case currentVersion.preRelease > targetVersion.preRelease:
+		return 1, true
+	case currentVersion.preRelease < targetVersion.preRelease:
+		return -1, true
+	default:
+		return 0, true
+	}
+}
+
+type releaseVersion struct {
+	numbers    []int
+	preRelease string
+}
+
+func parseReleaseVersion(value string) (releaseVersion, bool) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "v")
+	value = strings.TrimPrefix(value, "V")
+	if value == "" {
+		return releaseVersion{}, false
+	}
+	if plus := strings.Index(value, "+"); plus >= 0 {
+		value = value[:plus]
+	}
+	preRelease := ""
+	if dash := strings.Index(value, "-"); dash >= 0 {
+		preRelease = value[dash+1:]
+		value = value[:dash]
+	}
+	parts := strings.Split(value, ".")
+	numbers := make([]int, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			return releaseVersion{}, false
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return releaseVersion{}, false
+		}
+		numbers = append(numbers, n)
+	}
+	return releaseVersion{numbers: numbers, preRelease: preRelease}, true
 }
 
 func upgradeAssetName(goos, goarch string) (string, error) {

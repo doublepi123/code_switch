@@ -103,6 +103,8 @@ cs --version
 cs upgrade
 ```
 
+`cs upgrade` 会先检查当前版本，只有 GitHub Release 存在更新版本时才会下载并替换本地 `cs`。
+
 ## 从源码安装
 
 ### macOS / Linux
@@ -211,6 +213,8 @@ cs --version
 ```bash
 cs upgrade
 ```
+
+命令会先比较当前版本和最新 release tag；如果已经是最新版，会直接退出，不会重新下载。
 
 安装指定版本：
 

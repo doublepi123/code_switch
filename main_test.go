@@ -73,6 +73,12 @@ func TestReleaseDownloadURL(t *testing.T) {
 }
 
 func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
+	oldVersion := version
+	version = "dev"
+	t.Cleanup(func() {
+		version = oldVersion
+	})
+
 	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		t.Skip(err)
@@ -85,6 +91,13 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v9.9.9", http.StatusFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/releases/tag/v9.9.9") {
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/"+asset) {
 			t.Fatalf("unexpected download path: %s", r.URL.Path)
 		}
@@ -118,6 +131,82 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "upgraded claude-switch to latest release") {
 		t.Fatalf("expected success output, got %q", output.String())
+	}
+}
+
+func TestPerformUpgradeSkipsWhenAlreadyLatest(t *testing.T) {
+	oldVersion := version
+	version = "v2.0.0"
+	t.Cleanup(func() {
+		version = oldVersion
+	})
+
+	assetRequested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v2.0.0", http.StatusFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/releases/tag/v2.0.0") {
+			return
+		}
+		assetRequested = true
+		t.Fatalf("did not expect asset download, got path: %s", r.URL.Path)
+	}))
+	defer server.Close()
+
+	installPath := filepath.Join(t.TempDir(), "cs")
+	if runtime.GOOS == "windows" {
+		installPath += ".exe"
+	}
+	if err := os.WriteFile(installPath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatalf("write old binary: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	err := performUpgrade(upgradeOptions{
+		repo:        "owner/repo",
+		installPath: installPath,
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+	})
+	if err != nil {
+		t.Fatalf("performUpgrade returned error: %v", err)
+	}
+	if assetRequested {
+		t.Fatalf("asset was downloaded")
+	}
+	data, err := os.ReadFile(installPath)
+	if err != nil {
+		t.Fatalf("read installed binary: %v", err)
+	}
+	if got, want := string(data), "old-binary"; got != want {
+		t.Fatalf("installed binary = %q, want %q", got, want)
+	}
+	if !strings.Contains(output.String(), "already up to date") {
+		t.Fatalf("expected up-to-date output, got %q", output.String())
+	}
+}
+
+func TestShouldSkipUpgrade(t *testing.T) {
+	cases := []struct {
+		current string
+		target  string
+		want    bool
+	}{
+		{current: "dev", target: "v2.0.0", want: false},
+		{current: "v2.0.0", target: "v2.0.0", want: true},
+		{current: "v2.0.1", target: "v2.0.0", want: true},
+		{current: "v2.0.0", target: "v2.0.1", want: false},
+		{current: "v2.0.0-beta.1", target: "v2.0.0", want: false},
+		{current: "v2.0.0", target: "v2.0.0-beta.1", want: true},
+	}
+
+	for _, tc := range cases {
+		if got := shouldSkipUpgrade(tc.current, tc.target); got != tc.want {
+			t.Fatalf("shouldSkipUpgrade(%q, %q) = %v, want %v", tc.current, tc.target, got, tc.want)
+		}
 	}
 }
 
