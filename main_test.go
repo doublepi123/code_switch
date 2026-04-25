@@ -364,18 +364,23 @@ func TestApplyPresetDeepSeekCustomModelOverridesAllModels(t *testing.T) {
 	}
 }
 
-func TestOpenCodeGoIncludesDeepSeekV4Models(t *testing.T) {
+func TestOpenCodeGoIncludesAnthropicMessagesModels(t *testing.T) {
 	models := providerPresets["opencode-go"].Models
-	for _, want := range []string{"deepseek-v4-pro", "deepseek-v4-flash"} {
+	for _, want := range []string{"minimax-m2.7", "minimax-m2.5", "deepseek-v4-pro", "deepseek-v4-flash"} {
 		if !containsString(models, want) {
 			t.Fatalf("opencode-go models missing %q: %v", want, models)
 		}
 	}
+	for _, unsupported := range []string{"glm-5", "kimi-k2.6", "qwen3.6-plus"} {
+		if containsString(models, unsupported) {
+			t.Fatalf("opencode-go models should not include %q: %v", unsupported, models)
+		}
+	}
 }
 
-func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
+func TestApplyPresetOpenCodeGoMiniMaxModel(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["opencode-go"], "sk-opencode", "deepseek-v4-pro")
+	applyPreset(root, providerPresets["opencode-go"], "sk-opencode", "minimax-m2.5")
 
 	env := root["env"].(map[string]any)
 	if got := env["ANTHROPIC_BASE_URL"]; got != "https://opencode.ai/zen/go" {
@@ -387,6 +392,28 @@ func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
 	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
 		t.Fatalf("expected auth token to be unset")
 	}
+	if got := env["ANTHROPIC_MODEL"]; got != "minimax-m2.5" {
+		t.Fatalf("model = %v, want %v", got, "minimax-m2.5")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "minimax-m2.7" {
+		t.Fatalf("haiku = %v, want %v", got, "minimax-m2.7")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "minimax-m2.7" {
+		t.Fatalf("sonnet = %v, want %v", got, "minimax-m2.7")
+	}
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "minimax-m2.7" {
+		t.Fatalf("opus = %v, want %v", got, "minimax-m2.7")
+	}
+	if _, ok := env["CLAUDE_CODE_SUBAGENT_MODEL"]; ok {
+		t.Fatalf("expected subagent model to be unset")
+	}
+}
+
+func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
+	root := map[string]any{}
+	applyPreset(root, providerPresets["opencode-go"], "sk-opencode", "deepseek-v4-pro")
+
+	env := root["env"].(map[string]any)
 	if got := env["ANTHROPIC_MODEL"]; got != "deepseek-v4-pro" {
 		t.Fatalf("model = %v, want %v", got, "deepseek-v4-pro")
 	}
@@ -401,6 +428,18 @@ func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
 	}
 	if got := env["CLAUDE_CODE_SUBAGENT_MODEL"]; got != "deepseek-v4-pro" {
 		t.Fatalf("subagent = %v, want %v", got, "deepseek-v4-pro")
+	}
+}
+
+func TestResolveSwitchPresetRejectsOpenCodeGoChatCompletionsModel(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+
+	_, err := resolveSwitchPreset("opencode-go", cfg, "glm-5")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "cannot be used with provider opencode-go") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

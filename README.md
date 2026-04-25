@@ -347,6 +347,8 @@ cs switch opencode-go --model deepseek-v4-flash
 
 这个工具当前把 `opencode-go` 作为 Anthropic 兼容供应商接入，因此应使用文档中对应 `https://opencode.ai/zen/go/v1/messages` 的模型，例如 `minimax-m2.7`、`minimax-m2.5`、`deepseek-v4-pro`、`deepseek-v4-flash`。
 
+OpenCode Go 文档里的 GLM、Kimi、MiMo、Qwen 等模型走的是 `https://opencode.ai/zen/go/v1/chat/completions`，不适合作为 Claude Code 的 Anthropic Base URL 直接使用。
+
 对于预设 provider，如果你想使用未内置的模型名，也可以在 TUI 的模型页按 `c` 直接输入任意模型名，后续会作为该 provider 的默认模型保存。
 
 对 `openrouter` 来说，选择内置的 Claude 模型时会保留官方三档映射：

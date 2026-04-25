@@ -32,19 +32,19 @@ type ModelTiers struct {
 }
 
 type ProviderPreset struct {
-	Name              string
-	BaseURL           string
-	Model             string
-	Models            []string
-	Haiku             string
-	Sonnet            string
-	Opus              string
-	Subagent          string
+	Name               string
+	BaseURL            string
+	Model              string
+	Models             []string
+	Haiku              string
+	Sonnet             string
+	Opus               string
+	Subagent           string
 	ModelTierOverrides map[string]ModelTiers
-	AuthEnv           string
-	ExtraEnv          map[string]any
-	Website           string
-	APIKeyURL         string
+	AuthEnv            string
+	ExtraEnv           map[string]any
+	Website            string
+	APIKeyURL          string
 }
 
 type StoredProvider struct {
@@ -129,20 +129,33 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"opencode-go": {
-		Name:      "OpenCode Go",
-		BaseURL:   "https://opencode.ai/zen/go",
-		Model:     "minimax-m2.7",
-		Models:    []string{"minimax-m2.7", "minimax-m2.5", "deepseek-v4-pro", "deepseek-v4-flash"},
-		Haiku:     "minimax-m2.7",
-		Sonnet:    "minimax-m2.7",
-		Opus:      "minimax-m2.7",
+		Name:    "OpenCode Go",
+		BaseURL: "https://opencode.ai/zen/go",
+		Model:   "minimax-m2.7",
+		Models:  []string{"minimax-m2.7", "minimax-m2.5", "deepseek-v4-pro", "deepseek-v4-flash"},
+		Haiku:   "minimax-m2.7",
+		Sonnet:  "minimax-m2.7",
+		Opus:    "minimax-m2.7",
 		ModelTierOverrides: map[string]ModelTiers{
-			"deepseek-v4-pro":  {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-pro", Opus: "deepseek-v4-pro", Subagent: "deepseek-v4-pro"},
+			"deepseek-v4-pro":   {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-pro", Opus: "deepseek-v4-pro", Subagent: "deepseek-v4-pro"},
 			"deepseek-v4-flash": {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-flash", Opus: "deepseek-v4-flash", Subagent: "deepseek-v4-flash"},
 		},
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
 	},
+}
+
+var unsupportedOpenCodeGoAnthropicModels = map[string]string{
+	"glm-5":         "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"glm-5.1":       "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"kimi-k2.5":     "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"kimi-k2.6":     "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-pro":   "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-omni":  "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2.5-pro": "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2.5":     "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"qwen3.6-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"qwen3.5-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 }
 
 var providerAliases = map[string]string{
@@ -976,6 +989,9 @@ func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) 
 		if model == "" {
 			model = strings.TrimSpace(cfg.Providers[provider].Model)
 		}
+		if err := validateProviderModel(provider, model); err != nil {
+			return ProviderPreset{}, err
+		}
 		return withSelectedModel(preset, model), nil
 	}
 
@@ -984,6 +1000,19 @@ func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) 
 		return ProviderPreset{}, err
 	}
 	return withSelectedModel(preset, modelOverride), nil
+}
+
+func validateProviderModel(provider, model string) error {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		return nil
+	}
+	if provider == "opencode-go" {
+		if reason, ok := unsupportedOpenCodeGoAnthropicModels[model]; ok {
+			return fmt.Errorf("%s cannot be used with provider opencode-go in Claude Code: %s. Use minimax-m2.7/minimax-m2.5 with opencode-go, or switch to provider deepseek for DeepSeek's Anthropic-compatible API", model, reason)
+		}
+	}
+	return nil
 }
 
 func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey string) {
