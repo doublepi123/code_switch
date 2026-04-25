@@ -1685,12 +1685,13 @@ func uniqueCustomProviderKey(cfg *AppConfig, base string) string {
 	if _, exists := cfg.Providers[base]; !exists && !isPresetProvider(base) && !isProviderAlias(base) {
 		return base
 	}
-	for i := 2; ; i++ {
+	for i := 2; i < 10000; i++ {
 		candidate := fmt.Sprintf("%s-%d", base, i)
 		if _, exists := cfg.Providers[candidate]; !exists && !isPresetProvider(candidate) && !isProviderAlias(candidate) {
 			return candidate
 		}
 	}
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
 }
 
 func isProviderAlias(name string) bool {
@@ -1895,9 +1896,6 @@ func loadAppConfig() (*AppConfig, string, error) {
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, "", fmt.Errorf("parse %s: %w", path, err)
-	}
-	if cfg.Providers == nil {
-		cfg.Providers = map[string]StoredProvider{}
 	}
 	migrateLegacyProviders(cfg)
 	return cfg, path, nil
