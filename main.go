@@ -59,13 +59,12 @@ type AppConfig struct {
 }
 
 type ConfigureSelection struct {
-	Provider   string
-	Model      string
-	ResetKey   bool
-	APIKey     string
-	Name       string
-	BaseURL    string
-	SavedModel string
+	Provider string
+	Model    string
+	ResetKey bool
+	APIKey   string
+	Name     string
+	BaseURL  string
 }
 
 var providerPresets = map[string]ProviderPreset{
@@ -197,13 +196,9 @@ func run(args []string) error {
 }
 
 func runWithIO(args []string, in io.Reader, out io.Writer) error {
-	// Check for --version or version anywhere in args so that
-	// "cs switch --version" and "cs configure --version" work.
-	for _, arg := range args {
-		if arg == "--version" || arg == "version" {
-			printVersion(out)
-			return nil
-		}
+	if isVersionRequest(args) {
+		printVersion(out)
+		return nil
 	}
 
 	if len(args) == 0 {
@@ -236,6 +231,19 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 
 func printVersion(out io.Writer) {
 	fmt.Fprintf(out, "claude-switch %s\n", version)
+}
+
+func isVersionRequest(args []string) bool {
+	if len(args) == 1 {
+		return args[0] == "--version" || args[0] == "version"
+	}
+	if len(args) == 2 && args[1] == "--version" {
+		switch args[0] {
+		case "list", "configure", "current", "set-key", "switch", "upgrade", "help":
+			return true
+		}
+	}
+	return false
 }
 
 func cmdList(out io.Writer) error {
@@ -426,7 +434,7 @@ func cmdUpgrade(args []string, out io.Writer) error {
 		tag:         strings.TrimSpace(*tag),
 		installPath: target,
 		baseURL:     "https://github.com",
-		client:      http.DefaultClient,
+		client:      &http.Client{Timeout: 5 * time.Minute},
 		out:         out,
 		dryRun:      *dryRun,
 	}
@@ -1029,20 +1037,37 @@ func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey s
 }
 
 func detectProvider(baseURL, model string) string {
+	host := normalizedURLHost(baseURL)
 	switch {
-	case strings.Contains(baseURL, "api.minimaxi.com"):
+	case host == "api.minimaxi.com":
 		return "minimax-cn"
-	case strings.Contains(baseURL, "api.minimax.io"):
+	case host == "api.minimax.io":
 		return "minimax-global"
-	case strings.Contains(baseURL, "openrouter.ai"):
+	case host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai"):
 		return "openrouter"
-	case strings.Contains(baseURL, "api.deepseek.com"):
+	case host == "api.deepseek.com":
 		return "deepseek"
-	case strings.Contains(baseURL, "opencode.ai") || strings.HasPrefix(model, "opencode-go/"):
+	case host == "opencode.ai" || strings.HasSuffix(host, ".opencode.ai") || strings.HasPrefix(model, "opencode-go/"):
 		return "opencode-go"
 	default:
 		return customDetectedProvider
 	}
+}
+
+func normalizedURLHost(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err == nil && parsed.Hostname() != "" {
+		return strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	}
+	parsed, err = url.Parse("https://" + rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 }
 
 func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
@@ -1100,7 +1125,6 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 			}
 
 			defaultModel := defaultSelectionModel(cfg, provider, currentProvider, currentModel)
-			preset, _ := resolveProviderPreset(provider, cfg)
 
 			fmt.Fprintf(out, "Model (default: %s): ", defaultModel)
 			modelText, err := readLine(reader)
@@ -1112,15 +1136,9 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 				modelText = defaultModel
 			}
 
-			savedModel := ""
-			if modelText != defaultModel && !containsString(preset.Models, modelText) {
-				savedModel = modelText
-			}
-
 			return ConfigureSelection{
-				Provider:   provider,
-				Model:      modelText,
-				SavedModel: savedModel,
+				Provider: provider,
+				Model:    modelText,
 			}, nil
 		}
 		fmt.Fprintf(out, "\nInvalid provider: %s\n", strings.TrimSpace(text))
@@ -1169,17 +1187,11 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 	}
 
 	finishSelection := func(provider, model string) {
-		customModel := strings.TrimSpace(customModels[provider])
-		savedModel := ""
-		if model == customModel && !containsString(providerModels(cfg, provider), model) {
-			savedModel = model
-		}
 		result = ConfigureSelection{
-			Provider:   provider,
-			Model:      model,
-			ResetKey:   resetKeys[provider],
-			APIKey:     strings.TrimSpace(typedAPIKeys[provider]),
-			SavedModel: savedModel,
+			Provider: provider,
+			Model:    model,
+			ResetKey: resetKeys[provider],
+			APIKey:   strings.TrimSpace(typedAPIKeys[provider]),
 		}
 		resultErr = nil
 		app.Stop()

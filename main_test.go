@@ -33,6 +33,67 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestRunSubcommandVersionFlag(t *testing.T) {
+	oldVersion := version
+	version = "v-test"
+	t.Cleanup(func() {
+		version = oldVersion
+	})
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "--version"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO(switch --version) returned error: %v", err)
+	}
+
+	if got, want := output.String(), "claude-switch v-test\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestRunSwitchProviderNamedVersionIsNotVersionRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"version": {
+				Name:    "Version Provider",
+				BaseURL: "https://version.example.com/anthropic",
+				Model:   "version-model",
+				APIKey:  "sk-version",
+			},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "version", "--claude-dir", claudeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO(switch version) returned error: %v", err)
+	}
+	if strings.Contains(output.String(), "claude-switch") {
+		t.Fatalf("did not expect version output, got %q", output.String())
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	env := settings["env"].(map[string]any)
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://version.example.com/anthropic" {
+		t.Fatalf("base url = %v, want %v", got, "https://version.example.com/anthropic")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "version-model" {
+		t.Fatalf("model = %v, want %v", got, "version-model")
+	}
+}
+
 func TestDefaultVersionIsDev(t *testing.T) {
 	if version != "dev" {
 		t.Fatalf("version = %q, want %q", version, "dev")
@@ -553,6 +614,10 @@ func TestDetectProvider(t *testing.T) {
 		{baseURL: "https://api.deepseek.com/anthropic", want: "deepseek"},
 		{baseURL: "https://opencode.ai/zen/go", model: "minimax-m2.7", want: "opencode-go"},
 		{baseURL: "https://example.com", model: "opencode-go/kimi-k2.5", want: "opencode-go"},
+		{baseURL: "https://proxy.example.com/openrouter.ai/api", want: "custom"},
+		{baseURL: "https://evilopenrouter.ai/api", want: "custom"},
+		{baseURL: "openrouter.ai/api", want: "openrouter"},
+		{baseURL: "https://gateway.openrouter.ai/api", want: "openrouter"},
 		{baseURL: "https://example.com", want: "custom"},
 	}
 
