@@ -1,0 +1,178 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+func appConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude-switch", "config.json"), nil
+}
+
+func claudeSettingsPath(overrideDir string) string {
+	dir := strings.TrimSpace(overrideDir)
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return filepath.Join(".claude", "settings.json")
+		}
+		dir = filepath.Join(home, ".claude")
+	}
+	return filepath.Join(dir, "settings.json")
+}
+
+func loadAppConfig() (*AppConfig, string, error) {
+	path, err := appConfigPath()
+	if err != nil {
+		return nil, "", err
+	}
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, path, nil
+		}
+		return nil, "", err
+	}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return nil, "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	migrateLegacyProviders(cfg)
+	return cfg, path, nil
+}
+
+func migrateLegacyProviders(cfg *AppConfig) {
+	legacy, ok := cfg.Providers["minimax"]
+	if ok {
+		if _, exists := cfg.Providers["minimax-cn"]; !exists && strings.TrimSpace(legacy.APIKey) != "" {
+			cfg.Providers["minimax-cn"] = legacy
+		}
+		delete(cfg.Providers, "minimax")
+	}
+}
+
+func readJSONMap(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{}, nil
+		}
+		return nil, err
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if root == nil {
+		root = map[string]any{}
+	}
+	return root, nil
+}
+
+func nestedMap(root map[string]any, key string) map[string]any {
+	raw, ok := root[key]
+	if !ok {
+		return nil
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return obj
+}
+
+func ensureNestedMap(root map[string]any, key string) map[string]any {
+	if obj := nestedMap(root, key); obj != nil {
+		return obj
+	}
+	obj := map[string]any{}
+	root[key] = obj
+	return obj
+}
+
+func writeJSONAtomic(path string, value any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	tmp := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func backupIfExists(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	backupDir := filepath.Dir(path)
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return err
+	}
+	backupPath := fmt.Sprintf("%s.bak.%d", path, time.Now().UnixNano())
+	return os.WriteFile(backupPath, data, 0o600)
+}
+
+func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey string) {
+	stored := cfg.Providers[selection.Provider]
+	stored.APIKey = apiKey
+	stored.Model = strings.TrimSpace(selection.Model)
+	if selection.Name != "" {
+		stored.Name = strings.TrimSpace(selection.Name)
+	}
+	if selection.BaseURL != "" {
+		stored.BaseURL = strings.TrimSpace(selection.BaseURL)
+	}
+	cfg.Providers[selection.Provider] = stored
+}
+
+func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
+	root, err := readJSONMap(claudeSettingsPath(claudeDir))
+	if err != nil {
+		return "", ""
+	}
+	env := nestedMap(root, "env")
+	if env == nil {
+		return "", ""
+	}
+	baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
+	model, _ := env["ANTHROPIC_MODEL"].(string)
+	if provider := detectProvider(baseURL, model); provider != customDetectedProvider {
+		return provider, model
+	}
+	for name, stored := range cfg.Providers {
+		if strings.TrimSpace(stored.BaseURL) == strings.TrimSpace(baseURL) {
+			return name, model
+		}
+	}
+	return customDetectedProvider, model
+}
+
+func maskAPIKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "not saved"
+	}
+	if len(key) <= 6 {
+		return strings.Repeat("*", len(key))
+	}
+	return key[:3] + strings.Repeat("*", len(key)-6) + key[len(key)-3:]
+}
