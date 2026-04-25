@@ -29,6 +29,7 @@ type ModelTiers struct {
 	Sonnet   string
 	Opus     string
 	Subagent string
+	AuthEnv  string
 }
 
 type ProviderPreset struct {
@@ -137,10 +138,9 @@ var providerPresets = map[string]ProviderPreset{
 		Sonnet:  "minimax-m2.7",
 		Opus:    "minimax-m2.7",
 		ModelTierOverrides: map[string]ModelTiers{
-			"deepseek-v4-pro":   {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-pro", Opus: "deepseek-v4-pro", Subagent: "deepseek-v4-pro"},
-			"deepseek-v4-flash": {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-flash", Opus: "deepseek-v4-flash", Subagent: "deepseek-v4-flash"},
+			"deepseek-v4-pro":   {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-pro", Opus: "deepseek-v4-pro", Subagent: "deepseek-v4-pro", AuthEnv: "ANTHROPIC_AUTH_TOKEN"},
+			"deepseek-v4-flash": {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-flash", Opus: "deepseek-v4-flash", Subagent: "deepseek-v4-flash", AuthEnv: "ANTHROPIC_AUTH_TOKEN"},
 		},
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
 	},
@@ -1065,6 +1065,7 @@ func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 		preset.Sonnet = tiers.Sonnet
 		preset.Opus = tiers.Opus
 		preset.Subagent = tiers.Subagent
+		preset.AuthEnv = tiers.AuthEnv
 	}
 	return preset
 }
@@ -1835,7 +1836,7 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideMod
 	if authEnv == "" {
 		authEnv = "ANTHROPIC_API_KEY"
 	}
-	env[authEnv] = apiKey
+	env[authEnv] = normalizeCredentialForEnv(authEnv, apiKey)
 	env["ANTHROPIC_MODEL"] = preset.Model
 	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = preset.Haiku
 	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = preset.Sonnet
@@ -1847,6 +1848,16 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideMod
 	for key, value := range preset.ExtraEnv {
 		env[key] = value
 	}
+}
+
+func normalizeCredentialForEnv(authEnv, apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if authEnv == "ANTHROPIC_AUTH_TOKEN" {
+		if strings.HasPrefix(strings.ToLower(apiKey), "bearer ") {
+			return strings.TrimSpace(apiKey[len("Bearer "):])
+		}
+	}
+	return apiKey
 }
 
 func claudeSettingsPath(overrideDir string) string {

@@ -395,7 +395,7 @@ cs switch minimax-cn --claude-dir /path/to/.claude
 - `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK`
 - `CLAUDE_CODE_EFFORT_LEVEL`
 
-大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`。`deepseek` 和 `opencode-go` 会写入 `ANTHROPIC_AUTH_TOKEN`，让 Claude Code 使用 `Authorization` header。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
+大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`。`deepseek` 会写入 `ANTHROPIC_AUTH_TOKEN`；`opencode-go` 默认写入 `ANTHROPIC_API_KEY`，选择 DeepSeek 模型时写入 `ANTHROPIC_AUTH_TOKEN`，让 Claude Code 使用 `Authorization` header。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
 
 ## 示例
 
