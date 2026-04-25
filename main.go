@@ -140,6 +140,7 @@ var providerPresets = map[string]ProviderPreset{
 			"deepseek-v4-pro":   {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-pro", Opus: "deepseek-v4-pro", Subagent: "deepseek-v4-pro"},
 			"deepseek-v4-flash": {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-flash", Opus: "deepseek-v4-flash", Subagent: "deepseek-v4-flash"},
 		},
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
 	},
