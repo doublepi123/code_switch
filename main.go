@@ -140,6 +140,7 @@ var providerAliases = map[string]string{
 }
 
 const customProviderOption = "__custom__"
+const customDetectedProvider = "custom"
 const defaultUpgradeRepo = "doublepi123/claude_switch"
 
 var version = "dev"
@@ -189,7 +190,7 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 
 	switch args[0] {
 	case "list":
-		return cmdList()
+		return cmdList(out)
 	case "configure":
 		return cmdConfigure(args[1:], in, out)
 	case "current":
@@ -212,7 +213,7 @@ func printVersion(out io.Writer) {
 	fmt.Fprintf(out, "claude-switch %s\n", version)
 }
 
-func cmdList() error {
+func cmdList(out io.Writer) error {
 	cfg, _, err := loadAppConfig()
 	if err != nil {
 		return err
@@ -223,7 +224,7 @@ func cmdList() error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s\t%s\t%s\n", name, preset.BaseURL, preset.Model)
+		fmt.Fprintf(out, "%s\t%s\t%s\n", name, preset.BaseURL, preset.Model)
 	}
 	return nil
 }
@@ -271,11 +272,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
 	upsertProviderConfig(cfg, selection, apiKey)
-	if selection.SavedModel != "" {
-		stored := cfg.Providers[provider]
-		stored.Model = selection.SavedModel
-		cfg.Providers[provider] = stored
-	}
+
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		return err
 	}
@@ -429,7 +426,7 @@ func performUpgrade(opts upgradeOptions) error {
 		opts.baseURL = "https://github.com"
 	}
 	if opts.client == nil {
-		opts.client = http.DefaultClient
+		opts.client = &http.Client{Timeout: 5 * time.Minute}
 	}
 	if opts.out == nil {
 		opts.out = io.Discard
@@ -897,7 +894,11 @@ Usage:
 }
 
 func sortedProviderNames(cfg *AppConfig, includeCustomOption bool) []string {
-	names := make([]string, 0, len(providerPresets)+len(cfg.Providers)+1)
+	providerCount := len(providerPresets)
+	if cfg.Providers != nil {
+		providerCount += len(cfg.Providers)
+	}
+	names := make([]string, 0, providerCount+1)
 	for name := range providerPresets {
 		names = append(names, name)
 	}
@@ -999,7 +1000,7 @@ func detectProvider(baseURL, model string) string {
 	case strings.Contains(baseURL, "opencode.ai") || strings.HasPrefix(model, "opencode-go/"):
 		return "opencode-go"
 	default:
-		return "custom"
+		return customDetectedProvider
 	}
 }
 
@@ -1623,15 +1624,20 @@ func makeCustomProviderKey(name string) string {
 }
 
 func uniqueCustomProviderKey(cfg *AppConfig, base string) string {
-	if _, exists := cfg.Providers[base]; !exists && !isPresetProvider(base) {
+	if _, exists := cfg.Providers[base]; !exists && !isPresetProvider(base) && !isProviderAlias(base) {
 		return base
 	}
 	for i := 2; ; i++ {
 		candidate := fmt.Sprintf("%s-%d", base, i)
-		if _, exists := cfg.Providers[candidate]; !exists && !isPresetProvider(candidate) {
+		if _, exists := cfg.Providers[candidate]; !exists && !isPresetProvider(candidate) && !isProviderAlias(candidate) {
 			return candidate
 		}
 	}
+}
+
+func isProviderAlias(name string) bool {
+	_, ok := providerAliases[name]
+	return ok
 }
 
 func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
@@ -1645,7 +1651,7 @@ func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string
 	}
 	baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
 	model, _ := env["ANTHROPIC_MODEL"].(string)
-	if provider := detectProvider(baseURL, model); provider != "custom" {
+	if provider := detectProvider(baseURL, model); provider != customDetectedProvider {
 		return provider, model
 	}
 	for name, stored := range cfg.Providers {
@@ -1653,7 +1659,7 @@ func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string
 			return name, model
 		}
 	}
-	return "custom", model
+	return customDetectedProvider, model
 }
 
 func readLine(reader *bufio.Reader) (string, error) {
@@ -1736,10 +1742,10 @@ func maskAPIKey(key string) string {
 	if key == "" {
 		return "not saved"
 	}
-	if len(key) <= 8 {
+	if len(key) <= 6 {
 		return strings.Repeat("*", len(key))
 	}
-	return key[:4] + strings.Repeat("*", len(key)-8) + key[len(key)-4:]
+	return key[:3] + strings.Repeat("*", len(key)-6) + key[len(key)-3:]
 }
 
 func currentProviderLabel(provider string) string {
@@ -1900,7 +1906,7 @@ func backupIfExists(path string) error {
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return err
 	}
-	backupPath := fmt.Sprintf("%s.bak.%s", path, time.Now().Format("20060102_150405.000"))
+	backupPath := fmt.Sprintf("%s.bak.%d", path, time.Now().UnixNano())
 	return os.WriteFile(backupPath, data, 0o600)
 }
 

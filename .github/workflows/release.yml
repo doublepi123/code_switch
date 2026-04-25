@@ -83,7 +83,6 @@ jobs:
             EXTENSION=".exe"
           fi
           OUTPUT_NAME="${{ env.PROJECT_NAME }}-${GOOS}-${GOARCH}${EXTENSION}"
-          echo "OUTPUT_NAME=$OUTPUT_NAME" >> $GITHUB_ENV
           go build -ldflags="-s -w -X main.version=${VERSION}" -o "$OUTPUT_NAME" .
 
           # Rename binary to "cs" before packaging so tarball extracts directly to "cs"

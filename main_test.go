@@ -739,7 +739,10 @@ func TestMaskAPIKey(t *testing.T) {
 	if got := maskAPIKey(""); got != "not saved" {
 		t.Fatalf("maskAPIKey(empty) = %q", got)
 	}
-	if got := maskAPIKey("sk-1234567890"); got != "sk-1*****7890" {
+	if got := maskAPIKey("abc"); got != "***" {
+		t.Fatalf("maskAPIKey(short) = %q", got)
+	}
+	if got := maskAPIKey("sk-1234567890"); got != "sk-*******890" {
 		t.Fatalf("maskAPIKey = %q", got)
 	}
 }
@@ -761,6 +764,19 @@ func TestHasConfigurableKey(t *testing.T) {
 		if got := hasConfigurableKey(tc.saved, tc.typed, tc.reset); got != tc.expected {
 			t.Fatalf("hasConfigurableKey(%q, %q, %v) = %v, want %v", tc.saved, tc.typed, tc.reset, got, tc.expected)
 		}
+	}
+}
+
+func TestUniqueCustomProviderKeyRejectsAliases(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	if got := uniqueCustomProviderKey(cfg, "minimax"); got == "minimax" {
+		t.Fatalf("expected minimax alias to be rejected, got %q", got)
+	}
+	if got := uniqueCustomProviderKey(cfg, "minimax-cn-token"); got == "minimax-cn-token" {
+		t.Fatalf("expected minimax-cn-token alias to be rejected, got %q", got)
+	}
+	if got := uniqueCustomProviderKey(cfg, "my-provider"); got != "my-provider" {
+		t.Fatalf("expected my-provider to be accepted, got %q", got)
 	}
 }
 

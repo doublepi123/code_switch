@@ -35,7 +35,7 @@ Before submitting any change:
 
 ## Architecture
 
-Single-file Go project (~1450 lines). Code organization:
+Single-file Go project (~1950 lines). Code organization:
 
 **Provider system:**
 - `providerPresets` map (line 56): hardcoded built-in providers (minimax-cn, minimax-global, openrouter, opencode-go)

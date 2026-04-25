@@ -1,6 +1,8 @@
 .DS_Store
 
 # Binaries
+cs
+cs.exe
 claude-switch
 claude-switch.exe
 
