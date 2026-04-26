@@ -64,7 +64,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
 
-	if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out); err != nil {
+	if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out, false); err != nil {
 		return err
 	}
 	return nil
@@ -412,6 +412,7 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		baseURLValue := ""
 		apiKeyValue := ""
 		modelValue := ""
+		authEnvValue := ""
 		form := tview.NewForm()
 		form.AddInputField("Name", "", 0, nil, func(text string) {
 			nameValue = text
@@ -425,11 +426,19 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		form.AddInputField("Model", "", 0, nil, func(text string) {
 			modelValue = text
 		})
+		form.AddDropDown("Auth Style", []string{"x-api-key (default)", "Bearer token"}, 0, func(option string, idx int) {
+			if idx == 1 {
+				authEnvValue = "ANTHROPIC_AUTH_TOKEN"
+			} else {
+				authEnvValue = ""
+			}
+		})
 		form.AddButton("Save", func() {
 			nameValue = strings.TrimSpace(nameValue)
 			baseURLValue = strings.TrimSpace(baseURLValue)
 			apiKeyValue = strings.TrimSpace(apiKeyValue)
 			modelValue = strings.TrimSpace(modelValue)
+			authEnvValue = strings.TrimSpace(authEnvValue)
 			if nameValue == "" || baseURLValue == "" || apiKeyValue == "" || modelValue == "" {
 				return
 			}
@@ -439,6 +448,7 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 				BaseURL:  baseURLValue,
 				APIKey:   apiKeyValue,
 				Model:    modelValue,
+				AuthEnv:  authEnvValue,
 			}
 			resultErr = nil
 			app.Stop()
@@ -582,6 +592,15 @@ func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer, cfg *AppC
 	if model == "" {
 		return ConfigureSelection{}, errors.New("custom provider model cannot be empty")
 	}
+	fmt.Fprint(out, "Use Bearer token auth instead of x-api-key? (y/N): ")
+	bearerText, err := readLine(reader)
+	if err != nil {
+		return ConfigureSelection{}, err
+	}
+	authEnv := ""
+	if strings.ToLower(strings.TrimSpace(bearerText)) == "y" {
+		authEnv = "ANTHROPIC_AUTH_TOKEN"
+	}
 
 	return ConfigureSelection{
 		Provider: uniqueCustomProviderKey(cfg, makeCustomProviderKey(name)),
@@ -589,6 +608,7 @@ func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer, cfg *AppC
 		BaseURL:  baseURL,
 		APIKey:   apiKey,
 		Model:    model,
+		AuthEnv:  authEnv,
 	}, nil
 }
 

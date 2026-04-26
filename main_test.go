@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -575,7 +576,7 @@ func TestSwitchProviderOpenRouterOfficialOverrideResetsSavedCustomTierMapping(t 
 		},
 	}
 
-	if err := switchProvider("openrouter", cfg, "sk-existing", "anthropic/claude-opus-4.7", claudeDir, io.Discard); err != nil {
+	if err := switchProvider("openrouter", cfg, "sk-existing", "anthropic/claude-opus-4.7", claudeDir, io.Discard, false); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1403,7 +1404,7 @@ func TestSwitchProviderCustomProvider(t *testing.T) {
 			},
 		},
 	}
-	if err := switchProvider("my-custom", cfg, "sk-custom", "", claudeDir, io.Discard); err != nil {
+	if err := switchProvider("my-custom", cfg, "sk-custom", "", claudeDir, io.Discard, false); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1439,7 +1440,7 @@ func TestSwitchProviderCustomWithModelOverride(t *testing.T) {
 			},
 		},
 	}
-	if err := switchProvider("my-custom", cfg, "sk-custom", "custom-model-v3", claudeDir, io.Discard); err != nil {
+	if err := switchProvider("my-custom", cfg, "sk-custom", "custom-model-v3", claudeDir, io.Discard, false); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1470,7 +1471,7 @@ func TestSwitchProviderSetsSubagentModel(t *testing.T) {
 	claudeDir := t.TempDir()
 
 	// deepseek sets subagent model
-	if err := switchProvider("deepseek", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-deepseek", "", claudeDir, io.Discard); err != nil {
+	if err := switchProvider("deepseek", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-deepseek", "", claudeDir, io.Discard, false); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1491,7 +1492,7 @@ func TestSwitchProviderSetsSubagentModel(t *testing.T) {
 func TestSwitchProviderOpenRouterDoesNotSetSubagent(t *testing.T) {
 	claudeDir := t.TempDir()
 
-	if err := switchProvider("openrouter", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-or", "", claudeDir, io.Discard); err != nil {
+	if err := switchProvider("openrouter", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-or", "", claudeDir, io.Discard, false); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1612,7 +1613,7 @@ func TestCmdConfigureCustomProviderFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	input := strings.NewReader("custom\nMyCustom\nhttps://custom.example.com/anthropic\nsk-custom-fallback\ncustom-model\n")
+	input := strings.NewReader("custom\nMyCustom\nhttps://custom.example.com/anthropic\nsk-custom-fallback\ncustom-model\n\n")
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure(nil, input, output); err != nil {
@@ -1672,7 +1673,7 @@ func TestBackupIfExists(t *testing.T) {
 	}
 	backupCount := 0
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "test.json.bak.") {
+		if strings.HasPrefix(entry.Name(), "test.json.bak-") {
 			backupCount++
 			backupPath := filepath.Join(tmpDir, entry.Name())
 			data, err := os.ReadFile(backupPath)
@@ -2236,7 +2237,7 @@ func TestTestProviderOK(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2262,7 +2263,7 @@ func TestTestProviderAuthError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(output, preset, "sk-bad", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-bad", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2286,7 +2287,7 @@ func TestTestProviderNotFound(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2311,7 +2312,7 @@ func TestTestProviderServerError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2367,7 +2368,7 @@ func TestTestProviderBearerAuth(t *testing.T) {
 		AuthEnv: "ANTHROPIC_AUTH_TOKEN",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(output, preset, "sk-deepseek", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-deepseek", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	if !strings.Contains(output.String(), "OK") {
@@ -2389,7 +2390,7 @@ func TestTestProviderReadErrorHandled(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2464,7 +2465,7 @@ func TestSwitchProviderWritesToWriter(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 	output := &bytes.Buffer{}
 
-	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output); err != nil {
+	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output, false); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 	out := output.String()

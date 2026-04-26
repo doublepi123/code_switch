@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -60,10 +61,12 @@ type testMessage struct {
 }
 
 func testProvider(out io.Writer, preset ProviderPreset, apiKey string) error {
-	return testProviderWithClient(out, preset, apiKey, &http.Client{Timeout: 15 * time.Second})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return testProviderWithClient(ctx, out, preset, apiKey, &http.Client{Timeout: 15 * time.Second})
 }
 
-func testProviderWithClient(out io.Writer, preset ProviderPreset, apiKey string, client *http.Client) error {
+func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderPreset, apiKey string, client *http.Client) error {
 	baseURL := strings.TrimRight(preset.BaseURL, "/")
 	testURL := baseURL + "/v1/messages"
 
@@ -81,7 +84,7 @@ func testProviderWithClient(out io.Writer, preset ProviderPreset, apiKey string,
 		return fmt.Errorf("marshal test request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, testURL, bytes.NewReader(bodyBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, testURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("create test request: %w", err)
 	}

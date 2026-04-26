@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -87,7 +88,7 @@ func performUpgrade(opts upgradeOptions) error {
 
 	targetTag := strings.TrimSpace(opts.tag)
 	if targetTag == "" || targetTag == "latest" {
-		targetTag, err = latestReleaseTag(opts.client, opts.baseURL, opts.repo)
+		targetTag, err = latestReleaseTag(context.Background(), opts.client, opts.baseURL, opts.repo)
 		if err != nil {
 			return err
 		}
@@ -117,7 +118,7 @@ func performUpgrade(opts upgradeOptions) error {
 	defer os.RemoveAll(tmpDir)
 
 	archivePath := filepath.Join(tmpDir, asset)
-	if err := downloadFile(opts.client, downloadURL, archivePath); err != nil {
+	if err := downloadFile(context.Background(), opts.client, downloadURL, archivePath); err != nil {
 		return err
 	}
 
@@ -150,9 +151,9 @@ func performUpgrade(opts upgradeOptions) error {
 	return nil
 }
 
-func latestReleaseTag(client *http.Client, baseURL, repo string) (string, error) {
+func latestReleaseTag(ctx context.Context, client *http.Client, baseURL, repo string) (string, error) {
 	latestURL := fmt.Sprintf("%s/%s/releases/latest", strings.TrimRight(strings.TrimSpace(baseURL), "/"), strings.Trim(strings.TrimSpace(repo), "/"))
-	req, err := http.NewRequest(http.MethodGet, latestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -305,8 +306,8 @@ func releaseDownloadURL(baseURL, repo, tag, asset string) string {
 	return fmt.Sprintf("%s/%s/releases/download/%s/%s", baseURL, repo, url.PathEscape(strings.TrimSpace(tag)), asset)
 }
 
-func downloadFile(client *http.Client, downloadURL, dest string) error {
-	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return err
 	}
@@ -404,7 +405,14 @@ func replaceExecutable(src, target string) error {
 		return err
 	}
 
-	backup := fmt.Sprintf("%s.old.%d", target, time.Now().UnixNano())
+	bkF, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".old-*")
+	if err != nil {
+		return fmt.Errorf("create backup name: %w", err)
+	}
+	backup := bkF.Name()
+	bkF.Close()
+	os.Remove(backup)
+
 	renamedExisting := false
 	if _, err := os.Stat(target); err == nil {
 		if err := os.Rename(target, backup); err != nil {
@@ -417,12 +425,16 @@ func replaceExecutable(src, target string) error {
 
 	if err := moveFile(src, target); err != nil {
 		if renamedExisting {
-			_ = os.Rename(backup, target)
+			if rbErr := os.Rename(backup, target); rbErr != nil {
+				fmt.Fprintf(os.Stderr, "claude-switch: upgrade failed; rollback also failed (%v). Old binary saved at %s\n", rbErr, backup)
+			}
 		}
 		return fmt.Errorf("install upgraded executable: %w", err)
 	}
 	if renamedExisting {
-		_ = os.Remove(backup)
+		if err := os.Remove(backup); err != nil {
+			fmt.Fprintf(os.Stderr, "claude-switch: warning: could not remove backup %s: %v\n", backup, err)
+		}
 	}
 	return nil
 }

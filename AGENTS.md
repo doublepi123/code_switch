@@ -11,6 +11,21 @@ go vet ./...               # static analysis
 
 Go 1.22+. Two dependencies: `tview` + `tcell` for TUI. Everything in `package main` — no subpackages.
 
+## After Each Fix
+
+Every bug fix or code change must be verified by running both unit tests and a build verification:
+
+```bash
+go vet ./... && go test ./... && go build -o cs .
+```
+
+A fix is not complete until all three pass:
+- `go vet ./...` — no static analysis warnings
+- `go test ./...` — all unit tests pass (no regressions)
+- `go build -o cs .` — binary compiles without errors
+
+If the fix touches provider logic, also run `cs test <provider>` (if that provider's API key is configured) as a smoke test.
+
 ## Versioning
 
 `main.version` defaults to `"dev"`. CI injects it via `-ldflags="-X main.version=${VERSION}"`. Do not hardcode a version string; always use the `version` variable.

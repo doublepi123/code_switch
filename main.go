@@ -154,7 +154,7 @@ Usage:
   cs [--reset-key]                     # interactive TUI
   cs current [--claude-dir DIR]
   cs set-key <provider> <api-key>
-  cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
+  cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--dry-run]
   cs test <provider> [--api-key sk-xxx] [--model model-id]
   cs upgrade
 

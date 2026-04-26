@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 func appConfigPath() (string, error) {
@@ -108,8 +107,18 @@ func writeJSONAtomic(path string, value any) error {
 	}
 	data = append(data, '\n')
 
-	tmp := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -127,14 +136,23 @@ func backupIfExists(path string) error {
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return err
 	}
-	backupPath := fmt.Sprintf("%s.bak.%d", path, time.Now().UnixNano())
-	return os.WriteFile(backupPath, data, 0o600)
+	f, err := os.CreateTemp(backupDir, filepath.Base(path)+".bak-*")
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return err
+	}
+	return f.Close()
 }
 
 func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey string) {
 	stored := cfg.Providers[selection.Provider]
 	stored.APIKey = apiKey
 	stored.Model = strings.TrimSpace(selection.Model)
+	stored.AuthEnv = strings.TrimSpace(selection.AuthEnv)
 	if selection.Name != "" {
 		stored.Name = strings.TrimSpace(selection.Name)
 	}

@@ -34,6 +34,7 @@ type StoredProvider struct {
 	BaseURL string `json:"baseUrl,omitempty"`
 	Model   string `json:"model,omitempty"`
 	APIKey  string `json:"apiKey,omitempty"`
+	AuthEnv string `json:"authEnv,omitempty"`
 }
 
 type AppConfig struct {
@@ -47,6 +48,7 @@ type ConfigureSelection struct {
 	APIKey   string
 	Name     string
 	BaseURL  string
+	AuthEnv  string
 }
 
 var providerPresets = map[string]ProviderPreset{
@@ -228,6 +230,7 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 		Sonnet:   model,
 		Opus:     model,
 		Subagent: model,
+		AuthEnv:  strings.TrimSpace(stored.AuthEnv),
 	}, nil
 }
 

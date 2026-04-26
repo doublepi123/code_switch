@@ -16,6 +16,7 @@ func cmdSwitch(args []string) error {
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	model := fs.String("model", "", "override model id")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
+	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
@@ -40,7 +41,7 @@ func cmdSwitch(args []string) error {
 		return fmt.Errorf("missing api key for %s, run `claude-switch set-key %s <api-key>` or pass --api-key", provider, provider)
 	}
 
-	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir, os.Stdout)
+	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir, os.Stdout, *dryRun)
 }
 
 func splitSwitchArgs(args []string) (string, []string) {
@@ -73,13 +74,22 @@ func switchFlagNeedsValue(arg string) bool {
 	}
 }
 
-func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string, out io.Writer) error {
+func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string, out io.Writer, dryRun bool) error {
 	preset, err := resolveSwitchPreset(provider, cfg, modelOverride)
 	if err != nil {
 		return err
 	}
 
 	settingsPath := claudeSettingsPath(claudeDir)
+
+	if dryRun {
+		fmt.Fprintf(out, "[dry-run] would switch Claude to %s\n", preset.Name)
+		fmt.Fprintf(out, "[dry-run] settings: %s\n", settingsPath)
+		fmt.Fprintf(out, "[dry-run] base_url: %s\n", preset.BaseURL)
+		fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
+		return nil
+	}
+
 	root, err := readJSONMap(settingsPath)
 	if err != nil {
 		return err
