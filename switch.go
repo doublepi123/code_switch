@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -39,7 +40,7 @@ func cmdSwitch(args []string) error {
 		return fmt.Errorf("missing api key for %s, run `claude-switch set-key %s <api-key>` or pass --api-key", provider, provider)
 	}
 
-	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir)
+	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir, os.Stdout)
 }
 
 func splitSwitchArgs(args []string) (string, []string) {
@@ -72,7 +73,7 @@ func switchFlagNeedsValue(arg string) bool {
 	}
 }
 
-func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string) error {
+func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string, out io.Writer) error {
 	preset, err := resolveSwitchPreset(provider, cfg, modelOverride)
 	if err != nil {
 		return err
@@ -93,10 +94,10 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 		return err
 	}
 
-	fmt.Printf("switched Claude to %s\n", preset.Name)
-	fmt.Printf("settings: %s\n", settingsPath)
-	fmt.Printf("base_url: %s\n", preset.BaseURL)
-	fmt.Printf("model: %s\n", preset.Model)
+	fmt.Fprintf(out, "switched Claude to %s\n", preset.Name)
+	fmt.Fprintf(out, "settings: %s\n", settingsPath)
+	fmt.Fprintf(out, "base_url: %s\n", preset.BaseURL)
+	fmt.Fprintf(out, "model: %s\n", preset.Model)
 	return nil
 }
 

@@ -60,6 +60,10 @@ type testMessage struct {
 }
 
 func testProvider(out io.Writer, preset ProviderPreset, apiKey string) error {
+	return testProviderWithClient(out, preset, apiKey, &http.Client{Timeout: 15 * time.Second})
+}
+
+func testProviderWithClient(out io.Writer, preset ProviderPreset, apiKey string, client *http.Client) error {
 	baseURL := strings.TrimRight(preset.BaseURL, "/")
 	testURL := baseURL + "/v1/messages"
 
@@ -91,7 +95,6 @@ func testProvider(out io.Writer, preset ProviderPreset, apiKey string) error {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("User-Agent", "claude-switch/"+version)
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		fmt.Fprintf(out, "FAIL\n")
@@ -101,7 +104,14 @@ func testProvider(out io.Writer, preset ProviderPreset, apiKey string) error {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if readErr != nil {
+		fmt.Fprintf(out, "FAIL\n")
+		fmt.Fprintf(out, "  URL: %s\n", testURL)
+		fmt.Fprintf(out, "  Status: %d\n", resp.StatusCode)
+		fmt.Fprintf(out, "  Failed to read response body\n")
+		return nil
+	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		fmt.Fprintf(out, "OK\n")

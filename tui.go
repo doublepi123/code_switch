@@ -64,7 +64,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
 
-	if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir); err != nil {
+	if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out); err != nil {
 		return err
 	}
 	return nil
@@ -97,18 +97,7 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 	)
 
 	buildModels := func(provider string) []string {
-		models := providerModels(cfg, provider)
-		customModel := strings.TrimSpace(customModels[provider])
-		if customModel == "" {
-			return models
-		}
-		filtered := []string{customModel}
-		for _, model := range models {
-			if model != customModel {
-				filtered = append(filtered, model)
-			}
-		}
-		return filtered
+		return buildModelList(cfg, provider, customModels)
 	}
 
 	finishSelection := func(provider, model string) {
@@ -664,4 +653,19 @@ func shouldUseArrowTUI(in *os.File) bool {
 		return false
 	}
 	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func buildModelList(cfg *AppConfig, provider string, customModels map[string]string) []string {
+	models := providerModels(cfg, provider)
+	customModel := strings.TrimSpace(customModels[provider])
+	if customModel == "" {
+		return models
+	}
+	filtered := []string{customModel}
+	for _, model := range models {
+		if model != customModel {
+			filtered = append(filtered, model)
+		}
+	}
+	return filtered
 }

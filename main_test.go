@@ -575,7 +575,7 @@ func TestSwitchProviderOpenRouterOfficialOverrideResetsSavedCustomTierMapping(t 
 		},
 	}
 
-	if err := switchProvider("openrouter", cfg, "sk-existing", "anthropic/claude-opus-4.7", claudeDir); err != nil {
+	if err := switchProvider("openrouter", cfg, "sk-existing", "anthropic/claude-opus-4.7", claudeDir, io.Discard); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1403,7 +1403,7 @@ func TestSwitchProviderCustomProvider(t *testing.T) {
 			},
 		},
 	}
-	if err := switchProvider("my-custom", cfg, "sk-custom", "", claudeDir); err != nil {
+	if err := switchProvider("my-custom", cfg, "sk-custom", "", claudeDir, io.Discard); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1439,7 +1439,7 @@ func TestSwitchProviderCustomWithModelOverride(t *testing.T) {
 			},
 		},
 	}
-	if err := switchProvider("my-custom", cfg, "sk-custom", "custom-model-v3", claudeDir); err != nil {
+	if err := switchProvider("my-custom", cfg, "sk-custom", "custom-model-v3", claudeDir, io.Discard); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1470,7 +1470,7 @@ func TestSwitchProviderSetsSubagentModel(t *testing.T) {
 	claudeDir := t.TempDir()
 
 	// deepseek sets subagent model
-	if err := switchProvider("deepseek", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-deepseek", "", claudeDir); err != nil {
+	if err := switchProvider("deepseek", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-deepseek", "", claudeDir, io.Discard); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1491,7 +1491,7 @@ func TestSwitchProviderSetsSubagentModel(t *testing.T) {
 func TestSwitchProviderOpenRouterDoesNotSetSubagent(t *testing.T) {
 	claudeDir := t.TempDir()
 
-	if err := switchProvider("openrouter", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-or", "", claudeDir); err != nil {
+	if err := switchProvider("openrouter", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-or", "", claudeDir, io.Discard); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -2211,4 +2211,346 @@ func makeZipArchive(t *testing.T, name, content string) []byte {
 		t.Fatalf("close zip: %v", err)
 	}
 	return buf.Bytes()
+}
+
+func TestTestProviderOK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.Header.Get("x-api-key") != "sk-test" {
+			t.Fatalf("expected x-api-key header, got %q", r.Header.Get("x-api-key"))
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/messages") {
+			t.Fatalf("expected /v1/messages path, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"hi"}]}`))
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{
+		Name:    "test-provider",
+		BaseURL: server.URL,
+		Model:   "test-model",
+	}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "OK") {
+		t.Fatalf("expected OK in output, got %q", out)
+	}
+	if !strings.Contains(out, "200") {
+		t.Fatalf("expected status 200 in output, got %q", out)
+	}
+}
+
+func TestTestProviderAuthError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"type":"AuthError","message":"Invalid API key"}}`))
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{
+		Name:    "test-provider",
+		BaseURL: server.URL,
+		Model:   "test-model",
+	}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(output, preset, "sk-bad", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "FAIL") {
+		t.Fatalf("expected FAIL in output, got %q", out)
+	}
+	if !strings.Contains(out, "Invalid API key") {
+		t.Fatalf("expected error message in output, got %q", out)
+	}
+}
+
+func TestTestProviderNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{
+		Name:    "test-provider",
+		BaseURL: server.URL,
+		Model:   "test-model",
+	}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "FAIL") {
+		t.Fatalf("expected FAIL in output, got %q", out)
+	}
+	if !strings.Contains(out, "404") {
+		t.Fatalf("expected 404 in output, got %q", out)
+	}
+}
+
+func TestTestProviderServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`internal error`))
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{
+		Name:    "test-provider",
+		BaseURL: server.URL,
+		Model:   "test-model",
+	}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "FAIL") {
+		t.Fatalf("expected FAIL in output, got %q", out)
+	}
+	if !strings.Contains(out, "500") {
+		t.Fatalf("expected 500 in output, got %q", out)
+	}
+}
+
+func TestTestProviderNetworkError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}))
+	serverURL := server.URL
+	server.Close()
+
+	preset := ProviderPreset{
+		Name:    "test-provider",
+		BaseURL: serverURL,
+		Model:   "test-model",
+	}
+	output := &bytes.Buffer{}
+	if err := testProvider(output, preset, "sk-test"); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "FAIL") {
+		t.Fatalf("expected FAIL in output, got %q", out)
+	}
+	if !strings.Contains(out, "Request failed") {
+		t.Fatalf("expected 'Request failed' in output, got %q", out)
+	}
+}
+
+func TestTestProviderBearerAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer sk-deepseek" {
+			t.Fatalf("expected Authorization: Bearer header, got %q", auth)
+		}
+		if r.Header.Get("x-api-key") != "" {
+			t.Fatalf("expected no x-api-key header for auth token provider")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{
+		Name:    "deepseek",
+		BaseURL: server.URL,
+		Model:   "deepseek-v4-pro",
+		AuthEnv: "ANTHROPIC_AUTH_TOKEN",
+	}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(output, preset, "sk-deepseek", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "OK") {
+		t.Fatalf("expected OK in output, got %q", output.String())
+	}
+}
+
+func TestTestProviderReadErrorHandled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"partial`))
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{
+		Name:    "test-provider",
+		BaseURL: server.URL,
+		Model:   "test-model",
+	}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(output, preset, "sk-test", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "FAIL") {
+		t.Fatalf("expected FAIL in output, got %q", out)
+	}
+	if !strings.Contains(out, "502") {
+		t.Fatalf("expected 502 in output, got %q", out)
+	}
+}
+
+func TestCmdTestNoProviderError(t *testing.T) {
+	if err := cmdTest([]string{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for missing provider")
+	}
+}
+
+func TestCmdTestMissingKeyError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := cmdTest([]string{"openrouter"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for missing api key")
+	}
+}
+
+func TestBuildModelListNoCustom(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	models := buildModelList(cfg, "openrouter", nil)
+	if len(models) != 3 {
+		t.Fatalf("expected 3 openrouter models, got %d: %v", len(models), models)
+	}
+	if models[0] != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("expected sonnet as first model, got %q", models[0])
+	}
+}
+
+func TestBuildModelListWithCustom(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	customModels := map[string]string{"openrouter": "my-custom-model"}
+	models := buildModelList(cfg, "openrouter", customModels)
+	if models[0] != "my-custom-model" {
+		t.Fatalf("expected custom model first, got %q", models[0])
+	}
+	if len(models) != 4 {
+		t.Fatalf("expected 4 models (custom + 3 preset), got %d: %v", len(models), models)
+	}
+}
+
+func TestBuildModelListCustomSameAsPreset(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	customModels := map[string]string{"openrouter": "anthropic/claude-sonnet-4.6"}
+	models := buildModelList(cfg, "openrouter", customModels)
+	if models[0] != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("expected sonnet first, got %q", models[0])
+	}
+	if len(models) != 3 {
+		t.Fatalf("expected 3 models (no duplicate), got %d: %v", len(models), models)
+	}
+}
+
+func TestBuildModelListEmptyCustom(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	customModels := map[string]string{"openrouter": "  "}
+	models := buildModelList(cfg, "openrouter", customModels)
+	if len(models) != 3 {
+		t.Fatalf("expected 3 preset models when custom is whitespace, got %d", len(models))
+	}
+}
+
+func TestSwitchProviderWritesToWriter(t *testing.T) {
+	claudeDir := t.TempDir()
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	output := &bytes.Buffer{}
+
+	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output); err != nil {
+		t.Fatalf("switchProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "switched Claude to DeepSeek") {
+		t.Fatalf("expected switch confirmation, got %q", out)
+	}
+	if !strings.Contains(out, "base_url:") {
+		t.Fatalf("expected base_url in output, got %q", out)
+	}
+	if !strings.Contains(out, "model:") {
+		t.Fatalf("expected model in output, got %q", out)
+	}
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+}
+
+func TestCmdTestIntegration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"my-test": {
+				Name:    "Test Provider",
+				BaseURL: server.URL,
+				Model:   "test-model",
+				APIKey:  "sk-test",
+			},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := cmdTest([]string{"my-test", "--api-key", "sk-test"}, output); err != nil {
+		t.Fatalf("cmdTest returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "OK") {
+		t.Fatalf("expected OK, got %q", output.String())
+	}
+}
+
+func TestCmdTestWithStoredKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"test-custom": {
+				Name:    "Test Custom",
+				BaseURL: server.URL,
+				Model:   "test-model",
+				APIKey:  "sk-stored-key",
+			},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := cmdTest([]string{"test-custom"}, output); err != nil {
+		t.Fatalf("cmdTest returned unexpected error: %v", err)
+	}
+	if !strings.Contains(output.String(), "OK") {
+		t.Fatalf("expected OK, got %q", output.String())
+	}
 }

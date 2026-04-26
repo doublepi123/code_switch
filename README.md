@@ -56,6 +56,14 @@ MiniMax 中国区参考官方 CN 文档：
 - 文本生成: https://platform.minimaxi.com/docs/guides/text-generation
 - Claude Code: https://platform.minimaxi.com/docs/token-plan/claude-code
 
+OpenCode Go 参考文档：
+
+- https://opencode.ai/docs/zh-cn/go/
+
+DeepSeek API 参考文档：
+
+- https://api-docs.deepseek.com/zh-cn/
+
 ## 一键安装（推荐）
 
 macOS / Linux 直接执行：
