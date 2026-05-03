@@ -176,6 +176,18 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
 	},
+	"xiaomimimo-cn": {
+		Name:      "Xiaomi MiMo Token Plan CN",
+		BaseURL:   "https://token-plan-cn.xiaomimimo.com/anthropic",
+		Model:     "mimo-v2.5-pro",
+		Models:    []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni", "mimo-v2-flash"},
+		Haiku:     "mimo-v2.5-pro",
+		Sonnet:    "mimo-v2.5-pro",
+		Opus:      "mimo-v2.5-pro",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://platform.xiaomimimo.com",
+		APIKeyURL: "https://platform.xiaomimimo.com/#/console/plan-manage",
+	},
 	"ollama": {
 		Name:      "Ollama (Local)",
 		BaseURL:   "http://localhost:11434/v1",
@@ -203,6 +215,7 @@ var unsupportedOpenCodeGoAnthropicModels = map[string]string{
 	"mimo-v2-omni":  "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2.5-pro": "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2.5":     "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-flash":  "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"qwen3.6-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"qwen3.5-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 }
@@ -211,6 +224,9 @@ var providerAliases = map[string]string{
 	"minimax":              "minimax-cn",
 	"minimax-cn-token":     "minimax-cn",
 	"minimax-global-token": "minimax-global",
+	"xiaomimimo":           "xiaomimimo-cn",
+	"xiaomimio":            "xiaomimimo-cn",
+	"mimo":                 "xiaomimimo-cn",
 }
 
 const customProviderOption = "__custom__"
@@ -370,6 +386,8 @@ func detectProvider(baseURL, model string) string {
 		return "deepseek"
 	case host == "opencode.ai" || strings.HasSuffix(host, ".opencode.ai") || strings.HasPrefix(model, "opencode-go/"):
 		return "opencode-go"
+	case strings.HasSuffix(host, ".xiaomimimo.com"):
+		return "xiaomimimo-cn"
 	default:
 		return customDetectedProvider
 	}
