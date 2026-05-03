@@ -55,7 +55,7 @@ type testMessage struct {
 func testProvider(out io.Writer, preset ProviderPreset, apiKey, testPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return testProviderWithClient(ctx, out, preset, apiKey, testPath, &http.Client{Timeout: 15 * time.Second})
+	return testProviderWithClient(ctx, out, preset, apiKey, testPath, &http.Client{})
 }
 
 func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderPreset, apiKey, testPath string, client *http.Client) error {

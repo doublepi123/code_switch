@@ -35,30 +35,38 @@ Before submitting any change:
 
 ## Architecture
 
-Single-file Go project (~1950 lines). Code organization:
+Multi-file Go project (~2700 lines of source + ~5200 lines of tests).
+
+**Source files:**
+- `main.go` (420 lines): CLI entry point, subcommand dispatch, shell completions, utility functions
+- `config.go` (200 lines): config file I/O, atomic writes with 0o600 permissions, backups, legacy migration
+- `presets.go` (490 lines): provider presets, types (ProviderPreset, StoredProvider, AppConfig), model resolution, detection
+- `switch.go` (156 lines): `switch` subcommand, `applyPreset()` which writes env vars to settings.json
+- `tui.go` (730 lines): interactive TUI via tview, fallback text prompts, custom provider forms
+- `test.go` (137 lines): `test` subcommand for API connectivity checks
+- `upgrade.go` (583 lines): self-upgrade from GitHub releases with checksum verification
 
 **Provider system:**
-- `providerPresets` map (line 56): hardcoded built-in providers (minimax-cn, minimax-global, openrouter, opencode-go)
-- `ProviderPreset` struct: name, base URL, default model, model list, per-tier models, extra env vars
-- `StoredProvider` struct: persisted per-provider config (name, base URL, model, API key)
-- `providerAliases` map (line 111): backwards-compatible aliases (minimax → minimax-cn)
+- `providerPresets` map in `presets.go`: built-in providers (minimax-cn, minimax-global, openrouter, opencode-go, deepseek, xiaomimimo-cn, ollama)
+- `providerAliases` map: backwards-compatible aliases (minimax → minimax-cn, etc.)
+- `StoredProvider` struct: persisted per-provider config (name, base URL, model, API key, authEnv)
 
 **Config files:**
-- App config: `~/.claude-switch/config.json` — stores per-provider settings including API keys
+- App config: `~/.claude-switch/config.json` — stores per-provider settings including API keys (chmod 0o600)
 - Claude settings: `~/.claude/settings.json` — target file this tool modifies
-- `managedEnvKeys` (line 119): env vars this tool writes/clears when switching
+- `managedEnvKeys` in `presets.go`: env vars this tool writes/clears when switching
 
 **TUI implementation:**
 - Uses `tview` library for interactive arrow-key navigation
-- `runArrowTUI()` (line 527): main TUI entry point with page-based navigation
-- Falls back to text prompts when stdin is not a terminal (`shouldUseArrowTUI()` line 1297)
+- `runArrowTUI()` in `tui.go`: main TUI entry point with page-based navigation
+- Falls back to text prompts when stdin is not a terminal (`shouldUseArrowTUI()`)
 - Pages: providers list → provider detail → models list → custom forms
 
 **Key functions:**
-- `switchProvider()` (line 325): applies preset to settings.json with backup and atomic write
-- `applyPreset()` (line 1311): clears managed env keys, sets new provider config
-- `backupIfExists()` (line 1426): creates timestamped backup before modifying settings
-- `writeJSONAtomic()` (line 1442): writes via temp file then rename for atomicity
-- `detectProvider()` (line 446): identifies provider from base URL pattern
+- `switchProvider()` in `switch.go`: applies preset to settings.json with backup and atomic write
+- `applyPreset()` in `switch.go`: clears managed env keys, sets new provider config
+- `backupIfExists()` in `config.go`: creates timestamped backup before modifying settings
+- `writeJSONAtomic()` in `config.go`: writes via temp file then rename, chmod 0o600
+- `detectProvider()` in `presets.go`: identifies provider from base URL pattern
 
-**CLI subcommands:** `list`, `configure` (default, interactive TUI), `current`, `set-key`, `switch`
+**CLI subcommands:** `list`, `configure` (default, interactive TUI), `current`, `set-key`, `switch`, `test`, `remove`, `upgrade`, `completion`

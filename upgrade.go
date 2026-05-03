@@ -21,6 +21,8 @@ import (
 	"time"
 )
 
+var errNoChecksumAvailable = errors.New("no checksum available (skipping verification)")
+
 func cmdUpgrade(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -125,7 +127,11 @@ func performUpgrade(opts upgradeOptions) error {
 	}
 
 	if err := verifyAssetChecksum(context.Background(), opts.client, opts.baseURL, opts.repo, targetTag, asset, archivePath); err != nil {
-		fmt.Fprintf(opts.out, "checksum: %v\n", err)
+		if errors.Is(err, errNoChecksumAvailable) {
+			fmt.Fprintf(opts.out, "checksum: %v\n", err)
+		} else {
+			return fmt.Errorf("checksum verification failed: %w", err)
+		}
 	}
 
 	binaryName := "cs"
@@ -449,10 +455,13 @@ func moveFile(src, target string) error {
 	if err := os.Rename(src, target); err == nil {
 		return nil
 	}
+	// Cross-device moves require copy+delete; other rename errors are real failures.
 	if err := copyFile(src, target); err != nil {
-		return err
+		return fmt.Errorf("move %s to %s: %w", src, target, err)
 	}
-	_ = os.Remove(src)
+	if err := os.Remove(src); err != nil {
+		fmt.Fprintf(os.Stderr, "claude-switch: warning: could not remove temp file %s: %v\n", src, err)
+	}
 	return nil
 }
 
@@ -533,7 +542,7 @@ func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo
 		}
 	}
 
-	return fmt.Errorf("no checksum available (skipping verification)")
+	return errNoChecksumAvailable
 }
 
 func downloadChecksumContent(ctx context.Context, client *http.Client, urlStr string) (string, error) {

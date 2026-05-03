@@ -385,6 +385,26 @@ func uniqueCustomProviderKey(cfg *AppConfig, base string) string {
 	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
 }
 
+func validateBaseURL(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return fmt.Errorf("base URL cannot be empty")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid base URL: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+	default:
+		return fmt.Errorf("base URL must use http or https scheme, got %q", parsed.Scheme)
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("base URL must have a valid host")
+	}
+	return nil
+}
+
 func normalizedURLHost(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {

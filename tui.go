@@ -382,6 +382,9 @@ func (ts *tuiState) showCustomProviderForm() {
 		if nameValue == "" || baseURLValue == "" || apiKeyValue == "" || modelValue == "" {
 			return
 		}
+		if err := validateBaseURL(baseURLValue); err != nil {
+			return
+		}
 		ts.result = ConfigureSelection{
 			Provider: uniqueCustomProviderKey(ts.cfg, makeCustomProviderKey(nameValue)),
 			Name:     nameValue,
@@ -603,6 +606,9 @@ func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer, cfg *AppC
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		return ConfigureSelection{}, errors.New("custom provider base url cannot be empty")
+	}
+	if err := validateBaseURL(baseURL); err != nil {
+		return ConfigureSelection{}, err
 	}
 	fmt.Fprint(out, "API Key: ")
 	apiKey, err := readLine(reader)

@@ -121,7 +121,11 @@ func writeJSONAtomic(path string, value any) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// Ensure config files containing API keys are never world-readable.
+	return os.Chmod(path, 0o600)
 }
 
 func backupIfExists(path string) error {

@@ -299,6 +299,9 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 	if !ok || strings.TrimSpace(stored.BaseURL) == "" {
 		return ProviderPreset{}, fmt.Errorf("unsupported provider %q", provider)
 	}
+	if err := validateBaseURL(stored.BaseURL); err != nil {
+		return ProviderPreset{}, fmt.Errorf("invalid base URL for provider %q: %w", provider, err)
+	}
 	model := strings.TrimSpace(stored.Model)
 	if model == "" {
 		model = "custom-model"
