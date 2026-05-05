@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -715,9 +714,6 @@ func resolveProviderSelection(input string, names []string) (string, error) {
 }
 
 func shouldUseArrowTUI(in *os.File) bool {
-	if runtime.GOOS == "windows" {
-		return false
-	}
 	if os.Getenv("TERM") == "dumb" {
 		return false
 	}
