@@ -2,17 +2,24 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
 
+var errCancelled = errors.New("cancelled")
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if errors.Is(err, errCancelled) {
+			os.Exit(0)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -147,8 +154,12 @@ func cmdSetKey(args []string) error {
 		return err
 	}
 	provider := canonicalProviderName(args[0])
-	if _, err := resolveProviderPreset(provider, cfg); err != nil {
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
 		return fmt.Errorf("unsupported provider %q", args[0])
+	}
+	if preset.NoAPIKey {
+		return fmt.Errorf("provider %q does not require an API key", provider)
 	}
 	stored := cfg.Providers[provider]
 	stored.APIKey = args[1]
@@ -215,18 +226,19 @@ func cmdCompletion(args []string, out io.Writer) error {
 	shell := strings.ToLower(strings.TrimSpace(args[0]))
 	switch shell {
 	case "bash":
-		fmt.Fprint(out, bashCompletion)
+		fmt.Fprint(out, bashCompletionString())
 	case "zsh":
-		fmt.Fprint(out, zshCompletion)
+		fmt.Fprint(out, zshCompletionString())
 	case "fish":
-		fmt.Fprint(out, fishCompletion)
+		fmt.Fprint(out, fishCompletionString())
 	default:
 		return fmt.Errorf("unsupported shell %q, use bash, zsh, or fish", shell)
 	}
 	return nil
 }
 
-const bashCompletion = `# claude-switch bash completion
+func bashCompletionString() string {
+	return fmt.Sprintf(`# claude-switch bash completion
 _cs() {
 	local cur prev words cword
 	_init_completion || return
@@ -239,7 +251,7 @@ _cs() {
 	2)
 		case ${words[1]} in
 		switch|set-key|test|remove)
-			COMPREPLY=($(compgen -W "deepseek minimax-cn minimax-global openrouter opencode-go xiaomimimo-cn ollama ollama-cloud" -- "$cur"))
+			COMPREPLY=($(compgen -W "%s" -- "$cur"))
 			;;
 		completion)
 			COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
@@ -249,51 +261,21 @@ _cs() {
 	esac
 }
 complete -F _cs cs
-`
-
-const zshCompletion = `#compdef cs
-
-_cs() {
-	local -a commands
-	commands=(
-		'list:list available providers'
-		'configure:interactive TUI configuration'
-		'current:show current provider'
-		'set-key:save API key for a provider'
-		'switch:switch Claude Code provider'
-		'test:test provider API connectivity'
-		'remove:remove saved provider config'
-		'upgrade:upgrade to latest release'
-		'completion:generate shell completion'
-		'help:show help'
-	)
-
-	local -a providers
-	providers=(
-		'deepseek'
-		'minimax-cn'
-		'minimax-global'
-		'openrouter'
-		'opencode-go'
-		'xiaomimimo-cn'
-		'ollama'
-		'ollama-cloud'
-	)
-
-	local -a shells
-	shells=('bash' 'zsh' 'fish')
-
-	_arguments \
-		'--version[show version]' \
-		'--help[show help]' \
-		'1:command:_describe command commands' \
-		'2:provider:_describe provider providers' \
-		'*::arg:->args'
+`, providerCompletionWordList())
 }
-_cs
-`
 
-const fishCompletion = `# claude-switch fish completion
+func zshCompletionString() string {
+	var b strings.Builder
+	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch Claude Code provider'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'completion:generate shell completion'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
+	for _, name := range sortedPresetNames() {
+		fmt.Fprintf(&b, "\t\t'%s'\n", name)
+	}
+	b.WriteString("\t)\n\n\tlocal -a shells\n\tshells=('bash' 'zsh' 'fish')\n\n\t_arguments \\\n\t\t'--version[show version]' \\\n\t\t'--help[show help]' \\\n\t\t'1:command:_describe command commands' \\\n\t\t'2:provider:_describe provider providers' \\\n\t\t'*::arg:->args'\n}\n_cs\n")
+	return b.String()
+}
+
+func fishCompletionString() string {
+	return fmt.Sprintf(`# claude-switch fish completion
 complete -c cs -f
 
 complete -c cs -n '__fish_use_subcommand' -a 'list' -d 'List available providers'
@@ -307,37 +289,32 @@ complete -c cs -n '__fish_use_subcommand' -a 'upgrade' -d 'Upgrade to latest rel
 complete -c cs -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion'
 complete -c cs -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 
-complete -c cs -n '__fish_seen_subcommand_from switch set-key test remove' -a 'deepseek minimax-cn minimax-global openrouter opencode-go xiaomimimo-cn ollama ollama-cloud'
+complete -c cs -n '__fish_seen_subcommand_from switch set-key test remove' -a '%s'
 complete -c cs -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 
 complete -c cs -l version -d 'Show version'
 complete -c cs -l help -d 'Show help'
-`
+`, providerCompletionWordList())
+}
+
+func providerCompletionWordList() string {
+	return strings.Join(sortedPresetNames(), " ")
+}
+
+func sortedPresetNames() []string {
+	names := make([]string, 0, len(providerPresets))
+	for name := range providerPresets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 func printUsage(out io.Writer) {
-	fmt.Fprintln(out, `claude-switch
-
-Usage:
-  cs --version
-  cs list [--verbose]
-  cs [--dry-run] [--reset-key]         # interactive TUI
-  cs current [--claude-dir DIR]
-  cs set-key <provider> <api-key>
-  cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--dry-run]
-  cs test <provider> [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]
-  cs remove <provider> [--force]
-  cs upgrade [--dry-run] [--tag vX.Y.Z]
-  cs completion bash|zsh|fish
-
-	Providers:
-	  deepseek
-	  minimax-cn
-	  minimax-global
-	  openrouter
-	  opencode-go
-	  xiaomimimo-cn
-	  ollama
-	  ollama-cloud`)
+	fmt.Fprint(out, "claude-switch\n\nUsage:\n  cs --version\n  cs list [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs current [--claude-dir DIR]\n  cs set-key <provider> <api-key>\n  cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--dry-run]\n  cs test <provider> [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nProviders:\n")
+	for _, name := range sortedPresetNames() {
+		fmt.Fprintf(out, "  %s\n", name)
+	}
 }
 
 func makeCustomProviderKey(name string) string {

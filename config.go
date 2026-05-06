@@ -66,6 +66,9 @@ func readJSONMap(path string) (map[string]any, error) {
 		}
 		return nil, err
 	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return map[string]any{}, nil
+	}
 	var root map[string]any
 	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)

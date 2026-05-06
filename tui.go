@@ -452,7 +452,7 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		typedAPIKeys:     map[string]string{},
 		resetKeys:        map[string]bool{},
 		customModels:     map[string]string{},
-		resultErr:        errors.New("cancelled"),
+		resultErr:        errCancelled,
 	}
 
 	ts.providerList = tview.NewList()
