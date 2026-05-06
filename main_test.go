@@ -447,6 +447,27 @@ func TestApplyPresetOllamaUsesAuthToken(t *testing.T) {
 	}
 }
 
+func TestApplyPresetOllamaCloudUsesBearerAuth(t *testing.T) {
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_API_KEY": "stale-api-key",
+		},
+	}
+
+	applyPreset(root, providerPresets["ollama-cloud"], "ollama-sk")
+
+	env := root["env"].(map[string]any)
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for ollama-cloud")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "ollama-sk" {
+		t.Fatalf("auth token = %v, want %v", got, "ollama-sk")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://ollama.com" {
+		t.Fatalf("base url = %v, want %v", got, "https://ollama.com")
+	}
+}
+
 func TestApplyPresetDeepSeekCustomModelOverridesAllModels(t *testing.T) {
 	root := map[string]any{}
 	preset := withSelectedModel(providerPresets["deepseek"], "deepseek-custom")
@@ -669,6 +690,8 @@ func TestDetectProvider(t *testing.T) {
 		{baseURL: "http://localhost:11434", want: "ollama"},
 		{baseURL: "http://127.0.0.1:11434/v1", want: "ollama"},
 		{baseURL: "http://[::1]:11434/v1", want: "ollama"},
+		{baseURL: "https://ollama.com", want: "ollama-cloud"},
+		{baseURL: "https://ollama.com/v1", want: "ollama-cloud"},
 	}
 
 	for _, tc := range cases {
@@ -982,9 +1005,9 @@ func TestUniqueCustomProviderKeyRejectsAliases(t *testing.T) {
 
 func TestSplitSwitchArgs(t *testing.T) {
 	cases := []struct {
-		args             []string
-		wantProvider     string
-		wantFlagArgs     []string
+		args         []string
+		wantProvider string
+		wantFlagArgs []string
 	}{
 		{args: []string{"deepseek"}, wantProvider: "deepseek", wantFlagArgs: nil},
 		{args: []string{"deepseek", "--api-key", "sk-xxx"}, wantProvider: "deepseek", wantFlagArgs: []string{"--api-key", "sk-xxx"}},
@@ -1009,13 +1032,13 @@ func TestSplitSwitchArgs(t *testing.T) {
 
 func TestMakeCustomProviderKey(t *testing.T) {
 	cases := map[string]string{
-		"My Provider":           "my-provider",
-		"  Test  Provider  ":   "test-provider",
-		"Provider/With/Slash":   "provider-with-slash",
+		"My Provider":               "my-provider",
+		"  Test  Provider  ":        "test-provider",
+		"Provider/With/Slash":       "provider-with-slash",
 		"Provider_With_Underscores": "provider-with-underscores",
-		"  --  ":                "custom-provider",
-		"":                      "custom-provider",
-		"simple":                "simple",
+		"  --  ":                    "custom-provider",
+		"":                          "custom-provider",
+		"simple":                    "simple",
 	}
 	for input, want := range cases {
 		if got := makeCustomProviderKey(input); got != want {
@@ -1041,14 +1064,14 @@ func TestFirstNonEmpty(t *testing.T) {
 
 func TestNormalizedURLHost(t *testing.T) {
 	cases := map[string]string{
-		"":                                     "",
-		"https://api.minimaxi.com/anthropic":   "api.minimaxi.com",
-		"https://api.minimaxi.io/anthropic":    "api.minimaxi.io",
-		"api.deepseek.com":                     "api.deepseek.com",
-		"https://opencode.ai/zen/go":           "opencode.ai",
-		"openrouter.ai/api":                    "openrouter.ai",
-		"https://openrouter.ai/":               "openrouter.ai",
-		":::invalid:::":                        ":::invalid::",
+		"":                                   "",
+		"https://api.minimaxi.com/anthropic": "api.minimaxi.com",
+		"https://api.minimaxi.io/anthropic":  "api.minimaxi.io",
+		"api.deepseek.com":                   "api.deepseek.com",
+		"https://opencode.ai/zen/go":         "opencode.ai",
+		"openrouter.ai/api":                  "openrouter.ai",
+		"https://openrouter.ai/":             "openrouter.ai",
+		":::invalid:::":                      ":::invalid::",
 	}
 	for input, want := range cases {
 		if got := normalizedURLHost(input); got != want {
@@ -1059,9 +1082,9 @@ func TestNormalizedURLHost(t *testing.T) {
 
 func TestParseReleaseVersion(t *testing.T) {
 	cases := []struct {
-		input   string
-		want    releaseVersion
-		wantOk  bool
+		input  string
+		want   releaseVersion
+		wantOk bool
 	}{
 		{input: "v1.2.3", want: releaseVersion{numbers: []int{1, 2, 3}}, wantOk: true},
 		{input: "v2.0.0-beta.1", want: releaseVersion{numbers: []int{2, 0, 0}, preRelease: "beta.1"}, wantOk: true},
@@ -1615,6 +1638,45 @@ func TestCmdSwitchOllamaNoAPIKey(t *testing.T) {
 	}
 }
 
+func TestCmdSwitchOllamaCloudUsesStoredAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"ollama-cloud": {APIKey: "ollama-sk"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := cmdSwitch([]string{"ollama-cloud", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	env := settings["env"].(map[string]any)
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "ollama-sk" {
+		t.Fatalf("auth token = %v, want %v", got, "ollama-sk")
+	}
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatal("expected ANTHROPIC_API_KEY to be unset")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://ollama.com" {
+		t.Fatalf("base url = %v, want %v", got, "https://ollama.com")
+	}
+}
+
 func TestCmdConfigureOllamaNoAPIKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1658,7 +1720,7 @@ func TestCmdConfigureRespectsStoredModel(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	input := strings.NewReader("minimax-cn\n\n")  // press enter to accept default model
+	input := strings.NewReader("minimax-cn\n\n") // press enter to accept default model
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure(nil, input, output); err != nil {
@@ -2007,7 +2069,7 @@ func TestCmdList(t *testing.T) {
 		t.Fatalf("cmdList returned error: %v", err)
 	}
 	out := output.String()
-	for _, want := range []string{"deepseek", "minimax-cn", "openrouter", "opencode-go", "ollama"} {
+	for _, want := range []string{"deepseek", "minimax-cn", "openrouter", "opencode-go", "ollama", "ollama-cloud"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("cmdList output missing %q, got %q", want, out)
 		}
@@ -4774,7 +4836,7 @@ func TestCmdSwitchAPIKeyEquals(t *testing.T) {
 
 func TestTUIStateBuildModels(t *testing.T) {
 	ts := &tuiState{
-		cfg:         &AppConfig{Providers: map[string]StoredProvider{}},
+		cfg:          &AppConfig{Providers: map[string]StoredProvider{}},
 		customModels: map[string]string{"openrouter": "my-custom"},
 	}
 	models := ts.buildModels("openrouter")
@@ -4789,7 +4851,7 @@ func TestTUIStateBuildModels(t *testing.T) {
 func TestTUIStateFinishSelection(t *testing.T) {
 	app := tview.NewApplication()
 	ts := &tuiState{
-		app:        app,
+		app:          app,
 		typedAPIKeys: map[string]string{"test": "sk-typed"},
 		resetKeys:    map[string]bool{"test": true},
 	}
@@ -4811,7 +4873,7 @@ func TestTUIStateFinishSelection(t *testing.T) {
 func TestTUIStateFinishSelectionNoTypedKey(t *testing.T) {
 	app := tview.NewApplication()
 	ts := &tuiState{
-		app:        app,
+		app:          app,
 		typedAPIKeys: map[string]string{},
 		resetKeys:    map[string]bool{"test": false},
 	}
@@ -5749,5 +5811,3 @@ func TestTUIStateShowDetailWithResetKey(t *testing.T) {
 		t.Fatalf("expected selectedProvider openrouter, got %q", ts.selectedProvider)
 	}
 }
-
-

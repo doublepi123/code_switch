@@ -47,7 +47,7 @@ Multi-file Go project (~2700 lines of source + ~5200 lines of tests).
 - `upgrade.go` (583 lines): self-upgrade from GitHub releases with checksum verification
 
 **Provider system:**
-- `providerPresets` map in `presets.go`: built-in providers (minimax-cn, minimax-global, openrouter, opencode-go, deepseek, xiaomimimo-cn, ollama)
+- `providerPresets` map in `presets.go`: built-in providers (minimax-cn, minimax-global, openrouter, opencode-go, deepseek, xiaomimimo-cn, ollama, ollama-cloud)
 - `providerAliases` map: backwards-compatible aliases (minimax → minimax-cn, etc.)
 - `StoredProvider` struct: persisted per-provider config (name, base URL, model, API key, authEnv)
 

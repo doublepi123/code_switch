@@ -198,16 +198,45 @@ var providerPresets = map[string]ProviderPreset{
 			"llama3.1:8b", "llama3.1:70b", "gemma3:12b", "gemma3:27b",
 			"mistral:7b", "codellama:13b", "codellama:34b", "phi4:14b",
 			"glm-4.7:cloud", "minimax-m2.1:cloud"},
-		Haiku:    "qwen2.5:7b",
-		Sonnet:   "qwen3-coder",
-		Opus:     "qwen2.5:32b",
-		Subagent: "qwen2.5-coder:7b",
-		AuthEnv:  "ANTHROPIC_AUTH_TOKEN",
+		Haiku:     "qwen2.5:7b",
+		Sonnet:    "qwen3-coder",
+		Opus:      "qwen2.5:32b",
+		Subagent:  "qwen2.5-coder:7b",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://ollama.com",
 		APIKeyURL: "https://ollama.com",
 		NoAPIKey:  true,
 		ExtraEnv: map[string]any{
-			"API_TIMEOUT_MS":                          "600000",
+			"API_TIMEOUT_MS": "600000",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		},
+	},
+	"ollama-cloud": {
+		Name:    "Ollama Cloud",
+		BaseURL: "https://ollama.com",
+		Model:   "qwen3-coder:480b",
+		Models: []string{
+			"qwen3-coder:480b",
+			"minimax-m2.7",
+			"kimi-k2.6",
+			"kimi-k2.5",
+			"glm-5.1",
+			"glm-5",
+			"deepseek-v4-pro",
+			"deepseek-v4-flash",
+			"qwen3.5:397b",
+			"gpt-oss:120b",
+			"gpt-oss:20b",
+		},
+		Haiku:     "deepseek-v4-flash",
+		Sonnet:    "qwen3-coder:480b",
+		Opus:      "deepseek-v4-pro",
+		Subagent:  "qwen3-coder:480b",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://ollama.com/cloud",
+		APIKeyURL: "https://ollama.com/settings/keys",
+		ExtraEnv: map[string]any{
+			"API_TIMEOUT_MS": "600000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
@@ -222,7 +251,7 @@ var unsupportedOpenCodeGoAnthropicModels = map[string]string{
 	"mimo-v2-omni":  "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2.5-pro": "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2.5":     "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"mimo-v2-flash":  "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-flash": "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"qwen3.6-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"qwen3.5-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 }
@@ -234,6 +263,8 @@ var providerAliases = map[string]string{
 	"xiaomimimo":           "xiaomimimo-cn",
 	"xiaomimio":            "xiaomimimo-cn",
 	"mimo":                 "xiaomimimo-cn",
+	"ollamacloud":          "ollama-cloud",
+	"ollama.com":           "ollama-cloud",
 }
 
 const customProviderOption = "__custom__"
@@ -386,6 +417,8 @@ func detectProvider(baseURL, model string) string {
 	switch {
 	case (host == "localhost" || host == "127.0.0.1" || host == "::1") && strings.Contains(baseURL, ":11434"):
 		return "ollama"
+	case host == "ollama.com":
+		return "ollama-cloud"
 	case host == "api.minimaxi.com":
 		return "minimax-cn"
 	case host == "api.minimax.io":

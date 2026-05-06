@@ -36,6 +36,9 @@ cd claude_switch
 | `minimax-global` | `https://api.minimax.io/anthropic` | `MiniMax-M2.7` |
 | `openrouter` | `https://openrouter.ai/api` | `anthropic/claude-sonnet-4.6` |
 | `opencode-go` | `https://opencode.ai/zen/go` | `minimax-m2.7` |
+| `xiaomimimo-cn` | `https://token-plan-cn.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `ollama` | `http://localhost:11434` | `qwen3-coder` |
+| `ollama-cloud` | `https://ollama.com` | `qwen3-coder:480b` |
 
 此外也支持自定义供应商。自定义供应商会保存：
 
@@ -50,6 +53,8 @@ cd claude_switch
 - `minimax-global` 对应 MiniMax 国际区 Token Plan
 - `openrouter` 默认使用 OpenRouter 官方 Claude 映射：haiku、sonnet、opus 会分别写入对应的官方模型；如果输入自定义模型名，则三档都会使用这个自定义模型
 - `deepseek` 使用 DeepSeek Anthropic 兼容接口，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
+- `ollama` 使用本地 Ollama Anthropic 兼容接口，不要求 API Key；如果本地已经 `ollama signin`，也可以使用 `:cloud` 后缀模型
+- `ollama-cloud` 直接连接 `https://ollama.com`，需要在 Ollama settings 里创建 API Key，并会把 Key 写入 `ANTHROPIC_AUTH_TOKEN`
 
 MiniMax 中国区参考官方 CN 文档：
 
@@ -63,6 +68,11 @@ OpenCode Go 参考文档：
 DeepSeek API 参考文档：
 
 - https://api-docs.deepseek.com/zh-cn/
+
+Ollama / Ollama Cloud 参考文档：
+
+- https://docs.ollama.com/integrations/claude-code
+- https://docs.ollama.com/cloud
 
 ## 一键安装（推荐）
 
@@ -286,6 +296,7 @@ cs set-key minimax-cn sk-xxx
 cs set-key minimax-global sk-xxx
 cs set-key openrouter sk-or-xxx
 cs set-key deepseek sk-xxx
+cs set-key ollama-cloud ollama-sk-xxx
 ```
 
 历史兼容别名：
@@ -314,6 +325,7 @@ cs switch minimax-global
 cs switch openrouter
 cs switch deepseek
 cs switch opencode-go
+cs switch ollama-cloud
 ```
 
 MiniMax 中国区：
@@ -332,6 +344,7 @@ cs switch minimax-global
 
 ```bash
 cs switch openrouter --api-key sk-or-xxx
+cs switch ollama-cloud --api-key ollama-sk-xxx
 ```
 
 如果本地还没有 `~/.claude/settings.json`，工具会自动创建它。
@@ -403,7 +416,7 @@ cs switch minimax-cn --claude-dir /path/to/.claude
 - `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK`
 - `CLAUDE_CODE_EFFORT_LEVEL`
 
-大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`，包括 `opencode-go` 的 MiniMax 和 DeepSeek 模型。`deepseek` provider 会写入 `ANTHROPIC_AUTH_TOKEN`。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
+大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`，包括 `opencode-go` 的 MiniMax 和 DeepSeek 模型。`deepseek`、`xiaomimimo-cn`、`ollama` 和 `ollama-cloud` provider 会写入 `ANTHROPIC_AUTH_TOKEN`。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
 
 ## 示例
 

@@ -239,7 +239,7 @@ _cs() {
 	2)
 		case ${words[1]} in
 		switch|set-key|test|remove)
-			COMPREPLY=($(compgen -W "deepseek minimax-cn minimax-global openrouter opencode-go xiaomimimo-cn ollama" -- "$cur"))
+			COMPREPLY=($(compgen -W "deepseek minimax-cn minimax-global openrouter opencode-go xiaomimimo-cn ollama ollama-cloud" -- "$cur"))
 			;;
 		completion)
 			COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
@@ -277,6 +277,7 @@ _cs() {
 		'opencode-go'
 		'xiaomimimo-cn'
 		'ollama'
+		'ollama-cloud'
 	)
 
 	local -a shells
@@ -306,7 +307,7 @@ complete -c cs -n '__fish_use_subcommand' -a 'upgrade' -d 'Upgrade to latest rel
 complete -c cs -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion'
 complete -c cs -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 
-complete -c cs -n '__fish_seen_subcommand_from switch set-key test remove' -a 'deepseek minimax-cn minimax-global openrouter opencode-go xiaomimimo-cn ollama'
+complete -c cs -n '__fish_seen_subcommand_from switch set-key test remove' -a 'deepseek minimax-cn minimax-global openrouter opencode-go xiaomimimo-cn ollama ollama-cloud'
 complete -c cs -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 
 complete -c cs -l version -d 'Show version'
@@ -335,7 +336,8 @@ Usage:
 	  openrouter
 	  opencode-go
 	  xiaomimimo-cn
-	  ollama`)
+	  ollama
+	  ollama-cloud`)
 }
 
 func makeCustomProviderKey(name string) string {

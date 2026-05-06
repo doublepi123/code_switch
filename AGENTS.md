@@ -41,12 +41,12 @@ Both paths can be overridden: settings path via `--claude-dir`, app config path 
 
 Multi-file project (~2700 loc source, ~5200 loc tests). Key sections:
 
-- **Provider definitions**: `providerPresets` map in `presets.go`. Built-in providers: `deepseek`, `minimax-cn`, `minimax-global`, `openrouter`, `opencode-go`, `xiaomimimo-cn`, `ollama`. Adding a provider means adding a `ProviderPreset` entry, updating `detectProvider()`, and updating the three shell completion string constants in `main.go`.
+- **Provider definitions**: `providerPresets` map in `presets.go`. Built-in providers: `deepseek`, `minimax-cn`, `minimax-global`, `openrouter`, `opencode-go`, `xiaomimimo-cn`, `ollama`, `ollama-cloud`. Adding a provider means adding a `ProviderPreset` entry, updating `detectProvider()`, and updating the three shell completion string constants in `main.go`.
 - **Ollama dynamic models**: `ollamaModels()` probes `http://localhost:11434/api/tags` (3s timeout) and returns discovered model names, falling back to the static `Models` list. Do not assume the static list is the full set available.
 - **Alias resolution**: `canonicalProviderName` resolves `providerAliases` (e.g. `minimax` → `minimax-cn`, `xiaomimimo` → `xiaomimimo-cn`).
 - **Legacy migration**: `loadAppConfig` auto-migrates an old `minimax` config key to `minimax-cn` via `migrateLegacyProviders`.
 - **Model tier mapping**: `withSelectedModel()` handles three cases: (1) custom model → override all tiers, (2) preset model with `ModelTierOverrides` → use those tiers, (3) preset model without overrides → keep preset defaults. This means selecting `minimax-m2.5` for opencode-go keeps tier models at `minimax-m2.7` — intentional, not a bug.
-- **Auth env priority**: `deepseek` and `xiaomimimo-cn` write to `ANTHROPIC_AUTH_TOKEN` (via `AuthEnv` field); all others write to `ANTHROPIC_API_KEY`. Both keys are in `managedEnvKeys` and get cleared on switch to avoid duplicates.
+- **Auth env priority**: providers with `AuthEnv: ANTHROPIC_AUTH_TOKEN` (currently `deepseek`, `xiaomimimo-cn`, `ollama`, and `ollama-cloud`) write bearer tokens; providers without `AuthEnv` write to `ANTHROPIC_API_KEY`. Both keys are in `managedEnvKeys` and get cleared on switch to avoid duplicates.
 - **`managedEnvKeys`**: the full set of env keys deleted before applying a new preset. If a provider's `ExtraEnv` doesn't include a key, it's simply not re-set.
 - **Custom providers**: persist in `cfg.Providers` map. `sortedProviderNames()` filters out entries with empty `BaseURL`. Created only via TUI or fallback text prompts — `cmdSetKey` cannot create one from scratch.
 - **CLI subcommands**: `list`, `configure` (default TUI), `current`, `set-key`, `switch`, `test`, `remove`, `upgrade`, `completion` (bash/zsh/fish).
