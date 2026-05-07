@@ -130,6 +130,50 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	}
 }
 
+func TestCodexSwitchWritesTopLevelSettingsBeforeExistingSections(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+	configPath := filepath.Join(codexDir, "config.toml")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	existing := `approval_policy = "on-request"
+
+[profiles.work]
+model = "gpt-5.5"
+model_provider = "openai"
+`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("write codex config: %v", err)
+	}
+
+	if err := runWithIO([]string{"switch", "ollama-cloud", "--agent", "codex", "--api-key", "ollama-sk", "--model", "qwen3-coder:480b", "--codex-dir", codexDir}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatalf("codex switch returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	config := string(configBytes)
+	provider, model, baseURL, err := parseCodexTopLevel(config)
+	if err != nil {
+		t.Fatalf("parse codex config: %v", err)
+	}
+	if provider != "ollama-cloud" || model != "qwen3-coder:480b" || baseURL != "https://ollama.com/v1" {
+		t.Fatalf("parsed codex config = provider %q model %q baseURL %q\n%s", provider, model, baseURL, config)
+	}
+	if strings.Index(config, `model_provider = "ollama-cloud"`) > strings.Index(config, `[profiles.work]`) {
+		t.Fatalf("managed top-level provider was written after an existing section:\n%s", config)
+	}
+	for _, want := range []string{`approval_policy = "on-request"`, `[profiles.work]`, `model = "gpt-5.5"`, `model_provider = "openai"`} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("codex config lost %q:\n%s", want, config)
+		}
+	}
+}
+
 func TestCodexSwitchCanReuseMigratedClaudeOllamaCloudKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

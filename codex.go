@@ -68,13 +68,21 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 
 func applyCodexPresetTOML(existing string, preset ProviderPreset) string {
 	cleaned := removeCodexManagedTOML(existing, true, true, nil)
+	topLevel, sections := splitBeforeFirstTOMLSection(cleaned)
 	var b strings.Builder
-	b.WriteString(strings.TrimRight(cleaned, "\n"))
-	if strings.TrimSpace(cleaned) != "" {
-		b.WriteString("\n\n")
+
+	if top := strings.TrimRight(topLevel, "\n"); strings.TrimSpace(top) != "" {
+		b.WriteString(top)
+		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "model = %q\n", preset.Model)
-	fmt.Fprintf(&b, "model_provider = %q\n\n", "ollama-cloud")
+	fmt.Fprintf(&b, "model_provider = %q\n", "ollama-cloud")
+
+	if strings.TrimSpace(sections) != "" {
+		b.WriteString("\n\n")
+		b.WriteString(strings.TrimRight(strings.TrimLeft(sections, "\n"), "\n"))
+	}
+	b.WriteString("\n\n")
 	b.WriteString("[model_providers.ollama-cloud]\n")
 	fmt.Fprintf(&b, "name = %q\n", preset.Name)
 	fmt.Fprintf(&b, "base_url = %q\n", preset.BaseURL)
@@ -82,6 +90,17 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset) string {
 	b.WriteString("env_key_instructions = \"Set OLLAMA_API_KEY to your Ollama API key\"\n")
 	b.WriteString("wire_api = \"responses\"\n")
 	return b.String()
+}
+
+func splitBeforeFirstTOMLSection(content string) (string, string) {
+	offset := 0
+	for _, line := range strings.SplitAfter(content, "\n") {
+		if _, ok := tomlSectionName(line); ok {
+			return content[:offset], content[offset:]
+		}
+		offset += len(line)
+	}
+	return content, ""
 }
 
 func restoreCodexConfig(codexDir string, cfg *AppConfig, out io.Writer, dryRun bool) error {
