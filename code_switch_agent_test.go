@@ -130,6 +130,53 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	}
 }
 
+func TestCodexSwitchPrintsEnvHelperForSavedKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "ollama-cloud", "--agent", "codex", "--api-key", "ollama-sk", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex switch returned error: %v", err)
+	}
+
+	out := output.String()
+	if !strings.Contains(out, `run: eval "$(cs env ollama-cloud --agent codex)"`) {
+		t.Fatalf("codex switch output missing env helper:\n%s", out)
+	}
+	if strings.Contains(out, "ollama-sk") {
+		t.Fatalf("codex switch output must not print plaintext api key:\n%s", out)
+	}
+}
+
+func TestCodexEnvPrintsSavedAgentKeyExport(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			"codex": {
+				Providers: map[string]StoredProvider{
+					"ollama-cloud": {APIKey: "ollama-sk'quoted"},
+				},
+			},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "ollama-cloud", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex env returned error: %v", err)
+	}
+
+	if got, want := output.String(), "export OLLAMA_API_KEY='ollama-sk'\\''quoted'\n"; got != want {
+		t.Fatalf("env output = %q, want %q", got, want)
+	}
+}
+
 func TestCodexSwitchWritesTopLevelSettingsBeforeExistingSections(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

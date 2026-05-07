@@ -52,7 +52,9 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	case "set-key":
 		return cmdSetKey(args[1:])
 	case "switch":
-		return cmdSwitch(args[1:])
+		return cmdSwitchWithOutput(args[1:], out)
+	case "env":
+		return cmdEnv(args[1:], out)
 	case "restore":
 		return cmdRestore(args[1:], out)
 	case "upgrade":
@@ -81,7 +83,7 @@ func isVersionRequest(args []string) bool {
 	}
 	if len(args) == 2 && args[1] == "--version" {
 		switch args[0] {
-		case "list", "configure", "current", "set-key", "switch", "restore", "upgrade", "help", "test", "remove", "completion":
+		case "list", "configure", "current", "set-key", "switch", "env", "restore", "upgrade", "help", "test", "remove", "completion":
 			return true
 		}
 	}
@@ -278,11 +280,11 @@ _cs() {
 
 	case $cword in
 	1)
-		COMPREPLY=($(compgen -W "list configure current set-key switch restore test remove upgrade completion help --version --help" -- "$cur"))
+		COMPREPLY=($(compgen -W "list configure current set-key switch env restore test remove upgrade completion help --version --help" -- "$cur"))
 		;;
 	2)
 		case ${words[1]} in
-		switch|set-key|test|remove)
+		switch|set-key|env|test|remove)
 			COMPREPLY=($(compgen -W "%s" -- "$cur"))
 			;;
 		completion)
@@ -298,7 +300,7 @@ complete -F _cs cs
 
 func zshCompletionString() string {
 	var b strings.Builder
-	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'restore:restore official agent config'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'completion:generate shell completion'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
+	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'env:print shell exports for a provider'\n\t\t'restore:restore official agent config'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'completion:generate shell completion'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(&b, "\t\t'%s'\n", name)
 	}
@@ -315,6 +317,7 @@ complete -c cs -n '__fish_use_subcommand' -a 'configure' -d 'Interactive TUI con
 complete -c cs -n '__fish_use_subcommand' -a 'current' -d 'Show current provider'
 complete -c cs -n '__fish_use_subcommand' -a 'set-key' -d 'Save API key for a provider'
 complete -c cs -n '__fish_use_subcommand' -a 'switch' -d 'Switch agent provider'
+complete -c cs -n '__fish_use_subcommand' -a 'env' -d 'Print shell exports for a provider'
 complete -c cs -n '__fish_use_subcommand' -a 'restore' -d 'Restore official agent config'
 complete -c cs -n '__fish_use_subcommand' -a 'test' -d 'Test provider API connectivity'
 complete -c cs -n '__fish_use_subcommand' -a 'remove' -d 'Remove saved provider config'
@@ -322,7 +325,7 @@ complete -c cs -n '__fish_use_subcommand' -a 'upgrade' -d 'Upgrade to latest rel
 complete -c cs -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion'
 complete -c cs -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 
-complete -c cs -n '__fish_seen_subcommand_from switch set-key test remove' -a '%s'
+complete -c cs -n '__fish_seen_subcommand_from switch set-key env test remove' -a '%s'
 complete -c cs -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 
 complete -c cs -l version -d 'Show version'
@@ -344,7 +347,7 @@ func sortedPresetNames() []string {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs list [--agent claude|codex] [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex] [--claude-dir DIR] [--codex-dir DIR]\n  cs set-key <provider> <api-key>\n  cs switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--codex-dir DIR] [--dry-run]\n  cs restore [--agent claude|codex] [--dry-run]\n  cs test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
+	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs list [--agent claude|codex] [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex] [--claude-dir DIR] [--codex-dir DIR]\n  cs set-key <provider> <api-key>\n  cs switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--codex-dir DIR] [--dry-run]\n  cs env <provider> [--agent claude|codex] [--api-key sk-xxx]\n  cs restore [--agent claude|codex] [--dry-run]\n  cs test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}

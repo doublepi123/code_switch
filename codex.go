@@ -63,6 +63,7 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 	fmt.Fprintf(out, "config: %s\n", configPath)
 	fmt.Fprintf(out, "base_url: %s\n", preset.BaseURL)
 	fmt.Fprintf(out, "model: %s\n", preset.Model)
+	fmt.Fprintf(out, "run: eval \"$(cs env %s --agent codex)\"\n", provider)
 	return nil
 }
 

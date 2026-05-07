@@ -60,6 +60,10 @@ func resolveProviderAndKeyForAgent(agent AgentName, providerArg, apiKeyFlag, mod
 }
 
 func cmdSwitch(args []string) error {
+	return cmdSwitchWithOutput(args, os.Stdout)
+}
+
+func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("switch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -85,7 +89,7 @@ func cmdSwitch(args []string) error {
 		return err
 	}
 	if agent == agentCodex {
-		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, os.Stdout, *dryRun); err != nil {
+		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun); err != nil {
 			return err
 		}
 		if !*dryRun {
@@ -93,7 +97,7 @@ func cmdSwitch(args []string) error {
 		}
 		return nil
 	}
-	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, os.Stdout, *dryRun)
+	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun)
 }
 
 func splitSwitchArgs(args []string) (string, []string) {

@@ -87,7 +87,11 @@ wire_api = "responses"
 
 Codex must use the Responses API. The tool does not support or generate `wire_api = "chat"`.
 
-The API key is saved only in `~/.code-switch/config.json`; it is not written directly to Codex TOML. Codex's config points to `OLLAMA_API_KEY` via `env_key`.
+The API key is saved only in `~/.code-switch/config.json`; it is not written directly to Codex TOML. Codex's config points to `OLLAMA_API_KEY` via `env_key`. Users can load the saved key into the current shell with:
+
+```bash
+eval "$(cs env ollama-cloud --agent codex)"
+```
 
 `restore --agent codex` backs up `~/.codex/config.toml`, removes only this tool's managed Codex settings, and preserves unrelated configuration:
 
