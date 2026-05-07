@@ -78,6 +78,7 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset) string {
 	}
 	fmt.Fprintf(&b, "model = %q\n", preset.Model)
 	fmt.Fprintf(&b, "model_provider = %q\n", "ollama-cloud")
+	b.WriteString("approvals_reviewer = \"user\"\n")
 
 	if strings.TrimSpace(sections) != "" {
 		b.WriteString("\n\n")
@@ -141,6 +142,10 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 	if !removeTopLevelModel {
 		removeTopLevelModel = provider == "ollama-cloud" && isManagedCodexModel(model, cfg)
 	}
+	removeTopLevelApprovalsReviewer := removeTopLevelModel && removeTopLevelProvider
+	if !removeTopLevelApprovalsReviewer {
+		removeTopLevelApprovalsReviewer = provider == "ollama-cloud"
+	}
 
 	lines := strings.Split(existing, "\n")
 	out := make([]string, 0, len(lines))
@@ -163,6 +168,9 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 					continue
 				}
 				if key == "model_provider" && removeTopLevelProvider {
+					continue
+				}
+				if key == "approvals_reviewer" && removeTopLevelApprovalsReviewer {
 					continue
 				}
 			}

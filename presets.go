@@ -72,6 +72,7 @@ type ProviderPreset struct {
 	Sonnet             string
 	Opus               string
 	Subagent           string
+	ForceModelTiers    bool
 	ModelTierOverrides map[string]ModelTiers
 	AuthEnv            string
 	ExtraEnv           map[string]any
@@ -241,13 +242,14 @@ var providerPresets = map[string]ProviderPreset{
 			"gpt-oss:120b",
 			"gpt-oss:20b",
 		},
-		Haiku:     "deepseek-v4-flash",
-		Sonnet:    "qwen3-coder:480b",
-		Opus:      "deepseek-v4-pro",
-		Subagent:  "qwen3-coder:480b",
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://ollama.com/cloud",
-		APIKeyURL: "https://ollama.com/settings/keys",
+		Haiku:           "qwen3-coder:480b",
+		Sonnet:          "qwen3-coder:480b",
+		Opus:            "qwen3-coder:480b",
+		Subagent:        "qwen3-coder:480b",
+		ForceModelTiers: true,
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://ollama.com/cloud",
+		APIKeyURL:       "https://ollama.com/settings/keys",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "600000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -406,6 +408,9 @@ func validateProviderModel(provider, model string) error {
 func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 	model = strings.TrimSpace(model)
 	if model == "" {
+		if preset.ForceModelTiers {
+			return withForcedModelTiers(preset, preset.Model)
+		}
 		return preset
 	}
 
@@ -413,6 +418,11 @@ func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 	preset.Model = model
 	if !isPresetModel {
 		preset.Models = append([]string{model}, preset.Models...)
+	}
+	if preset.ForceModelTiers {
+		return withForcedModelTiers(preset, model)
+	}
+	if !isPresetModel {
 		preset.Haiku = model
 		preset.Sonnet = model
 		preset.Opus = model
@@ -423,6 +433,14 @@ func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 		preset.Opus = tiers.Opus
 		preset.Subagent = tiers.Subagent
 	}
+	return preset
+}
+
+func withForcedModelTiers(preset ProviderPreset, model string) ProviderPreset {
+	preset.Haiku = model
+	preset.Sonnet = model
+	preset.Opus = model
+	preset.Subagent = model
 	return preset
 }
 

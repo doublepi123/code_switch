@@ -61,6 +61,7 @@ Claude Code 支持：
 - `deepseek` 使用 DeepSeek Anthropic 兼容接口，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
 - `ollama` 使用本地 Ollama Anthropic 兼容接口，不要求 API Key；如果本地已经 `ollama signin`，也可以使用 `:cloud` 后缀模型
 - `ollama-cloud` 直接连接 `https://ollama.com`，需要在 Ollama settings 里创建 API Key；Claude Code 切换会把 Key 写入 `ANTHROPIC_AUTH_TOKEN`
+- Claude Code 使用 `ollama-cloud` 时，haiku、sonnet、opus 和 subagent 模型都会写成所选主模型，不会混用其他模型
 
 Codex 第一阶段只支持：
 
@@ -68,7 +69,7 @@ Codex 第一阶段只支持：
 | --- | --- | --- |
 | `ollama-cloud` | `https://ollama.com/v1` | `qwen3-coder:480b` |
 
-Codex 写入 `~/.codex/config.toml`，使用 `wire_api = "responses"` 和 command-backed auth。API Key 只保存到 `~/.code-switch/config.json`，不会明文写入 Codex TOML；Codex 运行时会通过 `cs token ollama-cloud --agent codex` 读取已保存的 key。
+Codex 写入 `~/.codex/config.toml`，使用 `wire_api = "responses"` 和 command-backed auth。API Key 只保存到 `~/.code-switch/config.json`，不会明文写入 Codex TOML；Codex 运行时会通过 `cs token ollama-cloud --agent codex` 读取已保存的 key。Codex 使用 `ollama-cloud` 时会写入 `approvals_reviewer = "user"`，避免自动审批 reviewer 的内部模型被路由到 Ollama Cloud。
 
 MiniMax 中国区参考官方 CN 文档：
 
@@ -381,6 +382,7 @@ cs switch ollama-cloud --api-key ollama-sk-xxx
 ```toml
 model = "qwen3-coder:480b"
 model_provider = "ollama-cloud"
+approvals_reviewer = "user"
 
 [model_providers.ollama-cloud]
 name = "Ollama Cloud"

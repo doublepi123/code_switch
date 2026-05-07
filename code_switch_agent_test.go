@@ -97,6 +97,7 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	for _, want := range []string{
 		`model = "qwen3-coder:480b"`,
 		`model_provider = "ollama-cloud"`,
+		`approvals_reviewer = "user"`,
 		`[model_providers.ollama-cloud]`,
 		`name = "Ollama Cloud"`,
 		`base_url = "https://ollama.com/v1"`,
@@ -114,6 +115,9 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	}
 	if strings.Contains(config, `env_key_instructions`) {
 		t.Fatalf("codex config should not include env_key instructions when using command auth:\n%s", config)
+	}
+	if strings.Contains(config, `codex-auto-review`) || strings.Contains(config, `guardian_subagent`) || strings.Contains(config, `auto_review`) {
+		t.Fatalf("codex config should force user approvals reviewer for ollama-cloud:\n%s", config)
 	}
 	if strings.Contains(config, "ollama-sk") {
 		t.Fatalf("codex config must not contain plaintext api key:\n%s", config)
@@ -225,6 +229,7 @@ func TestCodexSwitchWritesTopLevelSettingsBeforeExistingSections(t *testing.T) {
 		t.Fatalf("mkdir codex dir: %v", err)
 	}
 	existing := `approval_policy = "on-request"
+approvals_reviewer = "guardian_subagent"
 
 [profiles.work]
 model = "gpt-5.5"
@@ -252,6 +257,12 @@ model_provider = "openai"
 	}
 	if strings.Index(config, `model_provider = "ollama-cloud"`) > strings.Index(config, `[profiles.work]`) {
 		t.Fatalf("managed top-level provider was written after an existing section:\n%s", config)
+	}
+	if !strings.Contains(config, `approvals_reviewer = "user"`) {
+		t.Fatalf("codex config did not force user approvals reviewer:\n%s", config)
+	}
+	if strings.Contains(config, `approvals_reviewer = "guardian_subagent"`) {
+		t.Fatalf("codex config kept stale guardian approvals reviewer:\n%s", config)
 	}
 	for _, want := range []string{`approval_policy = "on-request"`, `[profiles.work]`, `model = "gpt-5.5"`, `model_provider = "openai"`} {
 		if !strings.Contains(config, want) {
@@ -348,6 +359,7 @@ func TestCodexRestoreRemovesOnlyManagedSettings(t *testing.T) {
 	initial := `approval_policy = "on-request"
 model = "qwen3-coder:480b"
 model_provider = "ollama-cloud"
+approvals_reviewer = "user"
 
 [model_providers.ollama-cloud]
 name = "Ollama Cloud"
@@ -376,7 +388,7 @@ model_provider = "openai"
 		t.Fatalf("read restored codex config: %v", err)
 	}
 	restored := string(restoredBytes)
-	for _, unwanted := range []string{`model_provider = "ollama-cloud"`, `model = "qwen3-coder:480b"`, `[model_providers.ollama-cloud]`, `[model_providers.ollama-cloud.auth]`, `wire_api = "responses"`, `command = "cs"`} {
+	for _, unwanted := range []string{`model_provider = "ollama-cloud"`, `model = "qwen3-coder:480b"`, `approvals_reviewer = "user"`, `[model_providers.ollama-cloud]`, `[model_providers.ollama-cloud.auth]`, `wire_api = "responses"`, `command = "cs"`} {
 		if strings.Contains(restored, unwanted) {
 			t.Fatalf("restored codex config still contains %q:\n%s", unwanted, restored)
 		}

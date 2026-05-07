@@ -1772,6 +1772,87 @@ func TestCmdSwitchOllamaCloudUsesStoredAPIKey(t *testing.T) {
 	}
 }
 
+func readSettingsEnv(t *testing.T, settingsPath string) map[string]any {
+	t.Helper()
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	env, ok := settings["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings env missing or invalid: %#v", settings["env"])
+	}
+	return env
+}
+
+func TestCmdSwitchOllamaCloudUsesDefaultModelForAllClaudeTiers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"ollama-cloud": {APIKey: "ollama-sk"},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := cmdSwitch([]string{"ollama-cloud", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	env := readSettingsEnv(t, filepath.Join(claudeDir, "settings.json"))
+	for _, key := range []string{
+		"ANTHROPIC_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+	} {
+		if got := env[key]; got != "qwen3-coder:480b" {
+			t.Fatalf("%s = %v, want qwen3-coder:480b", key, got)
+		}
+	}
+}
+
+func TestCmdSwitchOllamaCloudSelectedModelAppliesToAllClaudeTiers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"ollama-cloud": {APIKey: "ollama-sk"},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := cmdSwitch([]string{"ollama-cloud", "--model", "deepseek-v4-pro", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	env := readSettingsEnv(t, filepath.Join(claudeDir, "settings.json"))
+	for _, key := range []string{
+		"ANTHROPIC_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+	} {
+		if got := env[key]; got != "deepseek-v4-pro" {
+			t.Fatalf("%s = %v, want deepseek-v4-pro", key, got)
+		}
+	}
+}
+
 func TestCmdConfigureOllamaNoAPIKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
