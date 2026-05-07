@@ -67,7 +67,12 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		}
 	}
 	if agent == agentClaude && strings.TrimSpace(selection.BaseURL) != "" {
-		upsertProviderConfig(cfg, selection, strings.TrimSpace(selection.APIKey))
+		existingKey := strings.TrimSpace(cfg.Providers[selection.Provider].APIKey)
+		keyToSave := strings.TrimSpace(selection.APIKey)
+		if keyToSave == "" {
+			keyToSave = existingKey
+		}
+		upsertProviderConfig(cfg, selection, keyToSave)
 	}
 
 	preset, err := resolveAgentProviderPreset(agent, provider, cfg)

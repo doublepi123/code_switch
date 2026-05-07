@@ -34,11 +34,28 @@ func cmdEnv(args []string, out io.Writer) error {
 		return err
 	}
 
+	if agent == agentCodex {
+		fmt.Fprintf(out, "# Codex uses command-based auth; set these env vars for shell use:\n")
+		fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
+		fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+		authEnv := strings.TrimSpace(preset.AuthEnv)
+		if authEnv == "" {
+			authEnv = "ANTHROPIC_API_KEY"
+		}
+		fmt.Fprintf(out, "export %s=%s\n", authEnv, shellSingleQuote(pa.APIKey))
+		return nil
+	}
+
 	authEnv := strings.TrimSpace(preset.AuthEnv)
 	if authEnv == "" {
 		authEnv = "ANTHROPIC_API_KEY"
 	}
+	fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
+	fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
 	fmt.Fprintf(out, "export %s=%s\n", authEnv, shellSingleQuote(pa.APIKey))
+	for key, value := range preset.ExtraEnv {
+		fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(value)))
+	}
 	return nil
 }
 

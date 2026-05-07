@@ -190,6 +190,9 @@ var providerPresets = map[string]ProviderPreset{
 		},
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
+		ExtraEnv: map[string]any{
+			"CLAUDE_CODE_EFFORT_LEVEL": "max",
+		},
 	},
 	"xiaomimimo-cn": {
 		Name:      "Xiaomi MiMo Token Plan CN",

@@ -187,7 +187,7 @@ func TestCodexEnvPrintsSavedAgentKeyExport(t *testing.T) {
 		t.Fatalf("codex env returned error: %v", err)
 	}
 
-	if got, want := output.String(), "export OLLAMA_API_KEY='ollama-sk'\\''quoted'\n"; got != want {
+	if got, want := output.String(), "# Codex uses command-based auth; set these env vars for shell use:\nexport ANTHROPIC_BASE_URL='https://ollama.com/v1'\nexport ANTHROPIC_MODEL='qwen3-coder:480b'\nexport OLLAMA_API_KEY='ollama-sk'\\''quoted'\n"; got != want {
 		t.Fatalf("env output = %q, want %q", got, want)
 	}
 }

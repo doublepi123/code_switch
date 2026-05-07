@@ -182,23 +182,56 @@ func cmdCurrent(args []string, out io.Writer) error {
 }
 
 func cmdSetKey(args []string) error {
-	if len(args) != 2 {
-		return fmt.Errorf("usage: code-switch set-key <provider> <api-key>")
+	fs := flag.NewFlagSet("set-key", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
+	remaining := fs.Args()
+	if len(remaining) != 2 {
+		return fmt.Errorf("usage: code-switch set-key <provider> <api-key> [--agent claude|codex]")
+	}
+
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
+	provider := canonicalProviderName(remaining[0])
+
+	if agent == agentCodex {
+		if provider != "ollama-cloud" {
+			return fmt.Errorf("unsupported provider %q for agent codex", remaining[0])
+		}
+		cfg, path, err := loadAppConfig()
+		if err != nil {
+			return err
+		}
+		agentCfg := agentConfig(cfg, agentCodex)
+		stored := agentCfg.Providers[provider]
+		stored.APIKey = remaining[1]
+		agentCfg.Providers[provider] = stored
+		cfg.Agents[string(agentCodex)] = agentCfg
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			return err
+		}
+		fmt.Printf("saved api key for %s (codex) in %s\n", provider, path)
+		return nil
+	}
+
 	cfg, path, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	provider := canonicalProviderName(args[0])
 	preset, err := resolveProviderPreset(provider, cfg)
 	if err != nil {
-		return fmt.Errorf("unsupported provider %q", args[0])
+		return fmt.Errorf("unsupported provider %q", remaining[0])
 	}
 	if preset.NoAPIKey {
 		return fmt.Errorf("provider %q does not require an API key", provider)
 	}
 	stored := cfg.Providers[provider]
-	stored.APIKey = args[1]
+	stored.APIKey = remaining[1]
 	cfg.Providers[provider] = stored
 	if err := writeJSONAtomic(path, cfg); err != nil {
 		return err
@@ -208,34 +241,61 @@ func cmdSetKey(args []string) error {
 	return nil
 }
 
-func cmdRemove(args []string, in io.Reader, out io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: code-switch remove <provider> [--force]")
-	}
 
-	flags := flag.NewFlagSet("remove", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	force := flags.Bool("force", false, "skip confirmation prompt")
-	if err := flags.Parse(args); err != nil {
+func cmdRemove(args []string, in io.Reader, out io.Writer) error {
+	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	force := fs.Bool("force", false, "skip confirmation prompt")
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	providerArg := strings.TrimSpace(flags.Arg(0))
+	providerArg := strings.TrimSpace(fs.Arg(0))
 	if providerArg == "" {
-		return fmt.Errorf("usage: code-switch remove <provider> [--force]")
+		return fmt.Errorf("usage: code-switch remove <provider> [--agent claude|codex] [--force]")
 	}
 
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
 	provider := canonicalProviderName(providerArg)
 	cfg, path, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
 
+	if agent == agentCodex {
+		agentCfg := agentConfig(cfg, agentCodex)
+		_, ok := agentCfg.Providers[provider]
+		if !ok {
+			return fmt.Errorf("no saved configuration for provider %q for agent codex", provider)
+		}
+		if !*force {
+			stored := codexProviderConfig(cfg, provider)
+			showKey := maskAPIKey(stored.APIKey)
+			fmt.Fprintf(out, "Remove saved config for %s (codex, key: %s)? [y/N]: ", provider, showKey)
+			reader := bufio.NewReader(in)
+			response, err := readLine(reader)
+			if err != nil {
+				return fmt.Errorf("read confirmation: %w", err)
+			}
+			if strings.ToLower(strings.TrimSpace(response)) != "y" {
+				fmt.Fprintln(out, "cancelled")
+				return nil
+			}
+		}
+		delete(agentCfg.Providers, provider)
+		cfg.Agents[string(agentCodex)] = agentCfg
+		fmt.Fprintf(out, "removed %s (codex) from %s\n", provider, path)
+		return writeJSONAtomic(path, cfg)
+	}
+
 	stored, ok := cfg.Providers[provider]
 	if !ok {
 		return fmt.Errorf("no saved configuration for provider %q", provider)
 	}
-
 	if !*force {
 		showKey := maskAPIKey(stored.APIKey)
 		fmt.Fprintf(out, "Remove saved config for %s (key: %s)? [y/N]: ", provider, showKey)
@@ -254,7 +314,6 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 	fmt.Fprintf(out, "removed %s from %s\n", provider, path)
 	return writeJSONAtomic(path, cfg)
 }
-
 func cmdCompletion(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: code-switch completion bash|zsh|fish")
@@ -337,7 +396,17 @@ complete -c cs -l help -d 'Show help'
 }
 
 func providerCompletionWordList() string {
-	return strings.Join(sortedPresetNames(), " ")
+	names := sortedPresetNames()
+	cfg, _, err := loadAppConfig()
+	if err == nil {
+		for name, stored := range cfg.Providers {
+			if strings.TrimSpace(stored.BaseURL) != "" && !isPresetProvider(name) {
+				names = append(names, name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, " ")
 }
 
 func sortedPresetNames() []string {
@@ -350,7 +419,7 @@ func sortedPresetNames() []string {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs list [--agent claude|codex] [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex] [--claude-dir DIR] [--codex-dir DIR]\n  cs set-key <provider> <api-key>\n  cs switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--codex-dir DIR] [--dry-run]\n  cs env <provider> [--agent claude|codex] [--api-key sk-xxx]\n  cs token <provider> [--agent claude|codex] [--api-key sk-xxx]\n  cs restore [--agent claude|codex] [--dry-run]\n  cs test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
+	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs version\n  cs list [--agent claude|codex] [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex] [--claude-dir DIR] [--codex-dir DIR]\n  cs set-key <provider> <api-key> [--agent claude|codex]\n  cs switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--codex-dir DIR] [--dry-run]\n  cs env <provider> [--agent claude|codex] [--api-key sk-xxx]\n  cs token <provider> [--agent claude|codex] [--api-key sk-xxx]\n  cs restore [--agent claude|codex] [--dry-run]\n  cs test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--agent claude|codex] [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}
