@@ -82,10 +82,11 @@ func performUpgrade(opts upgradeOptions) error {
 		opts.out = io.Discard
 	}
 
-	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
+	assets, err := upgradeAssetNames(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
 	}
+	asset := assets[0]
 	if opts.installPath == "" {
 		return errors.New("missing install path")
 	}
@@ -121,8 +122,8 @@ func performUpgrade(opts upgradeOptions) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	archivePath := filepath.Join(tmpDir, asset)
-	if err := downloadFile(context.Background(), opts.client, downloadURL, archivePath); err != nil {
+	asset, archivePath, err := downloadUpgradeArchive(context.Background(), opts.client, opts.baseURL, opts.repo, targetTag, tmpDir, assets, opts.out)
+	if err != nil {
 		return err
 	}
 
@@ -308,6 +309,18 @@ func upgradeAssetName(goos, goarch string) (string, error) {
 	}
 }
 
+func upgradeAssetNames(goos, goarch string) ([]string, error) {
+	asset, err := upgradeAssetName(goos, goarch)
+	if err != nil {
+		return nil, err
+	}
+	legacy := strings.Replace(asset, "code-switch-", "claude-switch-", 1)
+	if legacy == asset {
+		return []string{asset}, nil
+	}
+	return []string{asset, legacy}, nil
+}
+
 func releaseDownloadURL(baseURL, repo, tag, asset string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	repo = strings.Trim(strings.TrimSpace(repo), "/")
@@ -316,6 +329,41 @@ func releaseDownloadURL(baseURL, repo, tag, asset string) string {
 		return fmt.Sprintf("%s/%s/releases/latest/download/%s", baseURL, repo, asset)
 	}
 	return fmt.Sprintf("%s/%s/releases/download/%s/%s", baseURL, repo, url.PathEscape(strings.TrimSpace(tag)), asset)
+}
+
+func downloadUpgradeArchive(ctx context.Context, client *http.Client, baseURL, repo, tag, tmpDir string, assets []string, out io.Writer) (string, string, error) {
+	var lastErr error
+	for i, asset := range assets {
+		downloadURL := releaseDownloadURL(baseURL, repo, tag, asset)
+		if i > 0 {
+			fmt.Fprintf(out, "download fallback: %s\n", downloadURL)
+		}
+		archivePath := filepath.Join(tmpDir, asset)
+		if err := downloadFile(ctx, client, downloadURL, archivePath); err != nil {
+			lastErr = err
+			if !isHTTPStatus(err, http.StatusNotFound) {
+				return "", "", err
+			}
+			continue
+		}
+		return asset, archivePath, nil
+	}
+	return "", "", lastErr
+}
+
+type httpStatusError struct {
+	operation  string
+	status     string
+	statusCode int
+}
+
+func (err *httpStatusError) Error() string {
+	return fmt.Sprintf("%s failed: %s", err.operation, err.status)
+}
+
+func isHTTPStatus(err error, statusCode int) bool {
+	var statusErr *httpStatusError
+	return errors.As(err, &statusErr) && statusErr.statusCode == statusCode
 }
 
 func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest string) error {
@@ -331,7 +379,7 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("download failed: %s", resp.Status)
+		return &httpStatusError{operation: "download", status: resp.Status, statusCode: resp.StatusCode}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {

@@ -63,7 +63,7 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 	fmt.Fprintf(out, "config: %s\n", configPath)
 	fmt.Fprintf(out, "base_url: %s\n", preset.BaseURL)
 	fmt.Fprintf(out, "model: %s\n", preset.Model)
-	fmt.Fprintf(out, "run: eval \"$(cs env %s --agent codex)\"\n", provider)
+	fmt.Fprintf(out, "auth: cs token %s --agent codex\n", provider)
 	return nil
 }
 
@@ -87,9 +87,10 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset) string {
 	b.WriteString("[model_providers.ollama-cloud]\n")
 	fmt.Fprintf(&b, "name = %q\n", preset.Name)
 	fmt.Fprintf(&b, "base_url = %q\n", preset.BaseURL)
-	b.WriteString("env_key = \"OLLAMA_API_KEY\"\n")
-	b.WriteString("env_key_instructions = \"Set OLLAMA_API_KEY to your Ollama API key\"\n")
 	b.WriteString("wire_api = \"responses\"\n")
+	b.WriteString("\n[model_providers.ollama-cloud.auth]\n")
+	b.WriteString("command = \"cs\"\n")
+	b.WriteString("args = [\"token\", \"ollama-cloud\", \"--agent\", \"codex\"]\n")
 	return b.String()
 }
 
@@ -148,7 +149,7 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 	for _, line := range lines {
 		if name, ok := tomlSectionName(line); ok {
 			section = name
-			skipSection = name == "model_providers.ollama-cloud"
+			skipSection = name == "model_providers.ollama-cloud" || strings.HasPrefix(name, "model_providers.ollama-cloud.")
 			if skipSection {
 				continue
 			}

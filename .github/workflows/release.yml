@@ -8,7 +8,7 @@ on:
 
 env:
   GO_VERSION: '1.22'
-  PROJECT_NAME: claude-switch
+  PROJECT_NAME: code-switch
 
 jobs:
   tag:

@@ -100,12 +100,20 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 		`[model_providers.ollama-cloud]`,
 		`name = "Ollama Cloud"`,
 		`base_url = "https://ollama.com/v1"`,
-		`env_key = "OLLAMA_API_KEY"`,
 		`wire_api = "responses"`,
+		`[model_providers.ollama-cloud.auth]`,
+		`command = "cs"`,
+		`args = ["token", "ollama-cloud", "--agent", "codex"]`,
 	} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("codex config missing %q:\n%s", want, config)
 		}
+	}
+	if strings.Contains(config, `env_key = "OLLAMA_API_KEY"`) {
+		t.Fatalf("codex config should use command auth instead of env_key:\n%s", config)
+	}
+	if strings.Contains(config, `env_key_instructions`) {
+		t.Fatalf("codex config should not include env_key instructions when using command auth:\n%s", config)
 	}
 	if strings.Contains(config, "ollama-sk") {
 		t.Fatalf("codex config must not contain plaintext api key:\n%s", config)
@@ -130,7 +138,7 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	}
 }
 
-func TestCodexSwitchPrintsEnvHelperForSavedKey(t *testing.T) {
+func TestCodexSwitchPrintsCommandAuthForSavedKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	codexDir := filepath.Join(home, ".codex")
@@ -141,8 +149,11 @@ func TestCodexSwitchPrintsEnvHelperForSavedKey(t *testing.T) {
 	}
 
 	out := output.String()
-	if !strings.Contains(out, `run: eval "$(cs env ollama-cloud --agent codex)"`) {
-		t.Fatalf("codex switch output missing env helper:\n%s", out)
+	if !strings.Contains(out, `auth: cs token ollama-cloud --agent codex`) {
+		t.Fatalf("codex switch output missing token auth helper:\n%s", out)
+	}
+	if strings.Contains(out, `eval "$(cs env`) {
+		t.Fatalf("codex switch output should not require shell env setup:\n%s", out)
 	}
 	if strings.Contains(out, "ollama-sk") {
 		t.Fatalf("codex switch output must not print plaintext api key:\n%s", out)
@@ -174,6 +185,34 @@ func TestCodexEnvPrintsSavedAgentKeyExport(t *testing.T) {
 
 	if got, want := output.String(), "export OLLAMA_API_KEY='ollama-sk'\\''quoted'\n"; got != want {
 		t.Fatalf("env output = %q, want %q", got, want)
+	}
+}
+
+func TestCodexTokenPrintsSavedAgentKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			"codex": {
+				Providers: map[string]StoredProvider{
+					"ollama-cloud": {APIKey: "ollama-sk'quoted"},
+				},
+			},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"token", "ollama-cloud", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex token returned error: %v", err)
+	}
+
+	if got, want := output.String(), "ollama-sk'quoted\n"; got != want {
+		t.Fatalf("token output = %q, want %q", got, want)
 	}
 }
 
@@ -316,6 +355,10 @@ base_url = "https://ollama.com/v1"
 env_key = "OLLAMA_API_KEY"
 wire_api = "responses"
 
+[model_providers.ollama-cloud.auth]
+command = "cs"
+args = ["token", "ollama-cloud", "--agent", "codex"]
+
 [profiles.work]
 model = "gpt-5.5"
 model_provider = "openai"
@@ -333,7 +376,7 @@ model_provider = "openai"
 		t.Fatalf("read restored codex config: %v", err)
 	}
 	restored := string(restoredBytes)
-	for _, unwanted := range []string{`model_provider = "ollama-cloud"`, `model = "qwen3-coder:480b"`, `[model_providers.ollama-cloud]`, `wire_api = "responses"`} {
+	for _, unwanted := range []string{`model_provider = "ollama-cloud"`, `model = "qwen3-coder:480b"`, `[model_providers.ollama-cloud]`, `[model_providers.ollama-cloud.auth]`, `wire_api = "responses"`, `command = "cs"`} {
 		if strings.Contains(restored, unwanted) {
 			t.Fatalf("restored codex config still contains %q:\n%s", unwanted, restored)
 		}

@@ -25,7 +25,7 @@ cd code_switch
 - 支持显示已保存 API Key 的掩码摘要
 - 支持一键切换 `~/.claude/settings.json`
 - 支持 Codex + Ollama Cloud 的 Responses API 配置
-- 支持输出 Codex 运行时需要的 `OLLAMA_API_KEY` export 命令
+- 支持 Codex command-backed auth 读取已保存的 Ollama Cloud API Key
 - 支持恢复 Claude Code 或 Codex 官方配置
 - 支持从旧 `~/.claude-switch/config.json` 迁移到 `~/.code-switch/config.json`
 - 切换前自动备份原始配置
@@ -68,13 +68,7 @@ Codex 第一阶段只支持：
 | --- | --- | --- |
 | `ollama-cloud` | `https://ollama.com/v1` | `qwen3-coder:480b` |
 
-Codex 写入 `~/.codex/config.toml`，使用 `wire_api = "responses"` 和 `env_key = "OLLAMA_API_KEY"`。API Key 只保存到 `~/.code-switch/config.json`，不会明文写入 Codex TOML。
-
-切换 Codex 后，在启动 Codex 的同一个 shell 里执行：
-
-```bash
-eval "$(cs env ollama-cloud --agent codex)"
-```
+Codex 写入 `~/.codex/config.toml`，使用 `wire_api = "responses"` 和 command-backed auth。API Key 只保存到 `~/.code-switch/config.json`，不会明文写入 Codex TOML；Codex 运行时会通过 `cs token ollama-cloud --agent codex` 读取已保存的 key。
 
 MiniMax 中国区参考官方 CN 文档：
 
@@ -391,15 +385,11 @@ model_provider = "ollama-cloud"
 [model_providers.ollama-cloud]
 name = "Ollama Cloud"
 base_url = "https://ollama.com/v1"
-env_key = "OLLAMA_API_KEY"
-env_key_instructions = "Set OLLAMA_API_KEY to your Ollama API key"
 wire_api = "responses"
-```
 
-Codex 运行时仍需要当前 shell 里存在 `OLLAMA_API_KEY`。如果 key 已通过 TUI 或 `cs switch ... --agent codex --api-key ...` 保存，可以执行：
-
-```bash
-eval "$(cs env ollama-cloud --agent codex)"
+[model_providers.ollama-cloud.auth]
+command = "cs"
+args = ["token", "ollama-cloud", "--agent", "codex"]
 ```
 
 ### 6. 覆盖默认模型
@@ -475,11 +465,7 @@ cs switch ollama-cloud --agent codex --codex-dir /path/to/.codex
 
 大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`，包括 `opencode-go` 的 MiniMax 和 DeepSeek 模型。`deepseek`、`xiaomimimo-cn`、`ollama` 和 `ollama-cloud` provider 会写入 `ANTHROPIC_AUTH_TOKEN`。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
 
-Codex 的 API Key 不写入 TOML；Codex 运行时请通过环境变量提供：
-
-```bash
-eval "$(cs env ollama-cloud --agent codex)"
-```
+Codex 的 API Key 不写入 TOML；Codex 运行时通过 `[model_providers.ollama-cloud.auth]` 调用 `cs token ollama-cloud --agent codex` 获取已保存的 key。
 
 恢复官方配置：
 

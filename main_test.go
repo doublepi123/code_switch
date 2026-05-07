@@ -25,6 +25,22 @@ import (
 	"github.com/rivo/tview"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func testHTTPResponse(req *http.Request, statusCode int, body []byte) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     fmt.Sprintf("%d %s", statusCode, http.StatusText(statusCode)),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Request:    req,
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	oldVersion := version
 	version = "v-test"
@@ -134,6 +150,20 @@ func TestUpgradeAssetName(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowBuildsCodeSwitchAssets(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	workflow := string(data)
+	if !strings.Contains(workflow, "PROJECT_NAME: code-switch") {
+		t.Fatalf("release workflow must publish code-switch assets:\n%s", workflow)
+	}
+	if strings.Contains(workflow, "PROJECT_NAME: claude-switch") {
+		t.Fatalf("release workflow still publishes claude-switch assets:\n%s", workflow)
+	}
+}
+
 func TestReleaseDownloadURL(t *testing.T) {
 	if got, want := releaseDownloadURL("https://github.com/", "owner/repo", "", "asset.tar.gz"), "https://github.com/owner/repo/releases/latest/download/asset.tar.gz"; got != want {
 		t.Fatalf("latest URL = %q, want %q", got, want)
@@ -207,6 +237,71 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "upgraded code-switch to latest release") {
 		t.Fatalf("expected success output, got %q", output.String())
+	}
+}
+
+func TestPerformUpgradeFallsBackToLegacyClaudeSwitchAsset(t *testing.T) {
+	oldVersion := version
+	version = "dev"
+	t.Cleanup(func() {
+		version = oldVersion
+	})
+
+	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Skip(err)
+	}
+	legacyAsset := strings.Replace(asset, "code-switch-", "claude-switch-", 1)
+
+	binaryName := "cs"
+	archiveBytes := makeTarGzArchive(t, binaryName, "legacy-release-binary")
+	if strings.HasSuffix(asset, ".zip") {
+		binaryName = "cs.exe"
+		archiveBytes = makeZipArchive(t, binaryName, "legacy-release-binary")
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.URL.Path, ".sha256") || strings.Contains(req.URL.Path, "checksums.txt") {
+			return testHTTPResponse(req, http.StatusNotFound, nil), nil
+		}
+		switch {
+		case strings.HasSuffix(req.URL.Path, "/"+asset):
+			return testHTTPResponse(req, http.StatusNotFound, nil), nil
+		case strings.HasSuffix(req.URL.Path, "/"+legacyAsset):
+			return testHTTPResponse(req, http.StatusOK, archiveBytes), nil
+		default:
+			t.Fatalf("unexpected download path: %s", req.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	installPath := filepath.Join(t.TempDir(), binaryName)
+	if err := os.WriteFile(installPath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatalf("write old binary: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	err = performUpgrade(upgradeOptions{
+		repo:        "owner/repo",
+		tag:         "v0.0.3",
+		installPath: installPath,
+		baseURL:     "https://example.test",
+		client:      client,
+		out:         output,
+	})
+	if err != nil {
+		t.Fatalf("performUpgrade returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(installPath)
+	if err != nil {
+		t.Fatalf("read installed binary: %v", err)
+	}
+	if got, want := string(data), "legacy-release-binary"; got != want {
+		t.Fatalf("installed binary = %q, want %q", got, want)
+	}
+	if !strings.Contains(output.String(), legacyAsset) {
+		t.Fatalf("upgrade output missing legacy fallback asset %q:\n%s", legacyAsset, output.String())
 	}
 }
 
