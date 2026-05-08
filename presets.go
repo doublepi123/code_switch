@@ -175,7 +175,7 @@ var providerPresets = map[string]ProviderPreset{
 		ExtraEnv: map[string]any{
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":  "1",
 			"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
-			"CLAUDE_CODE_EFFORT_LEVEL":                  "max",
+			"CLAUDE_CODE_EFFORT_LEVEL":                  "xhigh",
 		},
 	},
 	"opencode-go": {
@@ -193,7 +193,7 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
 		ExtraEnv: map[string]any{
-			"CLAUDE_CODE_EFFORT_LEVEL": "max",
+			"CLAUDE_CODE_EFFORT_LEVEL": "xhigh",
 		},
 	},
 	"xiaomimimo-cn": {
@@ -253,8 +253,8 @@ var providerPresets = map[string]ProviderPreset{
 		Subagent:        "qwen3-coder:480b",
 		ForceModelTiers: true,
 		ModelReasoningEffort: map[string]string{
-			"deepseek-v4-pro":   "max",
-			"deepseek-v4-flash": "max",
+			"deepseek-v4-pro":   "xhigh",
+			"deepseek-v4-flash": "xhigh",
 		},
 		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		Website:         "https://ollama.com/cloud",
