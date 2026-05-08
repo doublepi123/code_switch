@@ -284,38 +284,71 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 
 func (ts *tuiState) showModels(provider, backPage string) {
 	ts.selectedProvider = provider
-	models := ts.buildModels(provider)
+	allModels := ts.buildModels(provider)
+	defaultModel := defaultSelectionModelForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
+
 	modelList := tview.NewList()
 	modelList.ShowSecondaryText(false)
 	modelList.SetBorder(true)
 	modelList.SetTitle(" Models ")
-	for _, model := range models {
-		label := model
-		if model == defaultSelectionModelForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel) {
-			label += " [default]"
-		}
-		modelName := model
-		modelList.AddItem(label, "", 0, func() {
-			preset, _ := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
-			if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
-				ts.showKeyForm(provider, backPage, func() {
-					ts.showModels(provider, backPage)
-				})
-				return
+
+	searchInput := tview.NewInputField()
+	searchInput.SetLabel("Filter: ")
+	searchInput.SetPlaceholder("type to filter models...")
+	searchInput.SetFieldBackgroundColor(tcell.ColorDefault)
+
+	populateModels := func(filter string) {
+		modelList.Clear()
+		filter = strings.ToLower(strings.TrimSpace(filter))
+		for _, model := range allModels {
+			if filter != "" && !strings.Contains(strings.ToLower(model), filter) {
+				continue
 			}
-			ts.finishSelection(provider, modelName)
+			label := model
+			if model == defaultModel {
+				label += " [default]"
+			}
+			modelName := model
+			modelList.AddItem(label, "", 0, func() {
+				preset, _ := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+				if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
+					ts.showKeyForm(provider, backPage, func() {
+						ts.showModels(provider, backPage)
+					})
+					return
+				}
+				ts.finishSelection(provider, modelName)
+			})
+		}
+		modelList.AddItem("Custom model...", "", 0, func() {
+			ts.showCustomModelForm(provider)
 		})
+		selectedIndex := modelIndexForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
+		if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
+			selectedIndex = 0
+		}
+		if selectedIndex >= 0 && selectedIndex < modelList.GetItemCount()-1 {
+			modelList.SetCurrentItem(selectedIndex)
+		}
 	}
-	modelList.AddItem("Custom model...", "", 0, func() {
-		ts.showCustomModelForm(provider)
+
+	searchInput.SetChangedFunc(func(text string) {
+		populateModels(text)
 	})
-	selectedIndex := modelIndexForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
-	if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
-		selectedIndex = 0
-	}
-	if selectedIndex >= 0 && selectedIndex < len(models) {
-		modelList.SetCurrentItem(selectedIndex)
-	}
+
+	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			searchInput.SetText("")
+			ts.app.SetFocus(modelList)
+			return nil
+		}
+		if event.Key() == tcell.KeyDown {
+			ts.app.SetFocus(modelList)
+			return nil
+		}
+		return event
+	})
+
 	modelList.SetDoneFunc(func() {
 		ts.showDetail(provider, backPage)
 	})
@@ -327,6 +360,9 @@ func (ts *tuiState) showModels(provider, backPage string) {
 		case event.Rune() == 'q' || event.Rune() == 'Q':
 			ts.showDetail(provider, backPage)
 			return nil
+		case event.Rune() == '/':
+			ts.app.SetFocus(searchInput)
+			return nil
 		case event.Rune() == 'k' || event.Rune() == 'K':
 			ts.showKeyForm(provider, backPage, func() {
 				ts.showModels(provider, backPage)
@@ -335,17 +371,26 @@ func (ts *tuiState) showModels(provider, backPage string) {
 		case event.Rune() == 'c' || event.Rune() == 'C':
 			ts.showCustomModelForm(provider)
 			return nil
+		case event.Rune() == 'r' || event.Rune() == 'R':
+			allModels = ts.buildModels(provider)
+			populateModels(searchInput.GetText())
+			return nil
 		}
 		return event
 	})
+
+	populateModels("")
+
 	help := tview.NewTextView()
-	help.SetText("Enter apply   c custom model   k edit key   q/esc/← back")
+	help.SetText("Enter apply   / filter   c custom   k edit key   r refresh   q/esc/← back")
+
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
+	page.AddItem(searchInput, 1, 0, false)
 	page.AddItem(modelList, 0, 1, true)
 	page.AddItem(help, 1, 0, false)
 	ts.pages.AddAndSwitchToPage("models", page, true)
-	ts.app.SetFocus(modelList)
+	ts.app.SetFocus(searchInput)
 }
 
 func (ts *tuiState) showKeyForm(provider, backPage string, onSave func()) {
