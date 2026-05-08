@@ -536,3 +536,204 @@ func TestCodexListAndTUIProviderNamesIncludeRestore(t *testing.T) {
 		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }
+
+func TestCodexSwitchOpenRouterWritesCorrectTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "openrouter", "--agent", "codex", "--api-key", "or-sk-test", "--model", "anthropic/claude-sonnet-4.6", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex openrouter switch returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	config := string(configBytes)
+	for _, want := range []string{
+		`model = "anthropic/claude-sonnet-4.6"`,
+		`model_provider = "OpenRouter"`,
+		`approvals_reviewer = "user"`,
+		`[model_providers.OpenRouter]`,
+		`name = "OpenRouter"`,
+		`base_url = "https://openrouter.ai/api/v1"`,
+		`wire_api = "responses"`,
+		`[model_providers.OpenRouter.auth]`,
+		`command = "cs"`,
+		`args = ["token", "openrouter", "--agent", "codex"]`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("codex openrouter config missing %q:\n%s", want, config)
+		}
+	}
+	if strings.Contains(config, "or-sk-test") {
+		t.Fatalf("codex config must not contain plaintext api key:\n%s", config)
+	}
+	if strings.Contains(config, `model_provider = "ollama-cloud"`) {
+		t.Fatalf("codex config should not contain ollama-cloud:\n%s", config)
+	}
+
+	appBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read app config: %v", err)
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(appBytes, &cfg); err != nil {
+		t.Fatalf("unmarshal app config: %v", err)
+	}
+	if got := cfg.Agents["codex"].Providers["openrouter"].APIKey; got != "or-sk-test" {
+		t.Fatalf("codex stored openrouter key = %q, want %q", got, "or-sk-test")
+	}
+	if _, ok := cfg.Providers["openrouter"]; ok {
+		t.Fatalf("codex switch should not write top-level claude provider config")
+	}
+}
+
+func TestCodexSwitchOpenRouterPrintsCorrectOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "openrouter", "--agent", "codex", "--api-key", "or-sk-test", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex openrouter switch returned error: %v", err)
+	}
+
+	out := output.String()
+	if !strings.Contains(out, `auth: cs token openrouter --agent codex`) {
+		t.Fatalf("codex openrouter switch output missing token auth helper:\n%s", out)
+	}
+	if strings.Contains(out, "or-sk-test") {
+		t.Fatalf("codex switch output must not print plaintext api key:\n%s", out)
+	}
+}
+
+func TestCodexRestoreRemovesOpenRouterSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+	configPath := filepath.Join(codexDir, "config.toml")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	initial := `approval_policy = "on-request"
+model = "anthropic/claude-sonnet-4.6"
+model_provider = "OpenRouter"
+approvals_reviewer = "user"
+
+[model_providers.OpenRouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+wire_api = "responses"
+
+[model_providers.OpenRouter.auth]
+command = "cs"
+args = ["token", "openrouter", "--agent", "codex"]
+
+[profiles.work]
+model = "gpt-5.5"
+model_provider = "openai"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write codex config: %v", err)
+	}
+
+	if err := runWithIO([]string{"restore", "--agent", "codex", "--codex-dir", codexDir}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatalf("codex restore returned error: %v", err)
+	}
+
+	restoredBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read restored codex config: %v", err)
+	}
+	restored := string(restoredBytes)
+	for _, unwanted := range []string{`model_provider = "OpenRouter"`, `model = "anthropic/claude-sonnet-4.6"`, `approvals_reviewer = "user"`, `[model_providers.OpenRouter]`, `[model_providers.OpenRouter.auth]`, `wire_api = "responses"`, `command = "cs"`} {
+		if strings.Contains(restored, unwanted) {
+			t.Fatalf("restored codex config still contains %q:\n%s", unwanted, restored)
+		}
+	}
+	for _, want := range []string{`approval_policy = "on-request"`, `[profiles.work]`, `model = "gpt-5.5"`, `model_provider = "openai"`} {
+		if !strings.Contains(restored, want) {
+			t.Fatalf("restored codex config lost %q:\n%s", want, restored)
+		}
+	}
+}
+
+func TestCodexSwitchRejectsUnsupportedProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"switch", "deepseek", "--agent", "codex"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for unsupported provider deepseek on codex")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider") {
+		t.Fatalf("expected unsupported provider error, got: %v", err)
+	}
+}
+
+func TestCodexListIncludesOpenRouter(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--agent", "codex"}, output); err != nil {
+		t.Fatalf("cmdList codex returned error: %v", err)
+	}
+	out := output.String()
+	for _, want := range []string{"ollama-cloud", "openrouter"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("codex list missing %q: %q", want, out)
+		}
+	}
+	if strings.Contains(out, "deepseek") {
+		t.Fatalf("codex list should not include Claude-only providers: %q", out)
+	}
+
+	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
+	if len(names) != 3 || names[0] != "ollama-cloud" || names[1] != "openrouter" || names[2] != restoreProviderOption {
+		t.Fatalf("codex TUI provider names = %v, want [ollama-cloud openrouter __restore__]", names)
+	}
+}
+
+func TestCodexEnvOpenRouterPrintsCorrectOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			"codex": {
+				Providers: map[string]StoredProvider{
+					"openrouter": {APIKey: "or-sk-test"},
+				},
+			},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "openrouter", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex env openrouter returned error: %v", err)
+	}
+
+	out := output.String()
+	if !strings.Contains(out, "export ANTHROPIC_BASE_URL='https://openrouter.ai/api/v1'") {
+		t.Fatalf("env output missing base_url: %s", out)
+	}
+	if !strings.Contains(out, "export OPENROUTER_API_KEY='or-sk-test'") {
+		t.Fatalf("env output missing auth env: %s", out)
+	}
+}
+
+func TestDiscoverOpenRouterModelsEmptyKey(t *testing.T) {
+	models := discoverOpenRouterModels("")
+	if models != nil {
+		t.Fatalf("expected nil for empty key, got %v", models)
+	}
+}
