@@ -81,14 +81,27 @@ func codexOllamaCloudPreset() ProviderPreset {
 	return preset
 }
 
+func codexOpenRouterPreset() ProviderPreset {
+	preset := providerPresets["openrouter"]
+	preset.BaseURL = "https://openrouter.ai/api/v1"
+	preset.AuthEnv = "OPENROUTER_API_KEY"
+	preset.ForceModelTiers = true
+	return preset
+}
+
 func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig) (ProviderPreset, error) {
 	switch agent {
 	case agentCodex:
 		provider = canonicalProviderName(provider)
-		if provider != "ollama-cloud" {
+		var preset ProviderPreset
+		switch provider {
+		case "ollama-cloud":
+			preset = codexOllamaCloudPreset()
+		case "openrouter":
+			preset = codexOpenRouterPreset()
+		default:
 			return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent codex", provider)
 		}
-		preset := codexOllamaCloudPreset()
 		if stored := codexProviderConfig(cfg, provider); strings.TrimSpace(stored.Model) != "" {
 			preset = withSelectedModel(preset, stored.Model)
 		}
@@ -102,10 +115,15 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 	switch agent {
 	case agentCodex:
 		provider = canonicalProviderName(provider)
-		if provider != "ollama-cloud" {
+		var preset ProviderPreset
+		switch provider {
+		case "ollama-cloud":
+			preset = codexOllamaCloudPreset()
+		case "openrouter":
+			preset = codexOpenRouterPreset()
+		default:
 			return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent codex", provider)
 		}
-		preset := codexOllamaCloudPreset()
 		model := strings.TrimSpace(modelOverride)
 		if model == "" {
 			model = strings.TrimSpace(codexProviderConfig(cfg, provider).Model)
@@ -120,7 +138,7 @@ func providerNamesForAgent(agent AgentName, cfg *AppConfig, includeCustomOption 
 	var names []string
 	switch agent {
 	case agentCodex:
-		names = []string{"ollama-cloud"}
+		names = []string{"ollama-cloud", "openrouter"}
 	default:
 		names = sortedProviderNames(cfg, includeCustomOption)
 	}
@@ -135,6 +153,11 @@ func providerModelsForAgent(cfg *AppConfig, agent AgentName, provider string) []
 		preset, err := resolveAgentProviderPreset(agent, provider, cfg)
 		if err != nil {
 			return nil
+		}
+		if provider == "openrouter" {
+			if models := openRouterModels(cfg); len(models) > 0 {
+				return models
+			}
 		}
 		if len(preset.Models) == 0 {
 			return []string{preset.Model}

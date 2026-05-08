@@ -527,12 +527,12 @@ func TestCodexListAndTUIProviderNamesIncludeRestore(t *testing.T) {
 	if !strings.Contains(out, "ollama-cloud") {
 		t.Fatalf("codex list missing ollama-cloud: %q", out)
 	}
-	if strings.Contains(out, "openrouter") || strings.Contains(out, "deepseek") {
-		t.Fatalf("codex list should not include Claude providers: %q", out)
+	if strings.Contains(out, "deepseek") {
+		t.Fatalf("codex list should not include Claude-only providers: %q", out)
 	}
 
 	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
-	if len(names) != 2 || names[0] != "ollama-cloud" || names[1] != restoreProviderOption {
+	if len(names) != 3 || names[0] != "ollama-cloud" || names[1] != "openrouter" || names[2] != restoreProviderOption {
 		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }
