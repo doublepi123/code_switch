@@ -17,6 +17,14 @@ type ollamaModel struct {
 	Name string `json:"name"`
 }
 
+type openRouterModelsResponse struct {
+	Data []openRouterModelData `json:"data"`
+}
+
+type openRouterModelData struct {
+	ID string `json:"id"`
+}
+
 func discoverOllamaModels() []string {
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get("http://localhost:11434/api/tags")
@@ -54,6 +62,53 @@ func ollamaModels() []string {
 		return discovered
 	}
 	return providerPresets["ollama"].Models
+}
+
+func discoverOpenRouterModels(apiKey string) []string {
+	if strings.TrimSpace(apiKey) == "" {
+		return nil
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, "https://openrouter.ai/api/v1/models", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var data openRouterModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil
+	}
+	if len(data.Data) == 0 {
+		return nil
+	}
+	models := make([]string, 0, len(data.Data))
+	for _, m := range data.Data {
+		id := strings.TrimSpace(m.ID)
+		if id != "" {
+			models = append(models, id)
+		}
+	}
+	sort.Strings(models)
+	return models
+}
+
+func openRouterModels(cfg *AppConfig) []string {
+	apiKey := storedAPIKeyForAgent(cfg, agentCodex, "openrouter")
+	if apiKey == "" {
+		apiKey = storedAPIKeyForAgent(cfg, agentClaude, "openrouter")
+	}
+	if discovered := discoverOpenRouterModels(apiKey); len(discovered) > 0 {
+		return discovered
+	}
+	return providerPresets["openrouter"].Models
 }
 
 type ModelTiers struct {
