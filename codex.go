@@ -149,15 +149,25 @@ func restoreCodexConfig(codexDir string, cfg *AppConfig, out io.Writer, dryRun b
 
 func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTopLevelProvider bool, cfg *AppConfig) string {
 	provider, model, _, _ := parseCodexTopLevel(existing)
+
+	isKnownProvider := false
+	for _, p := range []string{"ollama-cloud", "openrouter"} {
+		pName := codexTOMLProviderName(p)
+		if provider == pName {
+			isKnownProvider = true
+			break
+		}
+	}
+
 	if !removeTopLevelProvider {
-		removeTopLevelProvider = provider == "ollama-cloud"
+		removeTopLevelProvider = isKnownProvider
 	}
 	if !removeTopLevelModel {
-		removeTopLevelModel = provider == "ollama-cloud" && isManagedCodexModel(model, cfg)
+		removeTopLevelModel = isKnownProvider && isManagedCodexModel(model, cfg)
 	}
 	removeTopLevelApprovalsReviewer := removeTopLevelModel && removeTopLevelProvider
 	if !removeTopLevelApprovalsReviewer {
-		removeTopLevelApprovalsReviewer = provider == "ollama-cloud"
+		removeTopLevelApprovalsReviewer = isKnownProvider
 	}
 
 	lines := strings.Split(existing, "\n")
@@ -167,7 +177,14 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 	for _, line := range lines {
 		if name, ok := tomlSectionName(line); ok {
 			section = name
-			skipSection = name == "model_providers.ollama-cloud" || strings.HasPrefix(name, "model_providers.ollama-cloud.")
+			skipSection = false
+			for _, p := range []string{"ollama-cloud", "openrouter"} {
+				pName := codexTOMLProviderName(p)
+				if name == "model_providers."+pName || strings.HasPrefix(name, "model_providers."+pName+".") {
+					skipSection = true
+					break
+				}
+			}
 			if skipSection {
 				continue
 			}
@@ -206,12 +223,18 @@ func isManagedCodexModel(model string, cfg *AppConfig) bool {
 	if model == "" {
 		return false
 	}
-	preset := codexOllamaCloudPreset()
-	if model == preset.Model || containsString(preset.Models, model) {
-		return true
+	for _, fn := range []func() ProviderPreset{codexOllamaCloudPreset, codexOpenRouterPreset} {
+		preset := fn()
+		if model == preset.Model || containsString(preset.Models, model) {
+			return true
+		}
 	}
-	if cfg != nil && strings.TrimSpace(codexProviderConfig(cfg, "ollama-cloud").Model) == model {
-		return true
+	if cfg != nil {
+		for _, p := range []string{"ollama-cloud", "openrouter"} {
+			if strings.TrimSpace(codexProviderConfig(cfg, p).Model) == model {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -236,7 +259,7 @@ func parseCodexTopLevel(content string) (provider string, model string, baseURL 
 			case "model":
 				model = tomlStringValue(value)
 			}
-		case "model_providers.ollama-cloud":
+		default:
 			if key == "base_url" {
 				baseURL = tomlStringValue(value)
 			}
