@@ -423,7 +423,7 @@ func printUsage(out io.Writer) {
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}
-	fmt.Fprint(out, "\nCodex providers:\n  ollama-cloud\n")
+	fmt.Fprint(out, "\nCodex providers:\n  ollama-cloud\n  openrouter\n")
 }
 
 func makeCustomProviderKey(name string) string {
