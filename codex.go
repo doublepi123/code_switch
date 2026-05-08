@@ -34,6 +34,17 @@ func codexTOMLProviderName(provider string) string {
 	}
 }
 
+func codexTOMLProviderKey(providerName string) string {
+	switch providerName {
+	case "OpenRouter":
+		return "openrouter"
+	case "ollama-cloud":
+		return "ollama-cloud"
+	default:
+		return providerName
+	}
+}
+
 func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride, codexDir string, out io.Writer, dryRun bool) error {
 	provider = canonicalProviderName(provider)
 	preset, err := resolveAgentSwitchPreset(agentCodex, provider, cfg, modelOverride)

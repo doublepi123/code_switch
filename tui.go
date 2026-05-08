@@ -37,6 +37,11 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	}
 
 	currentProvider, currentModel := currentConfiguredProvider(cfg, *claudeDir)
+	if agent == agentCodex {
+		_, cp, cm, _, _ := currentCodexProvider(*codexDir)
+		currentProvider = codexTOMLProviderKey(cp)
+		currentModel = cm
+	}
 	reader := bufio.NewReader(in)
 	var selection ConfigureSelection
 	if file, ok := in.(*os.File); ok && shouldUseArrowTUI(file) {
