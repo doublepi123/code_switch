@@ -253,8 +253,8 @@ var providerPresets = map[string]ProviderPreset{
 		Subagent:        "qwen3-coder:480b",
 		ForceModelTiers: true,
 		ModelReasoningEffort: map[string]string{
-			"deepseek-v4-pro":   "xhigh",
-			"deepseek-v4-flash": "xhigh",
+			"deepseek-v4-pro":   "max",
+			"deepseek-v4-flash": "max",
 		},
 		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		Website:         "https://ollama.com/cloud",

@@ -157,7 +157,7 @@ func TestCodexSwitchDeepSeekV4SetsReasoningEffortXhigh(t *testing.T) {
 		t.Fatalf("read codex config: %v", err)
 	}
 	config := string(configBytes)
-	if !strings.Contains(config, `reasoning_effort = "xhigh"`) {
+	if !strings.Contains(config, `reasoning_effort = "max"`) {
 		t.Fatalf("codex config missing reasoning_effort = xhigh:\n%s", config)
 	}
 }
