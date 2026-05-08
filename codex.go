@@ -25,6 +25,15 @@ func codexConfigPath(overrideDir string) string {
 	return filepath.Join(dir, "config.toml")
 }
 
+func codexTOMLProviderName(provider string) string {
+	switch provider {
+	case "openrouter":
+		return "OpenRouter"
+	default:
+		return provider
+	}
+}
+
 func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride, codexDir string, out io.Writer, dryRun bool) error {
 	provider = canonicalProviderName(provider)
 	preset, err := resolveAgentSwitchPreset(agentCodex, provider, cfg, modelOverride)
@@ -49,7 +58,7 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 		return err
 	}
 
-	updated := applyCodexPresetTOML(existing, preset)
+	updated := applyCodexPresetTOML(existing, preset, provider)
 	if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
 		return err
 	}
@@ -67,7 +76,7 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 	return nil
 }
 
-func applyCodexPresetTOML(existing string, preset ProviderPreset) string {
+func applyCodexPresetTOML(existing string, preset ProviderPreset, provider string) string {
 	cleaned := removeCodexManagedTOML(existing, true, true, nil)
 	topLevel, sections := splitBeforeFirstTOMLSection(cleaned)
 	var b strings.Builder
@@ -77,7 +86,8 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset) string {
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "model = %q\n", preset.Model)
-	fmt.Fprintf(&b, "model_provider = %q\n", "ollama-cloud")
+	providerName := codexTOMLProviderName(provider)
+	fmt.Fprintf(&b, "model_provider = %q\n", providerName)
 	b.WriteString("approvals_reviewer = \"user\"\n")
 	if preset.ReasoningEffort != "" {
 		fmt.Fprintf(&b, "reasoning_effort = %q\n", preset.ReasoningEffort)
@@ -88,13 +98,13 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset) string {
 		b.WriteString(strings.TrimRight(strings.TrimLeft(sections, "\n"), "\n"))
 	}
 	b.WriteString("\n\n")
-	b.WriteString("[model_providers.ollama-cloud]\n")
+	fmt.Fprintf(&b, "[model_providers.%s]\n", providerName)
 	fmt.Fprintf(&b, "name = %q\n", preset.Name)
 	fmt.Fprintf(&b, "base_url = %q\n", preset.BaseURL)
 	b.WriteString("wire_api = \"responses\"\n")
-	b.WriteString("\n[model_providers.ollama-cloud.auth]\n")
+	b.WriteString(fmt.Sprintf("\n[model_providers.%s.auth]\n", providerName))
 	b.WriteString("command = \"cs\"\n")
-	b.WriteString("args = [\"token\", \"ollama-cloud\", \"--agent\", \"codex\"]\n")
+	fmt.Fprintf(&b, "args = [\"token\", %q, \"--agent\", \"codex\"]\n", provider)
 	return b.String()
 }
 
