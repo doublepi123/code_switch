@@ -79,6 +79,8 @@ type ProviderPreset struct {
 	Website            string
 	APIKeyURL          string
 	NoAPIKey           bool
+	ReasoningEffort      string
+	ModelReasoningEffort map[string]string
 }
 
 type StoredProvider struct {
@@ -250,6 +252,10 @@ var providerPresets = map[string]ProviderPreset{
 		Opus:            "qwen3-coder:480b",
 		Subagent:        "qwen3-coder:480b",
 		ForceModelTiers: true,
+		ModelReasoningEffort: map[string]string{
+			"deepseek-v4-pro":   "xhigh",
+			"deepseek-v4-flash": "xhigh",
+		},
 		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		Website:         "https://ollama.com/cloud",
 		APIKeyURL:       "https://ollama.com/settings/keys",
@@ -411,6 +417,9 @@ func validateProviderModel(provider, model string) error {
 func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 	model = strings.TrimSpace(model)
 	if model == "" {
+		if re, ok := preset.ModelReasoningEffort[preset.Model]; ok {
+			preset.ReasoningEffort = re
+		}
 		if preset.ForceModelTiers {
 			return withForcedModelTiers(preset, preset.Model)
 		}
@@ -419,6 +428,9 @@ func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 
 	isPresetModel := containsString(preset.Models, model)
 	preset.Model = model
+	if re, ok := preset.ModelReasoningEffort[model]; ok {
+		preset.ReasoningEffort = re
+	}
 	if !isPresetModel {
 		preset.Models = append([]string{model}, preset.Models...)
 	}

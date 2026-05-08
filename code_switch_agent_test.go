@@ -142,6 +142,27 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	}
 }
 
+func TestCodexSwitchDeepSeekV4SetsReasoningEffortXhigh(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "ollama-cloud", "--agent", "codex", "--api-key", "ollama-sk", "--model", "deepseek-v4-pro", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex switch returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	config := string(configBytes)
+	if !strings.Contains(config, `reasoning_effort = "xhigh"`) {
+		t.Fatalf("codex config missing reasoning_effort = xhigh:\n%s", config)
+	}
+}
+
+
 func TestCodexSwitchPrintsCommandAuthForSavedKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
