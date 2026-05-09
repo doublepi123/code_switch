@@ -7495,3 +7495,92 @@ func TestColorizeWithColor(t *testing.T) {
 		t.Fatalf("formatLabel should contain bold escape")
 	}
 }
+
+func TestCmdCurrentOutputFormat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL":   "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_MODEL":      "deepseek-v4-pro",
+			"ANTHROPIC_AUTH_TOKEN": "sk-test",
+		},
+	}
+	writeJSONAtomic(settingsPath, root)
+
+	origNoColor := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = origNoColor })
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"current", "--claude-dir", claudeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("current returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "provider: deepseek") {
+		t.Fatalf("current output missing provider: %s", out)
+	}
+	if !strings.Contains(out, "model: deepseek-v4-pro") {
+		t.Fatalf("current output missing model: %s", out)
+	}
+	if !strings.Contains(out, "base_url: https://api.deepseek.com/anthropic") {
+		t.Fatalf("current output missing base_url: %s", out)
+	}
+}
+
+func TestCmdCurrentOutputWithColor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL":   "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_MODEL":      "deepseek-v4-pro",
+			"ANTHROPIC_AUTH_TOKEN": "sk-test",
+		},
+	}
+	writeJSONAtomic(settingsPath, root)
+
+	origNoColor := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = origNoColor })
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"current", "--claude-dir", claudeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("current returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "deepseek") {
+		t.Fatalf("current output missing provider: %s", out)
+	}
+	if !strings.Contains(out, "\x1b[2m") {
+		t.Fatalf("current output should contain dim escape with color enabled: %s", out)
+	}
+}
+
+func TestSwitchSuccessOutputFormat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	origNoColor := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = origNoColor })
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "deepseek", "--claude-dir", claudeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("switch returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "[OK]") {
+		t.Fatalf("switch output missing success prefix: %s", out)
+	}
+}
