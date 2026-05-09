@@ -6298,3 +6298,127 @@ func TestModelIndexForAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := codexConfigPath("")
+	if !strings.HasSuffix(path, filepath.Join(".codex", "config.toml")) {
+		t.Fatalf("default path = %q, want ~/.codex/config.toml", path)
+	}
+
+	customPath := codexConfigPath("/custom/dir")
+	if customPath != filepath.Join("/custom/dir", "config.toml") {
+		t.Fatalf("custom path = %q, want /custom/dir/config.toml", customPath)
+	}
+}
+
+func TestCodexTOMLProviderKeyMapping(t *testing.T) {
+	if got := codexTOMLProviderKey("OpenRouter"); got != "openrouter" {
+		t.Fatalf("codexTOMLProviderKey(OpenRouter) = %q, want openrouter", got)
+	}
+	if got := codexTOMLProviderKey("ollama-cloud"); got != "ollama-cloud" {
+		t.Fatalf("codexTOMLProviderKey(ollama-cloud) = %q, want ollama-cloud", got)
+	}
+	if got := codexTOMLProviderKey("unknown"); got != "unknown" {
+		t.Fatalf("codexTOMLProviderKey(unknown) = %q, want unknown", got)
+	}
+}
+
+func TestIsManagedCodexModel(t *testing.T) {
+	if !isManagedCodexModel("qwen3-coder:480b", nil) {
+		t.Fatalf("qwen3-coder:480b should be managed")
+	}
+	if !isManagedCodexModel("anthropic/claude-sonnet-4.6", nil) {
+		t.Fatalf("anthropic/claude-sonnet-4.6 should be managed (openrouter model)")
+	}
+	if isManagedCodexModel("some-random-model", nil) {
+		t.Fatalf("random model should not be managed")
+	}
+	cfg := &AppConfig{Agents: map[string]AgentConfig{"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {Model: "custom-model"}}}}}
+	if !isManagedCodexModel("custom-model", cfg) {
+		t.Fatalf("stored model should be managed")
+	}
+}
+
+func TestWriteTextAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.toml")
+	content := "model = \"test\"\n"
+
+	if err := writeTextAtomic(path, content, 0o644); err != nil {
+		t.Fatalf("writeTextAtomic returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("content = %q, want %q", string(data), content)
+	}
+}
+
+func TestRestoreCodexConfigDryRun(t *testing.T) {
+	dir := t.TempDir()
+	codexDir := filepath.Join(dir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	configPath := filepath.Join(codexDir, "config.toml")
+	initial := "model = \"qwen3-coder:480b\"\nmodel_provider = \"ollama-cloud\"\n"
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	if err := restoreCodexConfig(codexDir, cfg, output, true); err != nil {
+		t.Fatalf("dry-run restore returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "[dry-run]") {
+		t.Fatalf("dry-run output missing [dry-run]: %q", output.String())
+	}
+
+	data, _ := os.ReadFile(configPath)
+	if string(data) != initial {
+		t.Fatalf("dry-run should not modify file")
+	}
+}
+
+func TestTestCodexProviderHTTPTest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"resp_test"}`))
+	}))
+	defer server.Close()
+
+	output := &bytes.Buffer{}
+	preset := codexOllamaCloudPreset()
+	preset.BaseURL = server.URL
+	if err := testCodexProvider(output, preset, "test-key"); err != nil {
+		t.Fatalf("testCodexProvider returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "OK") {
+		t.Fatalf("output = %q, want OK", output.String())
+	}
+}
+
+func TestTestCodexProviderHTTPTestFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid key"}`))
+	}))
+	defer server.Close()
+
+	output := &bytes.Buffer{}
+	preset := codexOllamaCloudPreset()
+	preset.BaseURL = server.URL
+	if err := testCodexProvider(output, preset, "bad-key"); err == nil {
+		t.Fatalf("expected error for 401 response")
+	}
+	if !strings.Contains(output.String(), "FAIL") {
+		t.Fatalf("output = %q, want FAIL", output.String())
+	}
+}
