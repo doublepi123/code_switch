@@ -245,6 +245,12 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider)))
 	}
 	fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(ts.currentProvider), currentModelLabel(ts.currentModel))
+	if preset.Website != "" {
+		fmt.Fprintf(&b, "[::b]Website[::-]     %s\n", preset.Website)
+	}
+	if preset.APIKeyURL != "" {
+		fmt.Fprintf(&b, "[::b]Get Key[::-]     %s\n", preset.APIKeyURL)
+	}
 	if !preset.NoAPIKey {
 		if ts.resetKeys[provider] {
 			fmt.Fprintf(&b, "[yellow]Pending key update on apply[-]\n")
@@ -261,6 +267,12 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	actions.AddItem("Choose Model", "", 'm', func() {
 		ts.showModels(provider, "detail")
 	})
+	canSwitch := preset.NoAPIKey || hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider])
+	if canSwitch {
+		actions.AddItem("Switch (default)", "", 's', func() {
+			ts.finishSelection(provider, preset.Model)
+		})
+	}
 	if !preset.NoAPIKey {
 		actions.AddItem("Edit API Key", "", 'k', func() {
 			ts.showKeyForm(provider, backPage, func() {
@@ -281,6 +293,9 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			ts.showKeyForm(provider, backPage, func() {
 				ts.showDetail(provider, backPage)
 			})
+			return nil
+		case canSwitch && (event.Rune() == 's' || event.Rune() == 'S'):
+			ts.finishSelection(provider, preset.Model)
 			return nil
 		}
 		return event
