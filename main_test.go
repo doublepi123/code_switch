@@ -6198,3 +6198,103 @@ func TestApplyModelOverridePresetModelWithTiers(t *testing.T) {
 		t.Fatalf("sonnet = %q, want %q", result.Sonnet, "tier-sonnet")
 	}
 }
+
+func TestProviderModelsForAgent(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+
+	claudeModels := providerModelsForAgent(cfg, agentClaude, "deepseek")
+	if len(claudeModels) == 0 {
+		t.Fatalf("expected non-empty model list for claude/deepseek")
+	}
+	if claudeModels[0] != providerPresets["deepseek"].Model {
+		t.Fatalf("first model = %q, want %q", claudeModels[0], providerPresets["deepseek"].Model)
+	}
+
+	codexModels := providerModelsForAgent(cfg, agentCodex, "ollama-cloud")
+	if len(codexModels) == 0 {
+		t.Fatalf("expected non-empty model list for codex/ollama-cloud")
+	}
+	if codexModels[0] != codexOllamaCloudPreset().Model {
+		t.Fatalf("first model = %q, want %q", codexModels[0], codexOllamaCloudPreset().Model)
+	}
+}
+
+func TestBuildModelListForAgent(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	customModels := map[string]string{}
+
+	models := buildModelListForAgent(cfg, agentClaude, "deepseek", customModels)
+	if len(models) == 0 {
+		t.Fatalf("expected non-empty model list")
+	}
+
+	customModels["deepseek"] = "my-custom-model"
+	models = buildModelListForAgent(cfg, agentClaude, "deepseek", customModels)
+	if models[0] != "my-custom-model" {
+		t.Fatalf("expected custom model first, got %q", models[0])
+	}
+
+	codexModels := buildModelListForAgent(cfg, agentCodex, "ollama-cloud", map[string]string{})
+	if len(codexModels) == 0 {
+		t.Fatalf("expected non-empty codex model list")
+	}
+}
+
+func TestSortedAgentNames(t *testing.T) {
+	names := sortedAgentNames()
+	if len(names) != 2 {
+		t.Fatalf("expected 2 agent names, got %d", len(names))
+	}
+	if names[0] != agentClaude || names[1] != agentCodex {
+		t.Fatalf("expected [claude, codex], got %v", names)
+	}
+}
+
+func TestDefaultSelectionModelForAgent(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+
+	model := defaultSelectionModelForAgent(cfg, agentClaude, "deepseek", "", "")
+	if model != providerPresets["deepseek"].Model {
+		t.Fatalf("claude default = %q, want %q", model, providerPresets["deepseek"].Model)
+	}
+
+	model = defaultSelectionModelForAgent(cfg, agentCodex, "ollama-cloud", "", "")
+	if model != codexOllamaCloudPreset().Model {
+		t.Fatalf("codex default = %q, want %q", model, codexOllamaCloudPreset().Model)
+	}
+
+	model = defaultSelectionModelForAgent(cfg, agentClaude, "deepseek", "deepseek", "deepseek-v4-flash")
+	if model != "deepseek-v4-flash" {
+		t.Fatalf("matching current model = %q, want deepseek-v4-flash", model)
+	}
+
+	model = defaultSelectionModelForAgent(cfg, agentCodex, "ollama-cloud", "ollama-cloud", "qwen3-coder:480b")
+	if model != "qwen3-coder:480b" {
+		t.Fatalf("codex matching current = %q, want qwen3-coder:480b", model)
+	}
+}
+
+func TestModelIndexForAgent(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+
+	idx := modelIndexForAgent(cfg, agentClaude, "deepseek", "", "")
+	if idx != 0 {
+		t.Fatalf("default claude model index = %d, want 0", idx)
+	}
+
+	idx = modelIndexForAgent(cfg, agentCodex, "ollama-cloud", "", "")
+	if idx != 0 {
+		t.Fatalf("default codex model index = %d, want 0", idx)
+	}
+
+	idx = modelIndexForAgent(cfg, agentClaude, "deepseek", "deepseek", "deepseek-v4-flash")
+	preset := providerPresets["deepseek"]
+	for i, m := range preset.Models {
+		if m == "deepseek-v4-flash" {
+			if idx != i {
+				t.Fatalf("claude model index for deepseek-v4-flash = %d, want %d", idx, i)
+			}
+			break
+		}
+	}
+}
