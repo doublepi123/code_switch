@@ -5877,6 +5877,9 @@ func TestTUIStateShowModels(t *testing.T) {
 	ts.providerPage.SetDirection(tview.FlexRow)
 	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
 	ts.pages.AddPage("providers", ts.providerPage, true, true)
+	ts.tierInfo = tview.NewTextView()
+	ts.tierInfo.SetDynamicColors(true)
+	ts.tierInfo.SetWrap(true)
 	ts.showModels("openrouter", "providers")
 }
 

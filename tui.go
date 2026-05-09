@@ -159,6 +159,7 @@ type tuiState struct {
 	providerList *tview.List
 	providerPage *tview.Flex
 	detailText   *tview.TextView
+	tierInfo     *tview.TextView
 }
 
 func (ts *tuiState) buildModels(provider string) []string {
@@ -293,6 +294,28 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	ts.app.SetFocus(actions)
 }
 
+func (ts *tuiState) updateTierInfo(provider, model string) {
+	if ts.tierInfo == nil {
+		return
+	}
+	if model == "" {
+		ts.tierInfo.SetText("")
+		return
+	}
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.tierInfo.SetText("")
+		return
+	}
+	preset = withSelectedModel(preset, model)
+	if preset.ForceModelTiers {
+		fmt.Fprintf(ts.tierInfo, "all tiers: %s", preset.Model)
+	} else {
+		fmt.Fprintf(ts.tierInfo, "haiku: %s | sonnet: %s | opus: %s | sub: %s",
+			preset.Haiku, preset.Sonnet, preset.Opus, preset.Subagent)
+	}
+}
+
 func (ts *tuiState) showModels(provider, backPage string) {
 	ts.selectedProvider = provider
 	allModels := ts.buildModels(provider)
@@ -391,6 +414,32 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	})
 
 	populateModels("")
+	ts.updateTierInfo(provider, defaultModel)
+
+	modelList.SetChangedFunc(func(index int, mainText string, secondaryText string, shortcut rune) {
+		filter := strings.ToLower(strings.TrimSpace(searchInput.GetText()))
+		matching := 0
+		for _, m := range allModels {
+			if filter != "" && !strings.Contains(strings.ToLower(m), filter) {
+				continue
+			}
+			matching++
+		}
+		if index >= 0 && index < matching {
+			filtered := []string{}
+			for _, m := range allModels {
+				if filter != "" && !strings.Contains(strings.ToLower(m), filter) {
+					continue
+				}
+				filtered = append(filtered, m)
+			}
+			if index < len(filtered) {
+				ts.updateTierInfo(provider, filtered[index])
+			}
+		} else {
+			ts.tierInfo.SetText("")
+		}
+	})
 
 	help := tview.NewTextView()
 	help.SetText("Enter apply   / filter   c custom   k edit key   r refresh   q/esc/← back")
@@ -398,6 +447,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
 	page.AddItem(searchInput, 1, 0, false)
+	page.AddItem(ts.tierInfo, 1, 0, false)
 	page.AddItem(modelList, 0, 1, true)
 	page.AddItem(help, 1, 0, false)
 	ts.pages.AddAndSwitchToPage("models", page, true)
@@ -643,6 +693,10 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 	ts.detailText.SetWrap(true)
 	ts.detailText.SetBorder(true)
 	ts.detailText.SetTitle(" Provider Details ")
+
+	ts.tierInfo = tview.NewTextView()
+	ts.tierInfo.SetDynamicColors(true)
+	ts.tierInfo.SetWrap(true)
 
 	ts.providerList.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		if index >= 0 && index < len(ts.names) {
