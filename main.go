@@ -115,10 +115,16 @@ func cmdList(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		keyStatus := "✗"
+		if preset.NoAPIKey {
+			keyStatus = "—"
+		} else if storedAPIKeyForAgent(cfg, agent, name) != "" {
+			keyStatus = "✓"
+		}
 		if *verbose {
-			fmt.Fprintf(out, "%s\t%s\t%s\t%v\n", name, preset.BaseURL, preset.Model, preset.Models)
+			fmt.Fprintf(out, "%s\t%s\t%s\t%v\t%s\n", name, preset.BaseURL, preset.Model, preset.Models, keyStatus)
 		} else {
-			fmt.Fprintf(out, "%s\t%s\t%s\n", name, preset.BaseURL, preset.Model)
+			fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", name, preset.BaseURL, preset.Model, keyStatus)
 		}
 	}
 	return nil
@@ -155,14 +161,14 @@ func cmdCurrent(args []string, out io.Writer) error {
 		model, _ := env["ANTHROPIC_MODEL"].(string)
 
 		fmt.Fprintf(out, "Claude Code\n")
-		fmt.Fprintf(out, "  settings: %s\n", settingsPath)
+		fmt.Fprintf(out, "  %s\n", formatLabel("settings", settingsPath))
 		if baseURL == "" {
-			fmt.Fprintf(out, "  provider: unknown\n")
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
 		} else {
-			fmt.Fprintf(out, "  provider: %s\n", detectProvider(baseURL, model))
-			fmt.Fprintf(out, "  base_url: %s\n", baseURL)
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", detectProvider(baseURL, model)))
+			fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
 			if model != "" {
-				fmt.Fprintf(out, "  model: %s\n", model)
+				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
 			}
 		}
 		if showBoth {
@@ -176,16 +182,16 @@ func cmdCurrent(args []string, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "Codex\n")
-		fmt.Fprintf(out, "  config: %s\n", configPath)
+		fmt.Fprintf(out, "  %s\n", formatLabel("config", configPath))
 		if provider == "" {
-			fmt.Fprintf(out, "  provider: unknown\n")
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
 		} else {
-			fmt.Fprintf(out, "  provider: %s\n", provider)
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", provider))
 			if baseURL != "" {
-				fmt.Fprintf(out, "  base_url: %s\n", baseURL)
+				fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
 			}
 			if model != "" {
-				fmt.Fprintf(out, "  model: %s\n", model)
+				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
 			}
 		}
 	}

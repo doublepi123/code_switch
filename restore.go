@@ -61,7 +61,7 @@ func restoreClaudeConfig(claudeDir string, out io.Writer, dryRun bool) error {
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "restored Claude official config\n")
-	fmt.Fprintf(out, "settings: %s\n", settingsPath)
+	fmt.Fprintf(out, "%s\n", successPrefix("restored Claude official config"))
+	fmt.Fprintf(out, "%s\n", formatLabel("settings", settingsPath))
 	return nil
 }

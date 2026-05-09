@@ -164,6 +164,10 @@ func TestCodexSwitchDeepSeekV4SetsReasoningEffortXhigh(t *testing.T) {
 
 
 func TestCodexSwitchPrintsCommandAuthForSavedKey(t *testing.T) {
+	origNoColor := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = origNoColor })
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	codexDir := filepath.Join(home, ".codex")
@@ -341,6 +345,10 @@ func TestCodexConfigureFallbackWritesConfig(t *testing.T) {
 }
 
 func TestCodexCurrentReadsConfig(t *testing.T) {
+	origNoColor := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = origNoColor })
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	codexDir := filepath.Join(home, ".codex")
@@ -592,6 +600,10 @@ func TestCodexSwitchOpenRouterWritesCorrectTOML(t *testing.T) {
 }
 
 func TestCodexSwitchOpenRouterPrintsCorrectOutput(t *testing.T) {
+	origNoColor := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = origNoColor })
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	codexDir := filepath.Join(home, ".codex")

@@ -166,10 +166,10 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 		return err
 	}
 
-	fmt.Fprintf(out, "switched Claude to %s\n", preset.Name)
-	fmt.Fprintf(out, "settings: %s\n", settingsPath)
-	fmt.Fprintf(out, "base_url: %s\n", preset.BaseURL)
-	fmt.Fprintf(out, "model: %s\n", preset.Model)
+	fmt.Fprintf(out, "%s\n", successPrefix(fmt.Sprintf("switched Claude to %s", preset.Name)))
+	fmt.Fprintf(out, "%s\n", formatLabel("settings", settingsPath))
+	fmt.Fprintf(out, "%s\n", formatLabel("base_url", preset.BaseURL))
+	fmt.Fprintf(out, "%s\n", formatLabel("model", preset.Model))
 	return nil
 }
 

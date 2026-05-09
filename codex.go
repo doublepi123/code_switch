@@ -79,11 +79,11 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 	stored.Model = preset.Model
 	setAgentProviderConfig(cfg, agentCodex, provider, stored)
 
-	fmt.Fprintf(out, "switched Codex to %s\n", preset.Name)
-	fmt.Fprintf(out, "config: %s\n", configPath)
-	fmt.Fprintf(out, "base_url: %s\n", preset.BaseURL)
-	fmt.Fprintf(out, "model: %s\n", preset.Model)
-	fmt.Fprintf(out, "auth: cs token %s --agent codex\n", provider)
+	fmt.Fprintf(out, "%s\n", successPrefix(fmt.Sprintf("switched Codex to %s", preset.Name)))
+	fmt.Fprintf(out, "%s\n", formatLabel("config", configPath))
+	fmt.Fprintf(out, "%s\n", formatLabel("base_url", preset.BaseURL))
+	fmt.Fprintf(out, "%s\n", formatLabel("model", preset.Model))
+	fmt.Fprintf(out, "%s\n", formatLabel("auth", fmt.Sprintf("cs token %s --agent codex", provider)))
 	return nil
 }
 
