@@ -516,8 +516,8 @@ func TestApplyPresetDeepSeekUsesAuthTokenAndExtraEnv(t *testing.T) {
 	if got := env["CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"]; got != "1" {
 		t.Fatalf("disable fallback = %v, want %v", got, "1")
 	}
-	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "max" {
-		t.Fatalf("effort level = %v, want %v", got, "max")
+	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "xhigh" {
+		t.Fatalf("effort level = %v, want %v", got, "xhigh")
 	}
 }
 
@@ -2581,8 +2581,8 @@ func TestTestProviderAuthError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-bad", "", server.Client()); err != nil {
-		t.Fatalf("testProvider returned error: %v", err)
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-bad", "", server.Client()); err == nil {
+		t.Fatal("expected error for auth failure")
 	}
 	out := output.String()
 	if !strings.Contains(out, "FAIL") {
@@ -2605,8 +2605,8 @@ func TestTestProviderNotFound(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
-		t.Fatalf("testProvider returned error: %v", err)
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err == nil {
+		t.Fatal("expected error for 404 response")
 	}
 	out := output.String()
 	if !strings.Contains(out, "FAIL") {
@@ -2630,8 +2630,8 @@ func TestTestProviderServerError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
-		t.Fatalf("testProvider returned error: %v", err)
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err == nil {
+		t.Fatal("expected error for 500 response")
 	}
 	out := output.String()
 	if !strings.Contains(out, "FAIL") {
@@ -2654,8 +2654,8 @@ func TestTestProviderNetworkError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProvider(output, preset, "sk-test", ""); err != nil {
-		t.Fatalf("testProvider returned error: %v", err)
+	if err := testProvider(output, preset, "sk-test", ""); err == nil {
+		t.Fatal("expected error for network failure")
 	}
 	out := output.String()
 	if !strings.Contains(out, "FAIL") {
@@ -2708,8 +2708,8 @@ func TestTestProviderReadErrorHandled(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
-		t.Fatalf("testProvider returned error: %v", err)
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err == nil {
+		t.Fatal("expected error for 502 response")
 	}
 	out := output.String()
 	if !strings.Contains(out, "FAIL") {
@@ -5985,5 +5985,216 @@ func TestTUIStateShowDetailWithResetKey(t *testing.T) {
 	// Verify showDetail with reset key doesn't panic
 	if ts.selectedProvider != "openrouter" {
 		t.Fatalf("expected selectedProvider openrouter, got %q", ts.selectedProvider)
+	}
+}
+
+// ---- TOML parser tests ----
+
+func TestTomlStringValueQuoted(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{`"hello"`, "hello"},
+		{`"hello world"`, "hello world"},
+		{`"say \"hi\""`, `say "hi"`},
+		{`"path\\to\\file"`, `path\to\file`},
+		{`"line1\nline2"`, "line1\nline2"},
+		{`"tab\there"`, "tab\there"},
+		{`"escaped backslash \\\\"`, `escaped backslash \\`},
+	}
+	for _, tc := range cases {
+		got := tomlStringValue(tc.input)
+		if got != tc.want {
+			t.Errorf("tomlStringValue(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestTomlStringValueUnquoted(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{`true`, "true"},
+		{`42`, "42"},
+		{`hello # comment`, "hello"},
+		{`  value  `, "value"},
+		{``, ""},
+	}
+	for _, tc := range cases {
+		got := tomlStringValue(tc.input)
+		if got != tc.want {
+			t.Errorf("tomlStringValue(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestTomlStringValueArray(t *testing.T) {
+	got := tomlStringValue(`["token", "ollama-cloud", "--agent", "codex"]`)
+	want := `["token", "ollama-cloud", "--agent", "codex"]`
+	if got != want {
+		t.Errorf("tomlStringValue array = %q, want %q", got, want)
+	}
+}
+
+func TestTomlStringValueLiteral(t *testing.T) {
+	got := tomlStringValue(`'C:\Users\path'`)
+	want := `C:\Users\path`
+	if got != want {
+		t.Errorf("tomlStringValue literal = %q, want %q", got, want)
+	}
+}
+
+func TestTomlKeyValueWithEquals(t *testing.T) {
+	key, value, ok := tomlKeyValue(`base_url = "https://example.com"`)
+	if !ok || key != "base_url" || value != `"https://example.com"` {
+		t.Fatalf("tomlKeyValue = %q, %q, %v; want base_url, quoted URL, true", key, value, ok)
+	}
+}
+
+// ---- File locking tests ----
+
+func TestConfigFileLockAcquireRelease(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.json")
+	cf := newConfigFile(path)
+
+	unlock, err := cf.lock()
+	if err != nil {
+		t.Fatalf("lock failed: %v", err)
+	}
+	unlock()
+
+	// Should be able to lock again after unlock
+	unlock2, err := cf.lock()
+	if err != nil {
+		t.Fatalf("second lock failed: %v", err)
+	}
+	unlock2()
+}
+
+func TestConfigFileLockDoubleFails(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.json")
+	cf := newConfigFile(path)
+
+	unlock, err := cf.lock()
+	if err != nil {
+		t.Fatalf("first lock failed: %v", err)
+	}
+	defer unlock()
+
+	// Second lock on same file should fail (or succeed after stale timeout)
+	_, err = cf.lock()
+	if err == nil {
+		t.Fatal("expected second lock to fail, but it succeeded")
+	}
+}
+
+func TestLoadAppConfigLockedReadWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg, _, unlock, err := loadAppConfigLocked()
+	if err != nil {
+		t.Fatalf("loadAppConfigLocked failed: %v", err)
+	}
+	defer unlock()
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if cfg.Providers == nil {
+		t.Fatal("expected non-nil Providers map")
+	}
+}
+
+// ---- withSelectedModel refactored tests ----
+
+func TestApplyDefaultModel(t *testing.T) {
+	preset := ProviderPreset{
+		Name:  "test",
+		Model: "default-model",
+		Models: []string{"default-model"},
+	}
+	result := applyDefaultModel(preset)
+	if result.Model != "default-model" {
+		t.Fatalf("model = %q, want %q", result.Model, "default-model")
+	}
+}
+
+func TestApplyDefaultModelWithForceTiers(t *testing.T) {
+	preset := ProviderPreset{
+		Name:            "test",
+		Model:           "forced-model",
+		ForceModelTiers: true,
+		Haiku:           "original-haiku",
+		Sonnet:          "original-sonnet",
+	}
+	result := applyDefaultModel(preset)
+	if result.Haiku != "forced-model" {
+		t.Fatalf("haiku = %q, want %q", result.Haiku, "forced-model")
+	}
+	if result.Sonnet != "forced-model" {
+		t.Fatalf("sonnet = %q, want %q", result.Sonnet, "forced-model")
+	}
+}
+
+func TestApplyDefaultModelWithReasoningEffort(t *testing.T) {
+	preset := ProviderPreset{
+		Name:                 "test",
+		Model:                "some-model",
+		ModelReasoningEffort: map[string]string{"some-model": "xhigh"},
+	}
+	result := applyDefaultModel(preset)
+	if result.ReasoningEffort != "xhigh" {
+		t.Fatalf("reasoningEffort = %q, want %q", result.ReasoningEffort, "xhigh")
+	}
+}
+
+func TestApplyModelOverrideCustomModel(t *testing.T) {
+	preset := ProviderPreset{
+		Name:    "test",
+		Model:   "default-model",
+		Models:  []string{"default-model"},
+		Haiku:   "default-haiku",
+		Sonnet:  "default-sonnet",
+		Opus:    "default-opus",
+		Subagent: "default-sub",
+	}
+	result := applyModelOverride(preset, "custom-model")
+	if result.Model != "custom-model" {
+		t.Fatalf("model = %q, want %q", result.Model, "custom-model")
+	}
+	if result.Haiku != "custom-model" {
+		t.Fatalf("haiku = %q, want %q", result.Haiku, "custom-model")
+	}
+	if result.Models[0] != "custom-model" {
+		t.Fatalf("first model = %q, want %q", result.Models[0], "custom-model")
+	}
+}
+
+func TestApplyModelOverridePresetModelWithTiers(t *testing.T) {
+	preset := ProviderPreset{
+		Name:    "test",
+		Model:   "default-model",
+		Models:  []string{"default-model", "tiered-model"},
+		Haiku:   "default-haiku",
+		Sonnet:  "default-sonnet",
+		Opus:    "default-opus",
+		Subagent: "default-sub",
+		ModelTierOverrides: map[string]ModelTiers{
+			"tiered-model": {Haiku: "tier-haiku", Sonnet: "tier-sonnet", Opus: "tier-opus", Subagent: "tier-sub"},
+		},
+	}
+	result := applyModelOverride(preset, "tiered-model")
+	if result.Model != "tiered-model" {
+		t.Fatalf("model = %q, want %q", result.Model, "tiered-model")
+	}
+	if result.Haiku != "tier-haiku" {
+		t.Fatalf("haiku = %q, want %q", result.Haiku, "tier-haiku")
+	}
+	if result.Sonnet != "tier-sonnet" {
+		t.Fatalf("sonnet = %q, want %q", result.Sonnet, "tier-sonnet")
 	}
 }

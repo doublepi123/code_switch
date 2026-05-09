@@ -41,40 +41,66 @@ func loadAppConfig() (*AppConfig, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	cfg, err := loadAppConfigFrom(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg, path, nil
+}
+
+func loadAppConfigLocked() (*AppConfig, string, func(), error) {
+	path, err := appConfigPath()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	cf := newConfigFile(path)
+	unlock, err := cf.lock()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	cfg, err := loadAppConfigFrom(path)
+	if err != nil {
+		unlock()
+		return nil, "", nil, err
+	}
+	return cfg, path, unlock, nil
+}
+
+func loadAppConfigFrom(path string) (*AppConfig, error) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return nil, "", err
+			return nil, err
 		}
 		legacyPath, legacyErr := legacyAppConfigPath()
 		if legacyErr != nil {
-			return nil, "", legacyErr
+			return nil, legacyErr
 		}
 		legacyData, legacyReadErr := os.ReadFile(legacyPath)
 		if legacyReadErr != nil {
 			if os.IsNotExist(legacyReadErr) {
 				ensureAppConfigMaps(cfg)
-				return cfg, path, nil
+				return cfg, nil
 			}
-			return nil, "", legacyReadErr
+			return nil, legacyReadErr
 		}
 		if err := json.Unmarshal(legacyData, cfg); err != nil {
-			return nil, "", fmt.Errorf("parse %s: %w", legacyPath, err)
+			return nil, fmt.Errorf("parse %s: %w", legacyPath, err)
 		}
 		migrateLegacyProviders(cfg)
 		ensureAppConfigMaps(cfg)
 		if err := writeJSONAtomic(path, cfg); err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		return cfg, path, nil
+		return cfg, nil
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, "", fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	migrateLegacyProviders(cfg)
 	ensureAppConfigMaps(cfg)
-	return cfg, path, nil
+	return cfg, nil
 }
 
 func migrateLegacyProviders(cfg *AppConfig) {

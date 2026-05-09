@@ -93,6 +93,12 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 			return err
 		}
 		if !*dryRun {
+			cf := newConfigFile(configPath)
+			unlock, lockErr := cf.lock()
+			if lockErr != nil {
+				return lockErr
+			}
+			defer unlock()
 			return writeJSONAtomic(configPath, cfg)
 		}
 		return nil

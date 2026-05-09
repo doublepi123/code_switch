@@ -296,16 +296,66 @@ func tomlKeyValue(line string) (string, string, bool) {
 	if len(parts) != 2 {
 		return "", "", false
 	}
-	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
+	key := strings.TrimSpace(parts[0])
+	rawValue := strings.TrimSpace(parts[1])
+	return key, rawValue, true
 }
 
 func tomlStringValue(value string) string {
 	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(value, `"`) {
+	if value == "" {
+		return ""
+	}
+	switch value[0] {
+	case '"':
+		return tomlUnquoteString(value)
+	case '\'':
+		return tomlUnquoteLiteralString(value)
+	case '[':
+		return strings.TrimSpace(strings.SplitN(value, "#", 2)[0])
+	default:
 		return strings.TrimSpace(strings.SplitN(value, "#", 2)[0])
 	}
+}
+
+func tomlUnquoteString(value string) string {
 	value = strings.TrimPrefix(value, `"`)
-	end := strings.Index(value, `"`)
+	var b strings.Builder
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if escaped {
+			escaped = false
+			switch c {
+			case 'n':
+				b.WriteByte('\n')
+			case 't':
+				b.WriteByte('\t')
+			case '\\':
+				b.WriteByte('\\')
+			case '"':
+				b.WriteByte('"')
+			default:
+				b.WriteByte('\\')
+				b.WriteByte(c)
+			}
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			return b.String()
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func tomlUnquoteLiteralString(value string) string {
+	value = strings.TrimPrefix(value, `'`)
+	end := strings.Index(value, `'`)
 	if end < 0 {
 		return value
 	}
@@ -389,7 +439,7 @@ func testCodexProviderWithClient(ctx context.Context, out io.Writer, preset Prov
 		fmt.Fprintf(out, "FAIL\n")
 		fmt.Fprintf(out, "  URL: %s\n", testURL)
 		fmt.Fprintf(out, "  Request failed: %v\n", err)
-		return nil
+		return fmt.Errorf("test %s: request failed: %w", preset.Name, err)
 	}
 	defer resp.Body.Close()
 
@@ -399,7 +449,7 @@ func testCodexProviderWithClient(ctx context.Context, out io.Writer, preset Prov
 		fmt.Fprintf(out, "  URL: %s\n", testURL)
 		fmt.Fprintf(out, "  Status: %d\n", resp.StatusCode)
 		fmt.Fprintf(out, "  Failed to read response body\n")
-		return nil
+		return fmt.Errorf("test %s: failed to read response body: %w", preset.Name, readErr)
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		fmt.Fprintf(out, "OK\n")
@@ -412,7 +462,7 @@ func testCodexProviderWithClient(ctx context.Context, out io.Writer, preset Prov
 	if len(body) > 0 {
 		fmt.Fprintf(out, "  Response: %s\n", strings.TrimSpace(string(body)))
 	}
-	return nil
+	return fmt.Errorf("test %s: status %d", preset.Name, resp.StatusCode)
 }
 
 func codexResponsesURL(baseURL string) string {

@@ -203,10 +203,11 @@ func cmdSetKey(args []string) error {
 		if provider != "ollama-cloud" {
 			return fmt.Errorf("unsupported provider %q for agent codex", remaining[0])
 		}
-		cfg, path, err := loadAppConfig()
+		cfg, path, unlock, err := loadAppConfigLocked()
 		if err != nil {
 			return err
 		}
+		defer unlock()
 		agentCfg := agentConfig(cfg, agentCodex)
 		stored := agentCfg.Providers[provider]
 		stored.APIKey = remaining[1]
@@ -219,10 +220,11 @@ func cmdSetKey(args []string) error {
 		return nil
 	}
 
-	cfg, path, err := loadAppConfig()
+	cfg, path, unlock, err := loadAppConfigLocked()
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	preset, err := resolveProviderPreset(provider, cfg)
 	if err != nil {
 		return fmt.Errorf("unsupported provider %q", remaining[0])
@@ -261,10 +263,11 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	provider := canonicalProviderName(providerArg)
-	cfg, path, err := loadAppConfig()
+	cfg, path, unlock, err := loadAppConfigLocked()
 	if err != nil {
 		return err
 	}
+	defer unlock()
 
 	if agent == agentCodex {
 		agentCfg := agentConfig(cfg, agentCodex)

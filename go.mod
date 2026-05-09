@@ -1,4 +1,4 @@
-module claude-switch
+module code-switch
 
 go 1.23
 

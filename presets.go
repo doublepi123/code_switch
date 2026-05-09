@@ -472,37 +472,57 @@ func validateProviderModel(provider, model string) error {
 func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		if re, ok := preset.ModelReasoningEffort[preset.Model]; ok {
-			preset.ReasoningEffort = re
-		}
-		if preset.ForceModelTiers {
-			return withForcedModelTiers(preset, preset.Model)
-		}
-		return preset
+		return applyDefaultModel(preset)
 	}
+	return applyModelOverride(preset, model)
+}
 
-	isPresetModel := containsString(preset.Models, model)
+func applyDefaultModel(preset ProviderPreset) ProviderPreset {
+	if re, ok := preset.ModelReasoningEffort[preset.Model]; ok {
+		preset.ReasoningEffort = re
+	}
+	if preset.ForceModelTiers {
+		return withForcedModelTiers(preset, preset.Model)
+	}
+	return preset
+}
+
+func applyModelOverride(preset ProviderPreset, model string) ProviderPreset {
+	isKnown := containsString(preset.Models, model)
 	preset.Model = model
+
 	if re, ok := preset.ModelReasoningEffort[model]; ok {
 		preset.ReasoningEffort = re
 	}
-	if !isPresetModel {
+	if !isKnown {
 		preset.Models = append([]string{model}, preset.Models...)
 	}
+
 	if preset.ForceModelTiers {
 		return withForcedModelTiers(preset, model)
 	}
-	if !isPresetModel {
-		preset.Haiku = model
-		preset.Sonnet = model
-		preset.Opus = model
-		preset.Subagent = model
+
+	if !isKnown {
+		preset = withSingleModelTiers(preset, model)
 	} else if tiers, ok := preset.ModelTierOverrides[model]; ok {
-		preset.Haiku = tiers.Haiku
-		preset.Sonnet = tiers.Sonnet
-		preset.Opus = tiers.Opus
-		preset.Subagent = tiers.Subagent
+		preset = withOverrideTiers(preset, tiers)
 	}
+	return preset
+}
+
+func withSingleModelTiers(preset ProviderPreset, model string) ProviderPreset {
+	preset.Haiku = model
+	preset.Sonnet = model
+	preset.Opus = model
+	preset.Subagent = model
+	return preset
+}
+
+func withOverrideTiers(preset ProviderPreset, tiers ModelTiers) ProviderPreset {
+	preset.Haiku = tiers.Haiku
+	preset.Sonnet = tiers.Sonnet
+	preset.Opus = tiers.Opus
+	preset.Subagent = tiers.Subagent
 	return preset
 }
 

@@ -125,6 +125,12 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
+	cf := newConfigFile(configPath)
+	unlock, lockErr := cf.lock()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		return err
 	}

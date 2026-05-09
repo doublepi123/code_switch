@@ -107,7 +107,7 @@ func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderP
 		fmt.Fprintf(out, "FAIL\n")
 		fmt.Fprintf(out, "  URL: %s\n", testURL)
 		fmt.Fprintf(out, "  Request failed: %v\n", err)
-		return nil
+		return fmt.Errorf("test %s: request failed: %w", preset.Name, err)
 	}
 	defer resp.Body.Close()
 
@@ -117,7 +117,7 @@ func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderP
 		fmt.Fprintf(out, "  URL: %s\n", testURL)
 		fmt.Fprintf(out, "  Status: %d\n", resp.StatusCode)
 		fmt.Fprintf(out, "  Failed to read response body\n")
-		return nil
+		return fmt.Errorf("test %s: failed to read response body: %w", preset.Name, readErr)
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -141,5 +141,5 @@ func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderP
 			fmt.Fprintf(out, "  Response: %s\n", strings.TrimSpace(string(body)))
 		}
 	}
-	return nil
+	return fmt.Errorf("test %s: status %d", preset.Name, resp.StatusCode)
 }
