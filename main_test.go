@@ -7584,3 +7584,78 @@ func TestSwitchSuccessOutputFormat(t *testing.T) {
 		t.Fatalf("switch output missing success prefix: %s", out)
 	}
 }
+
+func TestWriteTextAtomicNestedDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sub", "dir", "test.toml")
+	content := "key = \"value\"\n"
+
+	if err := writeTextAtomic(path, content, 0o644); err != nil {
+		t.Fatalf("writeTextAtomic nested dir returned error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("content = %q, want %q", string(data), content)
+	}
+}
+
+func TestWriteJSONAtomicMkdirAll(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "deep", "config.json")
+
+	if err := writeJSONAtomic(path, map[string]string{"a": "b"}); err != nil {
+		t.Fatalf("writeJSONAtomic nested dir returned error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if data[0] != '{' {
+		t.Fatalf("expected JSON object")
+	}
+}
+
+func TestCheckNoColorTERM(t *testing.T) {
+	orig := noColor
+	noColor = checkNoColor()
+	t.Cleanup(func() { noColor = orig })
+
+	if os.Getenv("TERM") == "dumb" || os.Getenv("NO_COLOR") != "" {
+		if !noColor {
+			t.Fatalf("expected noColor=true when TERM=dumb or NO_COLOR set")
+		}
+	}
+}
+
+func TestBackupIfExistsMultipleBackups(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	content := []byte(`{"env":{}}`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := backupIfExists(path); err != nil {
+		t.Fatalf("backupIfExists 1: %v", err)
+	}
+	if err := backupIfExists(path); err != nil {
+		t.Fatalf("backupIfExists 2: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	backups := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "settings.json.bak-") {
+			backups++
+		}
+	}
+	if backups != 2 {
+		t.Fatalf("expected 2 backup files, found %d", backups)
+	}
+}
