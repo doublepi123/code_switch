@@ -127,56 +127,67 @@ func cmdList(args []string, out io.Writer) error {
 func cmdCurrent(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("current", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", "", "target agent: claude or codex (default: show both)")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
 	codexDir := fs.String("codex-dir", "", "override Codex config dir")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	agent, err := parseAgentName(*agentFlag)
-	if err != nil {
-		return err
+	showBoth := *agentFlag == ""
+	var agent AgentName
+	if !showBoth {
+		var err error
+		agent, err = parseAgentName(*agentFlag)
+		if err != nil {
+			return err
+		}
 	}
-	if agent == agentCodex {
+
+	if showBoth || agent == agentClaude {
+		settingsPath := claudeSettingsPath(*claudeDir)
+		root, err := readJSONMap(settingsPath)
+		if err != nil {
+			return err
+		}
+
+		env := nestedMap(root, "env")
+		baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
+		model, _ := env["ANTHROPIC_MODEL"].(string)
+
+		fmt.Fprintf(out, "Claude Code\n")
+		fmt.Fprintf(out, "  settings: %s\n", settingsPath)
+		if baseURL == "" {
+			fmt.Fprintf(out, "  provider: unknown\n")
+		} else {
+			fmt.Fprintf(out, "  provider: %s\n", detectProvider(baseURL, model))
+			fmt.Fprintf(out, "  base_url: %s\n", baseURL)
+			if model != "" {
+				fmt.Fprintf(out, "  model: %s\n", model)
+			}
+		}
+		if showBoth {
+			fmt.Fprintln(out)
+		}
+	}
+
+	if showBoth || agent == agentCodex {
 		configPath, provider, model, baseURL, err := currentCodexProvider(*codexDir)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "config: %s\n", configPath)
+		fmt.Fprintf(out, "Codex\n")
+		fmt.Fprintf(out, "  config: %s\n", configPath)
 		if provider == "" {
-			fmt.Fprintln(out, "provider: unknown")
-			return nil
+			fmt.Fprintf(out, "  provider: unknown\n")
+		} else {
+			fmt.Fprintf(out, "  provider: %s\n", provider)
+			if baseURL != "" {
+				fmt.Fprintf(out, "  base_url: %s\n", baseURL)
+			}
+			if model != "" {
+				fmt.Fprintf(out, "  model: %s\n", model)
+			}
 		}
-		fmt.Fprintf(out, "provider: %s\n", provider)
-		if baseURL != "" {
-			fmt.Fprintf(out, "base_url: %s\n", baseURL)
-		}
-		if model != "" {
-			fmt.Fprintf(out, "model: %s\n", model)
-		}
-		return nil
-	}
-
-	settingsPath := claudeSettingsPath(*claudeDir)
-	root, err := readJSONMap(settingsPath)
-	if err != nil {
-		return err
-	}
-
-	env := nestedMap(root, "env")
-	baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
-	model, _ := env["ANTHROPIC_MODEL"].(string)
-
-	fmt.Fprintf(out, "settings: %s\n", settingsPath)
-	if baseURL == "" {
-		fmt.Fprintln(out, "provider: unknown")
-		return nil
-	}
-
-	fmt.Fprintf(out, "provider: %s\n", detectProvider(baseURL, model))
-	fmt.Fprintf(out, "base_url: %s\n", baseURL)
-	if model != "" {
-		fmt.Fprintf(out, "model: %s\n", model)
 	}
 	return nil
 }
