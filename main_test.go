@@ -660,6 +660,40 @@ func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
 	}
 }
 
+func TestApplyPresetReasoningEffortFromModelReasoningEffort(t *testing.T) {
+	root := map[string]any{}
+	preset := withSelectedModel(providerPresets["ollama-cloud"], "deepseek-v4-pro")
+	applyPreset(root, preset, "ollama-sk")
+
+	env := root["env"].(map[string]any)
+	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "xhigh" {
+		t.Fatalf("effort level = %v, want xhigh", got)
+	}
+}
+
+func TestApplyPresetReasoningEffortFromPreset(t *testing.T) {
+	root := map[string]any{}
+	preset := codexDeepSeekPreset()
+	preset.ReasoningEffort = "xhigh"
+	applyPreset(root, preset, "sk-ds")
+
+	env := root["env"].(map[string]any)
+	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "xhigh" {
+		t.Fatalf("effort level = %v, want xhigh", got)
+	}
+}
+
+func TestApplyPresetNoReasoningEffortWhenEmpty(t *testing.T) {
+	root := map[string]any{}
+	preset := providerPresets["minimax-cn"]
+	applyPreset(root, preset, "sk-minimax")
+
+	env := root["env"].(map[string]any)
+	if _, ok := env["CLAUDE_CODE_EFFORT_LEVEL"]; ok {
+		t.Fatalf("expected CLAUDE_CODE_EFFORT_LEVEL to be unset for minimax-cn, got %v", env["CLAUDE_CODE_EFFORT_LEVEL"])
+	}
+}
+
 func TestResolveSwitchPresetRejectsOpenCodeGoChatCompletionsModel(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 
@@ -1392,7 +1426,7 @@ func TestCmdSetKey(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	// Set key for a preset provider
-	if err := cmdSetKey([]string{"openrouter", "sk-test-123"}); err != nil {
+	if err := cmdSetKey([]string{"openrouter", "sk-test-123"}, io.Discard); err != nil {
 		t.Fatalf("cmdSetKey returned error: %v", err)
 	}
 
@@ -1410,16 +1444,16 @@ func TestCmdSetKey(t *testing.T) {
 }
 
 func TestCmdSetKeyWrongArgs(t *testing.T) {
-	if err := cmdSetKey([]string{"openrouter"}); err == nil {
+	if err := cmdSetKey([]string{"openrouter"}, io.Discard); err == nil {
 		t.Fatal("expected error for missing api-key arg")
 	}
-	if err := cmdSetKey([]string{}); err == nil {
+	if err := cmdSetKey([]string{}, io.Discard); err == nil {
 		t.Fatal("expected error for empty args")
 	}
 }
 
 func TestCmdSetKeyUnsupportedProvider(t *testing.T) {
-	if err := cmdSetKey([]string{"nonexistent", "sk-test"}); err == nil {
+	if err := cmdSetKey([]string{"nonexistent", "sk-test"}, io.Discard); err == nil {
 		t.Fatal("expected error for unsupported provider")
 	}
 }
@@ -1850,6 +1884,30 @@ func TestCmdSwitchOllamaCloudSelectedModelAppliesToAllClaudeTiers(t *testing.T) 
 		if got := env[key]; got != "deepseek-v4-pro" {
 			t.Fatalf("%s = %v, want deepseek-v4-pro", key, got)
 		}
+	}
+}
+
+func TestCmdSwitchOllamaCloudReasoningEffortForModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"ollama-cloud": {APIKey: "ollama-sk"},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := cmdSwitch([]string{"ollama-cloud", "--model", "deepseek-v4-pro", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	env := readSettingsEnv(t, filepath.Join(claudeDir, "settings.json"))
+	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "xhigh" {
+		t.Fatalf("CLAUDE_CODE_EFFORT_LEVEL = %v, want xhigh", got)
 	}
 }
 
@@ -3466,11 +3524,26 @@ func TestCurrentModelLabel(t *testing.T) {
 // ---- cmdUpgrade tests ----
 
 func TestCmdUpgradeNoArgs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
 	output := &bytes.Buffer{}
-	err := cmdUpgrade([]string{}, output)
-	// Without network access, may fail or succeed depending on connectivity
-	// Just ensure it doesn't panic
-	_ = err
+	opts := upgradeOptions{
+		repo:        "owner/repo",
+		tag:         "v99.0.0",
+		installPath: filepath.Join(t.TempDir(), "cs"),
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+		dryRun:      true,
+	}
+	_ = performUpgrade(opts)
 }
 
 func TestCmdUpgradeExtraArgs(t *testing.T) {
@@ -3480,14 +3553,32 @@ func TestCmdUpgradeExtraArgs(t *testing.T) {
 }
 
 func TestCmdUpgradeDryRun(t *testing.T) {
-	output := &bytes.Buffer{}
-	err := cmdUpgrade([]string{"--dry-run"}, output)
-	_ = err // May fail without network or work
-	out := output.String()
-	if err == nil {
-		if !strings.Contains(out, "download:") && !strings.Contains(out, "already up to date") && !strings.Contains(out, "dry-run") {
-			t.Logf("unexpected dry-run output: %q", out)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
+			return
 		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	output := &bytes.Buffer{}
+	opts := upgradeOptions{
+		repo:        "owner/repo",
+		tag:         "v99.0.0",
+		installPath: filepath.Join(t.TempDir(), "cs"),
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+		dryRun:      true,
+	}
+	err := performUpgrade(opts)
+	if err != nil {
+		t.Fatalf("performUpgrade dry-run: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "download:") {
+		t.Fatalf("unexpected dry-run output: %q", out)
 	}
 }
 
@@ -4253,9 +4344,26 @@ func TestCmdTestExtraArgs(t *testing.T) {
 // ---- cmdUpgrade with custom repo ----
 
 func TestCmdUpgradeCustomRepo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/other/repo/releases/tag/v99.0.0", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
 	output := &bytes.Buffer{}
-	err := cmdUpgrade([]string{"--repo", "other/repo", "--dry-run"}, output)
-	_ = err
+	opts := upgradeOptions{
+		repo:        "other/repo",
+		tag:         "v99.0.0",
+		installPath: filepath.Join(t.TempDir(), "cs"),
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+		dryRun:      true,
+	}
+	_ = performUpgrade(opts)
 }
 
 // ---- downloadChecksumContent network error ----
@@ -4836,10 +4944,26 @@ func TestRunWithIOListFlagError(t *testing.T) {
 }
 
 func TestRunWithIOUpgrade(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
 	output := &bytes.Buffer{}
-	err := runWithIO([]string{"upgrade", "--dry-run"}, strings.NewReader(""), output)
-	// May fail without network, but shouldn't panic
-	_ = err
+	opts := upgradeOptions{
+		repo:        "owner/repo",
+		tag:         "v99.0.0",
+		installPath: filepath.Join(t.TempDir(), "cs"),
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+		dryRun:      true,
+	}
+	_ = performUpgrade(opts)
 }
 
 func TestRunWithIOCurrent(t *testing.T) {
@@ -4885,7 +5009,7 @@ func TestCmdSetKeyWithModelArg(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	// set-key with 2 args is valid
-	if err := cmdSetKey([]string{"openrouter", "sk-test-12345"}); err != nil {
+	if err := cmdSetKey([]string{"openrouter", "sk-test-12345"}, io.Discard); err != nil {
 		t.Fatalf("cmdSetKey: %v", err)
 	}
 	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
@@ -5250,9 +5374,26 @@ func TestShouldSkipUpgradeSame(t *testing.T) {
 // ---- cmdUpgrade with default repo ----
 
 func TestCmdUpgradeDefaultRepo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
 	output := &bytes.Buffer{}
-	// Default repo, just check it doesn't panic
-	_ = cmdUpgrade([]string{"--dry-run"}, output)
+	opts := upgradeOptions{
+		repo:        "owner/repo",
+		tag:         "v99.0.0",
+		installPath: filepath.Join(t.TempDir(), "cs"),
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+		dryRun:      true,
+	}
+	_ = performUpgrade(opts)
 }
 
 // ---- writeJSONAtomic rename error ----
@@ -5295,8 +5436,25 @@ func TestResolveProviderAndKeyStoredKey(t *testing.T) {
 // ---- cmdUpgrade with install path ----
 
 func TestCmdUpgradeInstallPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
 	output := &bytes.Buffer{}
-	err := cmdUpgrade([]string{"--install-path", filepath.Join(t.TempDir(), "cs"), "--dry-run"}, output)
+	err := performUpgrade(upgradeOptions{
+		repo:        "owner/repo",
+		tag:         "v99.0.0",
+		installPath: filepath.Join(t.TempDir(), "cs"),
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+		dryRun:      true,
+	})
 	_ = err
 }
 
@@ -6479,6 +6637,25 @@ func TestCmdEnvCustomModel(t *testing.T) {
 	}
 }
 
+func TestCmdEnvReasoningEffortForOllamaCloudModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "ollama-sk", Model: "deepseek-v4-pro"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "ollama-cloud"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdEnv returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "export CLAUDE_CODE_EFFORT_LEVEL='xhigh'") {
+		t.Fatalf("env output missing reasoning effort: %s", out)
+	}
+}
+
 func TestCmdTokenMissingProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -6512,7 +6689,7 @@ func TestCmdSetKeyCodex(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
 
-	if err := cmdSetKey([]string{"--agent", "codex", "ollama-cloud", "test-key"}); err != nil {
+	if err := cmdSetKey([]string{"--agent", "codex", "ollama-cloud", "test-key"}, io.Discard); err != nil {
 		t.Fatalf("cmdSetKey codex returned error: %v", err)
 	}
 }
@@ -6522,7 +6699,7 @@ func TestCmdSetKeyNoAPIKeyProvider(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
 
-	err := cmdSetKey([]string{"ollama", "unused"})
+	err := cmdSetKey([]string{"ollama", "unused"}, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error for NoAPIKey provider")
 	}
@@ -7159,7 +7336,7 @@ func TestCmdSetKeyWithAgentClaude(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
 
-	if err := cmdSetKey([]string{"--agent", "claude", "deepseek", "sk-test-123"}); err != nil {
+	if err := cmdSetKey([]string{"--agent", "claude", "deepseek", "sk-test-123"}, io.Discard); err != nil {
 		t.Fatalf("cmdSetKey --agent claude returned error: %v", err)
 	}
 
@@ -7321,7 +7498,7 @@ func TestCmdSetKeyCodexUnsupportedProvider(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
 
-	err := cmdSetKey([]string{"--agent", "codex", "minimax-cn", "sk-123"})
+	err := cmdSetKey([]string{"--agent", "codex", "minimax-cn", "sk-123"}, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error for unsupported codex provider")
 	}
@@ -7466,9 +7643,6 @@ func TestColorizeWithNoColor(t *testing.T) {
 	if got := successPrefix("done"); got != "[OK] done" {
 		t.Fatalf("successPrefix with NO_COLOR = %q, want [OK] done", got)
 	}
-	if got := errorPrefix("fail"); got != "[ERR] fail" {
-		t.Fatalf("errorPrefix with NO_COLOR = %q, want [ERR] fail", got)
-	}
 }
 
 func TestColorizeWithColor(t *testing.T) {
@@ -7484,9 +7658,6 @@ func TestColorizeWithColor(t *testing.T) {
 	}
 	if !strings.Contains(successPrefix("done"), "[OK]") {
 		t.Fatalf("successPrefix should contain [OK]")
-	}
-	if !strings.Contains(errorPrefix("fail"), "[ERR]") {
-		t.Fatalf("errorPrefix should contain [ERR]")
 	}
 	if !strings.Contains(formatLabel("k", "v"), "\x1b[2m") {
 		t.Fatalf("formatLabel should contain dim escape")
@@ -7657,5 +7828,874 @@ func TestBackupIfExistsMultipleBackups(t *testing.T) {
 	}
 	if backups != 2 {
 		t.Fatalf("expected 2 backup files, found %d", backups)
+	}
+}
+
+func TestResolveKey(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"deepseek": {APIKey: "sk-saved"},
+	}}
+	preset, _ := resolveAgentProviderPreset(agentClaude, "deepseek", cfg)
+
+	key, err := resolveKey(agentClaude, cfg, "deepseek", "sk-cli", preset)
+	if err != nil {
+		t.Fatalf("resolveKey: %v", err)
+	}
+	if key != "sk-cli" {
+		t.Fatalf("key = %q, want sk-cli", key)
+	}
+
+	key, err = resolveKey(agentClaude, cfg, "deepseek", "", preset)
+	if err != nil {
+		t.Fatalf("resolveKey from config: %v", err)
+	}
+	if key != "sk-saved" {
+		t.Fatalf("key = %q, want sk-saved", key)
+	}
+
+	cfg2 := &AppConfig{Providers: map[string]StoredProvider{}}
+	preset2, _ := resolveAgentProviderPreset(agentClaude, "openrouter", cfg2)
+	_, err = resolveKey(agentClaude, cfg2, "openrouter", "", preset2)
+	if err == nil {
+		t.Fatalf("expected error for missing key")
+	}
+
+	preset3 := ProviderPreset{NoAPIKey: true}
+	key, err = resolveKey(agentClaude, cfg2, "ollama", "", preset3)
+	if err != nil {
+		t.Fatalf("NoAPIKey should not error: %v", err)
+	}
+	if key != "ollama" {
+		t.Fatalf("NoAPIKey key = %q, want ollama", key)
+	}
+}
+
+func TestFileLockReadLockPID(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "test.lock")
+	if pid := readLockPID(lockPath); pid != 0 {
+		t.Fatalf("readLockPID nonexistent = %d, want 0", pid)
+	}
+	os.WriteFile(lockPath, []byte("12345\n"), 0o600)
+	if pid := readLockPID(lockPath); pid != 12345 {
+		t.Fatalf("readLockPID = %d, want 12345", pid)
+	}
+	os.WriteFile(lockPath, []byte("garbage"), 0o600)
+	if pid := readLockPID(lockPath); pid != 0 {
+		t.Fatalf("readLockPID garbage = %d, want 0", pid)
+	}
+}
+
+func TestFileLockProcessExists(t *testing.T) {
+	if !processExists(os.Getpid()) {
+		t.Fatalf("current process should exist")
+	}
+	if processExists(0) {
+		t.Fatalf("pid 0 should not exist")
+	}
+	if processExists(99999999) {
+		t.Fatalf("non-existent pid should not exist")
+	}
+}
+
+func TestFileLockLockStaleCleanup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+	cf := newConfigFile(path)
+	lockPath := cf.lockPath()
+	os.WriteFile(lockPath, []byte("99999999\n"), 0o600)
+
+	unlock, err := cf.lock()
+	if err != nil {
+		t.Fatalf("lock with stale PID: %v", err)
+	}
+	unlock()
+}
+
+func TestWriteTextAtomicChmodError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping chmod test as root")
+	}
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "ro")
+	os.Mkdir(subdir, 0o555)
+	path := filepath.Join(subdir, "test.toml")
+
+	err := writeTextAtomic(path, "content", 0o644)
+	if err == nil {
+		t.Fatalf("expected chmod error on read-only dir")
+	}
+}
+
+func TestWriteJSONAtomicChmodOnTemp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := writeJSONAtomic(path, map[string]string{"a": "b"}); err != nil {
+		t.Fatalf("writeJSONAtomic: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("perms = %o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestCmdCompletionErrors(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"completion"}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for completion with no shell arg")
+	}
+	output.Reset()
+	if err := runWithIO([]string{"completion", "invalid"}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for invalid shell")
+	}
+	output.Reset()
+	if err := runWithIO([]string{"completion", "bash"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("completion bash: %v", err)
+	}
+	if !strings.Contains(output.String(), "_cs()") {
+		t.Fatalf("bash completion missing _cs function")
+	}
+	output.Reset()
+	if err := runWithIO([]string{"completion", "zsh"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("completion zsh: %v", err)
+	}
+	if !strings.Contains(output.String(), "#compdef cs") {
+		t.Fatalf("zsh completion missing compdef")
+	}
+	output.Reset()
+	if err := runWithIO([]string{"completion", "fish"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("completion fish: %v", err)
+	}
+	if !strings.Contains(output.String(), "code-switch fish completion") {
+		t.Fatalf("fish completion missing header")
+	}
+}
+
+func TestAgentDisplayNameUnknown(t *testing.T) {
+	name := agentDisplayName(AgentName("invalid-agent"))
+	if name == "Claude Code" || name == "Codex" {
+		t.Fatalf("unknown agent should not be disguised as known: %q", name)
+	}
+}
+
+func TestProviderCompletionWordListNoConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	words := providerCompletionWordList()
+	if !strings.Contains(words, "deepseek") {
+		t.Fatalf("completion word list should contain deepseek but got: %q", words)
+	}
+	if !strings.Contains(words, "ollama") {
+		t.Fatalf("completion word list should contain ollama")
+	}
+}
+
+func TestCheckNoColorNeitherSet(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+
+	orig := noColor
+	noColor = checkNoColor()
+	t.Cleanup(func() { noColor = orig })
+
+	if noColor {
+		t.Fatalf("checkNoColor should return false when neither NO_COLOR nor TERM=dumb")
+	}
+}
+
+func TestBackupIfExistsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonexistent", "deep", "file.json")
+	err := backupIfExists(path)
+	if err != nil {
+		t.Fatalf("backupIfExists for nonexistent path returned error: %v", err)
+	}
+}
+
+func TestDiscoverOllamaModels(t *testing.T) {
+	models := discoverOllamaModels()
+	if len(models) > 0 {
+		for _, m := range models {
+			if m == "" {
+				t.Fatalf("empty model name in discovery")
+			}
+		}
+	}
+}
+
+func TestSwitchProviderMissingKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"switch", "deepseek"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for missing key")
+	}
+	if !strings.Contains(err.Error(), "missing api key") {
+		t.Fatalf("expected missing api key error, got: %v", err)
+	}
+}
+
+func TestCmdEnvMissingArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"env"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for env with no provider")
+	}
+}
+
+func TestCmdTokenMissingArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"token"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for token with no provider")
+	}
+}
+
+func TestCmdSetKeyMissingArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"set-key"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for set-key with no args")
+	}
+}
+
+func TestCmdRemoveMissingArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"remove"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for remove with no args")
+	}
+}
+
+func TestCmdTestMissingArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"test"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for test with no provider")
+	}
+}
+
+func TestCmdRestoreMissingArgs(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"restore", "--bad-flag"}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for restore with bad flag")
+	}
+}
+
+func TestCmdCurrentMissingArgs(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"current", "--bad-flag"}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for current with bad flag")
+	}
+}
+
+func TestCmdListBadAgent(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"list", "--agent", "unknown"}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for list with bad agent")
+	}
+}
+
+func TestReadTextFileIfExistsNotExist(t *testing.T) {
+	content, err := readTextFileIfExists("/nonexistent/path/file.txt")
+	if err != nil {
+		t.Fatalf("readTextFileIfExists for nonexistent: %v", err)
+	}
+	if content != "" {
+		t.Fatalf("expected empty for nonexistent, got %q", content)
+	}
+}
+
+func TestReadTextFileIfExistsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonexistentdir", "test.txt")
+	content, err := readTextFileIfExists(path)
+	if err != nil {
+		t.Fatalf("readTextFileIfExists nonexistent dir: %v", err)
+	}
+	if content != "" {
+		t.Fatalf("expected empty for nonexistent dir, got %q", content)
+	}
+}
+
+func TestCmdEnvExtraEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"minimax-cn": {APIKey: "sk-test"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "minimax-cn"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("env minimax-cn: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "API_TIMEOUT_MS") {
+		t.Fatalf("env output should contain ExtraEnv: %s", out)
+	}
+}
+
+func TestCmdSwitchUnknownProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"switch", "nonexistent"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for unknown provider")
+	}
+}
+
+func TestCmdRemoveNotFound(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"remove", "nonexistent", "--force"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for removing nonexistent provider")
+	}
+}
+
+func TestCmdUnknownSubcommand(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"bogus"}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for unknown command")
+	}
+}
+
+func TestCodexTOMLProviderKeyDefault(t *testing.T) {
+	if got := codexTOMLProviderKey("unknown-provider"); got != "unknown-provider" {
+		t.Fatalf("codexTOMLProviderKey = %q, want unknown-provider", got)
+	}
+}
+
+func TestResolveAgentSwitchPresetCodex(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+
+	preset, err := resolveAgentSwitchPreset(agentCodex, "deepseek", cfg, "deepseek-v4-pro")
+	if err != nil {
+		t.Fatalf("resolveAgentSwitchPreset codex: %v", err)
+	}
+	if preset.Model != "deepseek-v4-pro" {
+		t.Fatalf("model = %q, want deepseek-v4-pro", preset.Model)
+	}
+}
+
+func TestResolveAgentSwitchPresetCodexOllamaCloud(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+
+	preset, err := resolveAgentSwitchPreset(agentCodex, "ollama-cloud", cfg, "")
+	if err != nil {
+		t.Fatalf("resolveAgentSwitchPreset ollama-cloud: %v", err)
+	}
+	if preset.BaseURL != "https://ollama.com/v1" {
+		t.Fatalf("baseURL = %q", preset.BaseURL)
+	}
+}
+
+func TestResolveAgentSwitchPresetCodexOpenRouter(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+
+	preset, err := resolveAgentSwitchPreset(agentCodex, "openrouter", cfg, "")
+	if err != nil {
+		t.Fatalf("resolveAgentSwitchPreset openrouter: %v", err)
+	}
+	if preset.AuthEnv != "OPENROUTER_API_KEY" {
+		t.Fatalf("authEnv = %q", preset.AuthEnv)
+	}
+}
+
+func TestApplyPresetRestore(t *testing.T) {
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://old.example.com",
+			"ANTHROPIC_API_KEY":  "old-key",
+		},
+		"other": "keep",
+	}
+	preset := ProviderPreset{
+		BaseURL:  "https://new.example.com",
+		Model:    "new-model",
+		Haiku:    "haiku",
+		Sonnet:   "sonnet",
+		Opus:     "opus",
+		AuthEnv:  "ANTHROPIC_AUTH_TOKEN",
+		NoAPIKey: true,
+	}
+	applyPreset(root, preset, "new-key")
+
+	if root["other"] != "keep" {
+		t.Fatalf("non-env key should be preserved")
+	}
+	env := root["env"].(map[string]any)
+	if env["ANTHROPIC_BASE_URL"] != "https://new.example.com" {
+		t.Fatalf("base_url not updated")
+	}
+	if env["ANTHROPIC_API_KEY"] != nil {
+		t.Fatalf("old API_KEY should be deleted")
+	}
+	if env["ANTHROPIC_AUTH_TOKEN"] != "new-key" {
+		t.Fatalf("AUTH_TOKEN should be set to new-key")
+	}
+}
+
+func TestEnsureAppConfigMapsNilProviders(t *testing.T) {
+	cfg := &AppConfig{}
+	ensureAppConfigMaps(cfg)
+	if cfg.Providers == nil {
+		t.Fatalf("Providers should be initialized")
+	}
+	if cfg.Agents == nil {
+		t.Fatalf("Agents should be initialized")
+	}
+}
+
+func TestCmdEnvCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
+	ensureAppConfigMaps(&cfg)
+	setAgentProviderConfig(&cfg, agentCodex, "deepseek", StoredProvider{APIKey: "sk-codex"})
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "deepseek", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("env codex: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "Codex uses command-based auth") {
+		t.Fatalf("expected Codex note: %s", out)
+	}
+}
+
+func TestCmdTokenCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(&cfg)
+	setAgentProviderConfig(&cfg, agentCodex, "deepseek", StoredProvider{APIKey: "sk-codex-token"})
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"token", "deepseek", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("token codex: %v", err)
+	}
+	if strings.TrimSpace(output.String()) != "sk-codex-token" {
+		t.Fatalf("token = %q, want sk-codex-token", strings.TrimSpace(output.String()))
+	}
+}
+
+func TestResolveKeyCodexFallback(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-fallback"}}}
+	ensureAppConfigMaps(cfg)
+
+	preset := ProviderPreset{}
+	key, err := resolveKey(agentCodex, cfg, "deepseek", "", preset)
+	if err != nil {
+		t.Fatalf("resolveKey codex fallback: %v", err)
+	}
+	if key != "sk-fallback" {
+		t.Fatalf("key = %q, want sk-fallback", key)
+	}
+}
+
+func TestCmdSwitchCodexDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(&cfg)
+	setAgentProviderConfig(&cfg, agentCodex, "deepseek", StoredProvider{APIKey: "sk-codex"})
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "deepseek", "--agent", "codex", "--dry-run"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("switch codex dry-run: %v", err)
+	}
+	if !strings.Contains(output.String(), "[dry-run]") {
+		t.Fatalf("dry-run output: %s", output.String())
+	}
+}
+
+func TestDetectProviderCustom(t *testing.T) {
+	got := detectProvider("https://unknown.example.com/api", "some-model")
+	if got != "custom" {
+		t.Fatalf("detectProvider = %q, want custom", got)
+	}
+}
+
+func TestCurrentProviderLabelEmpty(t *testing.T) {
+	if got := currentProviderLabel(""); got != "none" {
+		t.Fatalf("currentProviderLabel empty = %q, want none", got)
+	}
+}
+
+func TestCurrentModelLabelEmpty(t *testing.T) {
+	if got := currentModelLabel(""); got != "none" {
+		t.Fatalf("currentModelLabel empty = %q, want none", got)
+	}
+}
+
+func TestFirstNonEmptyAllEmpty(t *testing.T) {
+	if got := firstNonEmpty("", "  ", ""); got != "" {
+		t.Fatalf("firstNonEmpty all empty = %q", got)
+	}
+}
+
+func TestCheckNoColorNoColorSet(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("TERM", "xterm-256color")
+	if !checkNoColor() {
+		t.Fatalf("checkNoColor should return true with NO_COLOR set")
+	}
+}
+
+func TestCheckNoColorTermDumb(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "dumb")
+	if !checkNoColor() {
+		t.Fatalf("checkNoColor should return true with TERM=dumb")
+	}
+}
+
+func TestCheckNoColorNoneSet(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+	if checkNoColor() {
+		t.Fatalf("checkNoColor should return false with nothing set")
+	}
+}
+
+func TestCmdEnvReasoningEffort(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "deepseek"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("env deepseek: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "CLAUDE_CODE_EFFORT_LEVEL") {
+		t.Fatalf("expected CLAUDE_CODE_EFFORT_LEVEL in deepseek env: %s", out)
+	}
+}
+
+func TestResolveAgentProviderPresetCodexUnknown(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+	_, err := resolveAgentProviderPreset(agentCodex, "unknown-provider", cfg)
+	if err == nil {
+		t.Fatalf("expected error for unsupported codex provider")
+	}
+}
+
+func TestProviderNamesForAgentCodex(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+	names := providerNamesForAgent(agentCodex, cfg, false, false)
+	if len(names) != 3 {
+		t.Fatalf("expected 3 codex providers, got %d: %v", len(names), names)
+	}
+}
+
+func TestProviderModelsForAgentCodex(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+	models := providerModelsForAgent(cfg, agentCodex, "deepseek")
+	if len(models) == 0 {
+		t.Fatalf("expected non-empty models for codex deepseek")
+	}
+}
+
+func TestAgentConfigNilProviders(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{"claude": {}}}
+	ensureAppConfigMaps(cfg)
+	ac := agentConfig(cfg, agentClaude)
+	if ac.Providers == nil {
+		t.Fatalf("agent providers should be initialized")
+	}
+}
+
+func TestValidateProviderModelEmpty(t *testing.T) {
+	if err := validateProviderModel("opencode-go", ""); err != nil {
+		t.Fatalf("empty model should not error: %v", err)
+	}
+}
+
+func TestCmdRemoveForce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-test", BaseURL: "https://openrouter.ai/api"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"remove", "--force", "openrouter"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("remove force: %v", err)
+	}
+}
+
+func TestCmdUpgradeNotSet(t *testing.T) {
+	oldVersion := version
+	version = "v999.0.0"
+	t.Cleanup(func() { version = oldVersion })
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"upgrade"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+}
+
+func TestDetectProviderOpenRouter(t *testing.T) {
+	got := detectProvider("https://foo.openrouter.ai/v1", "")
+	if got != "openrouter" {
+		t.Fatalf("detectProvider subdomain = %q, want openrouter", got)
+	}
+}
+
+func TestDetectProviderXiaomimimo(t *testing.T) {
+	got := detectProvider("https://api.staging.xiaomimimo.com/anthropic", "")
+	if got != "xiaomimimo-cn" {
+		t.Fatalf("detectProvider xiaomimimo = %q, want xiaomimimo-cn", got)
+	}
+}
+
+func TestDetectProviderOllama(t *testing.T) {
+	got := detectProvider("http://127.0.0.1:11434/v1", "")
+	if got != "ollama" {
+		t.Fatalf("detectProvider ollama ip = %q, want ollama", got)
+	}
+	got = detectProvider("http://[::1]:11434/v1", "")
+	if got != "ollama" {
+		t.Fatalf("detectProvider ollama ipv6 = %q, want ollama", got)
+	}
+}
+
+func TestOllamaModelsDiscovered(t *testing.T) {
+	models := ollamaModels()
+	if len(models) == 0 {
+		t.Fatal("expected non-empty ollama models (fallback)")
+	}
+}
+
+func TestOpenRouterModelsEmptyKey(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	models := openRouterModels(cfg)
+	if len(models) == 0 {
+		t.Fatal("expected fallback models when no key")
+	}
+}
+
+func TestRestoreClaudeConfig(t *testing.T) {
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	root := map[string]any{"env": map[string]any{"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_MODEL": "deepseek-v4-pro"}}
+	writeJSONAtomic(settingsPath, root)
+	output := &bytes.Buffer{}
+	if err := restoreClaudeConfig(claudeDir, output, false); err != nil {
+		t.Fatalf("restoreClaudeConfig: %v", err)
+	}
+}
+
+func TestDefaultSelectionModelForAgentCodex(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+	model := defaultSelectionModelForAgent(cfg, agentCodex, "deepseek", "", "deepseek-v4-flash")
+	if model == "" {
+		t.Fatalf("expected non-empty model for codex default selection")
+	}
+}
+
+func TestModelIndexForAgentCodex(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+	idx := modelIndexForAgent(cfg, agentCodex, "deepseek", "", "")
+	if idx < 0 {
+		t.Fatalf("modelIndexForAgent returned negative: %d", idx)
+	}
+}
+
+func TestBuildModelListForAgentCodex(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+	models := buildModelListForAgent(cfg, agentCodex, "deepseek", map[string]string{})
+	if len(models) == 0 {
+		t.Fatalf("expected non-empty model list for codex")
+	}
+}
+
+func TestCmdListHelp(t *testing.T) {
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"-h"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("-h should return help error")
+	}
+}
+
+func TestCmdTokenNoProvider(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"token", ""}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for token with empty provider")
+	}
+}
+
+func TestCmdSetKeyOllamaNoAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"set-key", "ollama", "sk-xxx"}, strings.NewReader(""), output); err == nil {
+		t.Fatalf("expected error for set-key on ollama")
+	}
+}
+
+func TestUnsupportedOpenCodeGoAnthropicModelsContainsEntries(t *testing.T) {
+	if len(unsupportedOpenCodeGoAnthropicModels) == 0 {
+		t.Fatalf("expected unsupported models map to have entries")
+	}
+}
+
+func TestReplaceNonAlphaNum(t *testing.T) {
+	result := replaceNonAlphaNum("hello world!", '-')
+	if result != "hello-world-" {
+		t.Fatalf("replaceNonAlphaNum = %q", result)
+	}
+}
+
+func TestCompressRepeated(t *testing.T) {
+	result := compressRepeated("a---b", '-')
+	if result != "a-b" {
+		t.Fatalf("compressRepeated = %q", result)
+	}
+}
+
+func TestCodexTomlUnquoteLiteralStringNoEndQuote(t *testing.T) {
+	result := tomlUnquoteLiteralString("'hello")
+	if result == "" {
+		t.Fatalf("tomlUnquoteLiteralString returned empty without closing quote")
+	}
+}
+
+func TestCodexResponsesURLSlashSuffix(t *testing.T) {
+	if got := codexResponsesURL("https://api.example.com/v1/"); got != "https://api.example.com/v1/responses" {
+		t.Fatalf("codexResponsesURL trailing slash = %q", got)
+	}
+}
+
+func TestParseAgentNameEmpty(t *testing.T) {
+	got, err := parseAgentName("")
+	if err != nil {
+		t.Fatalf("parseAgentName empty: %v", err)
+	}
+	if got != agentClaude {
+		t.Fatalf("parseAgentName empty = %q, want claude", got)
+	}
+}
+
+func TestParseAgentNameWhitespace(t *testing.T) {
+	got, err := parseAgentName("  codex  ")
+	if err != nil {
+		t.Fatalf("parseAgentName whitespace: %v", err)
+	}
+	if got != agentCodex {
+		t.Fatalf("parseAgentName whitespace = %q, want codex", got)
+	}
+}
+
+func TestParseAgentNameInvalid(t *testing.T) {
+	_, err := parseAgentName("invalid-agent-name")
+	if err == nil {
+		t.Fatalf("expected error for invalid agent name")
+	}
+}
+
+func TestDetectProviderCodexFallback(t *testing.T) {
+	got := detectProvider("https://opencode.ai/custom/path", "opencode-go/some-model")
+	if got != "opencode-go" {
+		t.Fatalf("detectProvider opencode-go prefix = %q", got)
+	}
+}
+
+func TestDetectProviderMinimaxi(t *testing.T) {
+	got := detectProvider("https://api.minimaxi.com/anthropic", "")
+	if got != "minimax-cn" {
+		t.Fatalf("detectProvider minimaxi cn = %q", got)
+	}
+	got = detectProvider("https://api.minimax.io/anthropic", "")
+	if got != "minimax-global" {
+		t.Fatalf("detectProvider minimaxi global = %q", got)
+	}
+}
+
+func TestDetectProviderDeepseek(t *testing.T) {
+	got := detectProvider("https://api.deepseek.com/anthropic", "")
+	if got != "deepseek" {
+		t.Fatalf("detectProvider deepseek = %q", got)
+	}
+}
+
+func TestDetectProviderOllamaCloud(t *testing.T) {
+	got := detectProvider("https://ollama.com/v1", "")
+	if got != "ollama-cloud" {
+		t.Fatalf("detectProvider ollama cloud = %q", got)
+	}
+}
+
+func TestDetectProviderOpencode(t *testing.T) {
+	got := detectProvider("https://opencode.ai/api", "")
+	if got != "opencode-go" {
+		t.Fatalf("detectProvider opencode = %q", got)
+	}
+}
+
+func TestResolveProviderPresetInvalid(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"custom-1": {Name: "Custom", BaseURL: "", Model: "m"},
+	}}
+	_, err := resolveProviderPreset("custom-1", cfg)
+	if err == nil {
+		t.Fatalf("expected error for custom provider with no base URL")
+	}
+}
+
+func TestCodexTOMLProviderNameDefault(t *testing.T) {
+	name := codexTOMLProviderName("unknown")
+	if name != "unknown" {
+		t.Fatalf("codexTOMLProviderName unknown = %q", name)
+	}
+}
+
+func TestUpgradeAssetNameLinux(t *testing.T) {
+	name, err := upgradeAssetName("linux", "amd64")
+	if err != nil {
+		t.Fatalf("upgradeAssetName: %v", err)
+	}
+	if !strings.Contains(name, "linux") {
+		t.Fatalf("upgradeAssetName should include linux: %s", name)
+	}
+}
+
+func TestShouldSkipUpgradeSameVersion(t *testing.T) {
+	oldVersion := version
+	version = "v1.0.0"
+	t.Cleanup(func() { version = oldVersion })
+	if !shouldSkipUpgrade("v1.0.0", "v1.0.0") {
+		t.Fatalf("shouldSkipUpgrade should skip same version")
 	}
 }

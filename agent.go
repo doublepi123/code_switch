@@ -23,8 +23,10 @@ func agentDisplayName(agent AgentName) string {
 	switch agent {
 	case agentCodex:
 		return "Codex"
-	default:
+	case agentClaude:
 		return "Claude Code"
+	default:
+		return fmt.Sprintf("Unknown (%s)", string(agent))
 	}
 }
 

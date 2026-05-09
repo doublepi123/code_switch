@@ -47,13 +47,6 @@ func successPrefix(text string) string {
 	return green("[OK] ") + text
 }
 
-func errorPrefix(text string) string {
-	if noColor {
-		return "[ERR] " + text
-	}
-	return red("[ERR] ") + text
-}
-
 func formatLabel(label, value string) string {
 	if noColor {
 		return label + ": " + value

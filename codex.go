@@ -193,9 +193,9 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 		if name, ok := tomlSectionName(line); ok {
 			section = name
 			skipSection = false
-for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
-			pName := codexTOMLProviderName(p)
-			if name == "model_providers."+pName || strings.HasPrefix(name, "model_providers."+pName+".") {
+			for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
+				pName := codexTOMLProviderName(p)
+				if name == "model_providers."+pName || strings.HasPrefix(name, "model_providers."+pName+".") {
 					skipSection = true
 					break
 				}
@@ -386,6 +386,11 @@ func writeTextAtomic(path, content string, perm os.FileMode) error {
 		return err
 	}
 	tmp := f.Name()
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
 	if _, err := f.WriteString(content); err != nil {
 		f.Close()
 		os.Remove(tmp)

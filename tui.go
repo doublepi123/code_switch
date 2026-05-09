@@ -511,9 +511,12 @@ func (ts *tuiState) showCustomModelForm(provider string) {
 	form.AddInputField("Model", modelValue, 0, nil, func(text string) {
 		modelValue = text
 	})
+	errLabel := tview.NewTextView()
+	errLabel.SetTextColor(tcell.ColorRed)
 	form.AddButton("Save", func() {
 		modelValue = strings.TrimSpace(modelValue)
 		if modelValue == "" {
+			errLabel.SetText("Model name cannot be empty")
 			return
 		}
 		ts.customModels[provider] = modelValue
@@ -532,7 +535,11 @@ func (ts *tuiState) showCustomModelForm(provider string) {
 		}
 		return event
 	})
-	ts.pages.AddAndSwitchToPage("custom-model", form, true)
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(errLabel, 1, 0, false)
+	page.AddItem(form, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("custom-model", page, true)
 	ts.app.SetFocus(form)
 }
 
@@ -542,6 +549,8 @@ func (ts *tuiState) showCustomProviderForm() {
 	apiKeyValue := ""
 	modelValue := ""
 	authEnvValue := ""
+	errLabel := tview.NewTextView()
+	errLabel.SetTextColor(tcell.ColorRed)
 	form := tview.NewForm()
 	form.AddInputField("Name", "", 0, nil, func(text string) {
 		nameValue = text
@@ -568,10 +577,24 @@ func (ts *tuiState) showCustomProviderForm() {
 		apiKeyValue = strings.TrimSpace(apiKeyValue)
 		modelValue = strings.TrimSpace(modelValue)
 		authEnvValue = strings.TrimSpace(authEnvValue)
-		if nameValue == "" || baseURLValue == "" || apiKeyValue == "" || modelValue == "" {
+		if nameValue == "" {
+			errLabel.SetText("Name cannot be empty")
+			return
+		}
+		if baseURLValue == "" {
+			errLabel.SetText("Base URL cannot be empty")
 			return
 		}
 		if err := validateBaseURL(baseURLValue); err != nil {
+			errLabel.SetText(err.Error())
+			return
+		}
+		if apiKeyValue == "" {
+			errLabel.SetText("API Key cannot be empty")
+			return
+		}
+		if modelValue == "" {
+			errLabel.SetText("Model cannot be empty")
 			return
 		}
 		ts.result = ConfigureSelection{
@@ -597,7 +620,11 @@ func (ts *tuiState) showCustomProviderForm() {
 		}
 		return event
 	})
-	ts.pages.AddAndSwitchToPage("custom-provider", form, true)
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(errLabel, 1, 0, false)
+	page.AddItem(form, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("custom-provider", page, true)
 	ts.app.SetFocus(form)
 }
 

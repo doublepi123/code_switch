@@ -53,6 +53,9 @@ func cmdEnv(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
 	fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
 	fmt.Fprintf(out, "export %s=%s\n", authEnv, shellSingleQuote(pa.APIKey))
+	if preset.ReasoningEffort != "" {
+		fmt.Fprintf(out, "export CLAUDE_CODE_EFFORT_LEVEL=%s\n", shellSingleQuote(preset.ReasoningEffort))
+	}
 	for key, value := range preset.ExtraEnv {
 		fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(value)))
 	}

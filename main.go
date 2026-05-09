@@ -50,7 +50,7 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	case "current":
 		return cmdCurrent(args[1:], out)
 	case "set-key":
-		return cmdSetKey(args[1:])
+		return cmdSetKey(args[1:], out)
 	case "switch":
 		return cmdSwitchWithOutput(args[1:], out)
 	case "env":
@@ -198,7 +198,7 @@ func cmdCurrent(args []string, out io.Writer) error {
 	return nil
 }
 
-func cmdSetKey(args []string) error {
+func cmdSetKey(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("set-key", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
@@ -217,8 +217,8 @@ func cmdSetKey(args []string) error {
 	provider := canonicalProviderName(remaining[0])
 
 	if agent == agentCodex {
-if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepseek" {
-		return fmt.Errorf("unsupported provider %q for agent codex", remaining[0])
+		if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepseek" {
+			return fmt.Errorf("unsupported provider %q for agent codex", remaining[0])
 	}
 		cfg, path, unlock, err := loadAppConfigLocked()
 		if err != nil {
@@ -233,7 +233,7 @@ if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepse
 		if err := writeJSONAtomic(path, cfg); err != nil {
 			return err
 		}
-		fmt.Printf("saved api key for %s (codex) in %s\n", provider, path)
+		fmt.Fprintf(out, "saved api key for %s (codex) in %s\n", provider, path)
 		return nil
 	}
 
@@ -256,7 +256,7 @@ if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepse
 		return err
 	}
 
-	fmt.Printf("saved api key for %s in %s\n", provider, path)
+	fmt.Fprintf(out, "saved api key for %s in %s\n", provider, path)
 	return nil
 }
 
@@ -425,6 +425,8 @@ func providerCompletionWordList() string {
 			}
 		}
 	}
+	// Weak dependency: failing to load app config for shell completion
+	// gracefully falls back to preset-only completion words.
 	sort.Strings(names)
 	return strings.Join(names, " ")
 }

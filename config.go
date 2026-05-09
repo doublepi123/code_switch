@@ -170,6 +170,11 @@ func writeJSONAtomic(path string, value any) error {
 		return err
 	}
 	tmp := f.Name()
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		os.Remove(tmp)

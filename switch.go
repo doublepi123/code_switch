@@ -19,21 +19,7 @@ type providerArgs struct {
 	DryRun    bool
 }
 
-func resolveProviderAndKey(providerArg, apiKeyFlag, model string) (*providerArgs, *AppConfig, error) {
-	pa, cfg, _, err := resolveProviderAndKeyForAgent(agentClaude, providerArg, apiKeyFlag, model)
-	return pa, cfg, err
-}
-
-func resolveProviderAndKeyForAgent(agent AgentName, providerArg, apiKeyFlag, model string) (*providerArgs, *AppConfig, string, error) {
-	provider := canonicalProviderName(providerArg)
-	cfg, path, err := loadAppConfig()
-	if err != nil {
-		return nil, nil, "", err
-	}
-	preset, err := resolveAgentProviderPreset(agent, provider, cfg)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("unsupported provider %q", providerArg)
-	}
+func resolveKey(agent AgentName, cfg *AppConfig, provider, apiKeyFlag string, preset ProviderPreset) (string, error) {
 	key := strings.TrimSpace(apiKeyFlag)
 	if key == "" {
 		if agent == agentCodex {
@@ -46,17 +32,47 @@ func resolveProviderAndKeyForAgent(agent AgentName, providerArg, apiKeyFlag, mod
 		}
 	}
 	if key == "" && !preset.NoAPIKey {
-		return nil, nil, "", fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
+		return "", fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
 	}
 	if key == "" {
 		key = provider
+	}
+	return key, nil
+}
+
+func resolveProviderAndKeyFromConfig(agent AgentName, cfg *AppConfig, providerArg, apiKeyFlag, model string) (*providerArgs, error) {
+	provider := canonicalProviderName(providerArg)
+	preset, err := resolveAgentProviderPreset(agent, provider, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("unsupported provider %q", providerArg)
+	}
+	key, err := resolveKey(agent, cfg, provider, apiKeyFlag, preset)
+	if err != nil {
+		return nil, err
 	}
 	return &providerArgs{
 		Agent:    agent,
 		Provider: provider,
 		APIKey:   key,
 		Model:    strings.TrimSpace(model),
-	}, cfg, path, nil
+	}, nil
+}
+
+func resolveProviderAndKey(providerArg, apiKeyFlag, model string) (*providerArgs, *AppConfig, error) {
+	pa, cfg, _, err := resolveProviderAndKeyForAgent(agentClaude, providerArg, apiKeyFlag, model)
+	return pa, cfg, err
+}
+
+func resolveProviderAndKeyForAgent(agent AgentName, providerArg, apiKeyFlag, model string) (*providerArgs, *AppConfig, string, error) {
+	cfg, path, err := loadAppConfig()
+	if err != nil {
+		return nil, nil, "", err
+	}
+	pa, err := resolveProviderAndKeyFromConfig(agent, cfg, providerArg, apiKeyFlag, model)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return pa, cfg, path, nil
 }
 
 func cmdSwitch(args []string) error {
@@ -84,7 +100,13 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return err
 	}
 
-	pa, cfg, configPath, err := resolveProviderAndKeyForAgent(agent, providerArg, *apiKey, *model)
+	cfg, configPath, unlock, err := loadAppConfigLocked()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	pa, err := resolveProviderAndKeyFromConfig(agent, cfg, providerArg, *apiKey, *model)
 	if err != nil {
 		return err
 	}
@@ -93,12 +115,6 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 			return err
 		}
 		if !*dryRun {
-			cf := newConfigFile(configPath)
-			unlock, lockErr := cf.lock()
-			if lockErr != nil {
-				return lockErr
-			}
-			defer unlock()
 			return writeJSONAtomic(configPath, cfg)
 		}
 		return nil
@@ -193,6 +209,9 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey string) {
 		env["CLAUDE_CODE_SUBAGENT_MODEL"] = preset.Subagent
 	}
 
+	if preset.ReasoningEffort != "" {
+		env["CLAUDE_CODE_EFFORT_LEVEL"] = preset.ReasoningEffort
+	}
 	for key, value := range preset.ExtraEnv {
 		env[key] = value
 	}

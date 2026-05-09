@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
-
-const lockStaleAge = 30 * time.Second
 
 type configFile struct {
 	path string
@@ -26,7 +25,7 @@ func (cf *configFile) lock() (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 10; attempt++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			fmt.Fprintf(f, "%d\n", os.Getpid())
@@ -39,15 +38,28 @@ func (cf *configFile) lock() (func(), error) {
 		if !os.IsExist(err) {
 			return nil, fmt.Errorf("create lock file: %w", err)
 		}
-		info, statErr := os.Stat(lockPath)
-		if statErr != nil {
-			continue
-		}
-		if time.Since(info.ModTime()) > lockStaleAge {
+		if pid := readLockPID(lockPath); pid > 0 && !processExists(pid) {
 			os.Remove(lockPath)
 			continue
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("config file is locked by another process (try again in a few seconds)")
+}
+
+func readLockPID(lockPath string) int {
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return 0
+	}
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
+func processExists(pid int) bool {
+	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
+	return err == nil
 }
