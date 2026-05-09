@@ -7445,3 +7445,50 @@ func TestCmdEnvTokenAPIKeyOverride(t *testing.T) {
 		t.Fatalf("token output = %q, want override-key", got)
 	}
 }
+
+func TestColorizeWithNoColor(t *testing.T) {
+	origNoColor := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = origNoColor })
+
+	if got := green("test"); got != "test" {
+		t.Fatalf("green with NO_COLOR = %q, want test", got)
+	}
+	if got := red("err"); got != "err" {
+		t.Fatalf("red with NO_COLOR = %q, want err", got)
+	}
+	if got := formatLabel("key", "val"); got != "key: val" {
+		t.Fatalf("formatLabel with NO_COLOR = %q, want key: val", got)
+	}
+	if got := successPrefix("done"); got != "[OK] done" {
+		t.Fatalf("successPrefix with NO_COLOR = %q, want [OK] done", got)
+	}
+	if got := errorPrefix("fail"); got != "[ERR] fail" {
+		t.Fatalf("errorPrefix with NO_COLOR = %q, want [ERR] fail", got)
+	}
+}
+
+func TestColorizeWithColor(t *testing.T) {
+	origNoColor := noColor
+	noColor = false
+	t.Cleanup(func() { noColor = origNoColor })
+
+	if !strings.Contains(green("ok"), "\x1b[32m") {
+		t.Fatalf("green should contain ANSI escape")
+	}
+	if !strings.Contains(red("err"), "\x1b[31m") {
+		t.Fatalf("red should contain ANSI escape")
+	}
+	if !strings.Contains(successPrefix("done"), "[OK]") {
+		t.Fatalf("successPrefix should contain [OK]")
+	}
+	if !strings.Contains(errorPrefix("fail"), "[ERR]") {
+		t.Fatalf("errorPrefix should contain [ERR]")
+	}
+	if !strings.Contains(formatLabel("k", "v"), "\x1b[2m") {
+		t.Fatalf("formatLabel should contain dim escape")
+	}
+	if !strings.Contains(formatLabel("k", "v"), "\x1b[1m") {
+		t.Fatalf("formatLabel should contain bold escape")
+	}
+}
