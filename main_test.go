@@ -6422,3 +6422,1026 @@ func TestTestCodexProviderHTTPTestFailure(t *testing.T) {
 		t.Fatalf("output = %q, want FAIL", output.String())
 	}
 }
+
+func TestCmdEnvClaudeOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "deepseek"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdEnv returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "export ANTHROPIC_BASE_URL='https://api.deepseek.com/anthropic'") {
+		t.Fatalf("env output missing base URL: %s", out)
+	}
+	if !strings.Contains(out, "export ANTHROPIC_AUTH_TOKEN='sk-deepseek'") {
+		t.Fatalf("env output missing auth token: %s", out)
+	}
+	if !strings.Contains(out, "export ANTHROPIC_MODEL='deepseek-v4-pro[1m]'") {
+		t.Fatalf("env output missing model: %s", out)
+	}
+}
+
+func TestCmdEnvMissingProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"env"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for missing provider")
+	}
+}
+
+func TestCmdEnvCustomModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-or", Model: "custom-model"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"env", "openrouter"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdEnv returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "export ANTHROPIC_MODEL='custom-model'") {
+		t.Fatalf("env output missing custom model: %s", output.String())
+	}
+}
+
+func TestCmdTokenMissingProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"token"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for missing provider")
+	}
+}
+
+func TestCmdTokenClaudeSavedKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-or-test"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"token", "openrouter"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdToken returned error: %v", err)
+	}
+	if got := strings.TrimSpace(output.String()); got != "sk-or-test" {
+		t.Fatalf("token output = %q, want sk-or-test", got)
+	}
+}
+
+func TestCmdSetKeyCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	if err := cmdSetKey([]string{"--agent", "codex", "ollama-cloud", "test-key"}); err != nil {
+		t.Fatalf("cmdSetKey codex returned error: %v", err)
+	}
+}
+
+func TestCmdSetKeyNoAPIKeyProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	err := cmdSetKey([]string{"ollama", "unused"})
+	if err == nil {
+		t.Fatalf("expected error for NoAPIKey provider")
+	}
+}
+
+func TestCmdRemoveWithForce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test", Model: "deepseek-v4-pro"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := cmdRemove([]string{"--force", "deepseek"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdRemove --force returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "removed deepseek") {
+		t.Fatalf("remove output = %q", output.String())
+	}
+}
+
+func TestCmdRemoveNonexistent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"remove", "nonexistent"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for nonexistent provider")
+	}
+}
+
+func TestCmdRemoveCancelled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	input := strings.NewReader("n\n")
+	err := runWithIO([]string{"remove", "deepseek"}, input, output)
+	if err != nil {
+		t.Fatalf("cmdRemove cancelled returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "cancelled") {
+		t.Fatalf("expected cancelled in output, got %q", output.String())
+	}
+}
+
+func TestWriteJSONAtomicTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+
+	if err := writeJSONAtomic(path, map[string]string{"key": "value"}); err != nil {
+		t.Fatalf("writeJSONAtomic returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !bytes.HasSuffix(data, []byte("\n")) {
+		t.Fatalf("writeJSONAtomic should append trailing newline")
+	}
+	if data[0] != '{' {
+		t.Fatalf("expected JSON object, got %q", string(data[:1]))
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions = %o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestBackupIfExistsCreatesBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	original := []byte(`{"env":{}}`)
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := backupIfExists(path); err != nil {
+		t.Fatalf("backupIfExists returned error: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	backups := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "settings.json.bak-") {
+			backups++
+		}
+	}
+	if backups != 1 {
+		t.Fatalf("expected 1 backup file, found %d", backups)
+	}
+}
+
+func TestBackupIfNotExistsNoop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonexistent.json")
+
+	if err := backupIfExists(path); err != nil {
+		t.Fatalf("backupIfExists for nonexistent file returned error: %v", err)
+	}
+}
+
+func TestCmdEnvCodexAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Agents: map[string]AgentConfig{
+		"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "test-ollama-key"}}},
+	}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := cmdEnv([]string{"--agent", "codex", "ollama-cloud"}, output); err != nil {
+		t.Fatalf("cmdEnv codex returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "Codex uses command-based auth") {
+		t.Fatalf("env codex output missing header: %s", out)
+	}
+	if !strings.Contains(out, "export ANTHROPIC_BASE_URL=") {
+		t.Fatalf("env codex output missing base URL: %s", out)
+	}
+}
+
+func TestCmdEnvWithAPIKeyFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	output := &bytes.Buffer{}
+	if err := cmdEnv([]string{"deepseek", "--api-key", "sk-test-api-key"}, output); err != nil {
+		t.Fatalf("cmdEnv --api-key returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "sk-test-api-key") {
+		t.Fatalf("env output missing api key: %s", output.String())
+	}
+}
+
+func TestCmdEnvWithExtraEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}})
+
+	output := &bytes.Buffer{}
+	if err := cmdEnv([]string{"deepseek"}, output); err != nil {
+		t.Fatalf("cmdEnv deepseek returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "export ANTHROPIC_AUTH_TOKEN='sk-ds'") {
+		t.Fatalf("env output missing AUTH_TOKEN: %s", out)
+	}
+}
+
+func TestShellSingleQuote(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"hello", "'hello'"},
+		{"it's", "'it'\\''s'"},
+		{"", "''"},
+		{"abc'def", "'abc'\\''def'"},
+	}
+	for _, tt := range tests {
+		got := shellSingleQuote(tt.input)
+		if got != tt.expected {
+			t.Errorf("shellSingleQuote(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestCmdRemoveCodexWithForce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "test-key"}}},
+		},
+	}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := cmdRemove([]string{"--force", "--agent", "codex", "ollama-cloud"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdRemove codex --force returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "removed ollama-cloud (codex)") {
+		t.Fatalf("remove codex output = %q", output.String())
+	}
+}
+
+func TestCmdRemoveCodexCancelled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "test-key"}}},
+		},
+	}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	input := strings.NewReader("n\n")
+	if err := cmdRemove([]string{"--agent", "codex", "ollama-cloud"}, input, output); err != nil {
+		t.Fatalf("cmdRemove codex cancelled returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "cancelled") {
+		t.Fatalf("expected cancelled, got %q", output.String())
+	}
+}
+
+func TestCmdRemoveCodexNonexistent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	err := cmdRemove([]string{"--agent", "codex", "deepseek"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for nonexistent codex provider")
+	}
+}
+
+func TestCmdTokenWithAPIKeyFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	output := &bytes.Buffer{}
+	if err := cmdToken([]string{"deepseek", "--api-key", "sk-flag-key"}, output); err != nil {
+		t.Fatalf("cmdToken --api-key returned error: %v", err)
+	}
+	if got := strings.TrimSpace(output.String()); got != "sk-flag-key" {
+		t.Fatalf("token output = %q, want sk-flag-key", got)
+	}
+}
+
+func TestCmdRestoreInvalidAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	err := cmdRestore([]string{"--agent", "invalid"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected error for invalid agent")
+	}
+}
+
+func TestCmdListWithAgentFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--agent", "codex"}, output); err != nil {
+		t.Fatalf("cmdList --agent codex returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "ollama-cloud") {
+		t.Fatalf("list codex output missing ollama-cloud: %s", output.String())
+	}
+}
+
+func TestCmdCurrentWithAgentFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	os.MkdirAll(claudeDir, 0o755)
+
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+		},
+	}
+	writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	if err := cmdCurrent([]string{"--claude-dir", claudeDir}, output); err != nil {
+		t.Fatalf("cmdCurrent returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "deepseek") {
+		t.Fatalf("current output = %q", output.String())
+	}
+}
+
+func TestCmdRestoreClaudeDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	os.MkdirAll(claudeDir, 0o755)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	if err := cmdRestore([]string{"--dry-run"}, output); err != nil {
+		t.Fatalf("cmdRestore --dry-run returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "dry-run") {
+		t.Fatalf("expected dry-run in output, got %q", output.String())
+	}
+}
+
+func TestCmdRestoreClaudeActuallyRestores(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	os.MkdirAll(claudeDir, 0o755)
+
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_API_KEY":  "sk-test",
+		},
+	}
+	writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	if err := cmdRestore([]string{"--claude-dir", claudeDir}, output); err != nil {
+		t.Fatalf("cmdRestore claude returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "restored Claude") {
+		t.Fatalf("restore output = %q", output.String())
+	}
+
+	restored, err := readJSONMap(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read restored settings: %v", err)
+	}
+	env, ok := restored["env"].(map[string]any)
+	if ok {
+		if _, exists := env["ANTHROPIC_BASE_URL"]; exists {
+			t.Fatalf("ANTHROPIC_BASE_URL should have been removed")
+		}
+		if _, exists := env["ANTHROPIC_API_KEY"]; exists {
+			t.Fatalf("ANTHROPIC_API_KEY should have been removed")
+		}
+	}
+}
+
+func TestCmdEnvIncludesExtraEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}})
+
+	output := &bytes.Buffer{}
+	if err := cmdEnv([]string{"deepseek"}, output); err != nil {
+		t.Fatalf("cmdEnv deepseek returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") {
+		t.Fatalf("env output missing ExtraEnv: %s", out)
+	}
+}
+
+func TestCmdEnvErrorBadAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	err := cmdEnv([]string{"--agent", "badagent", "deepseek"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected error for bad agent")
+	}
+}
+
+func TestCmdTokenErrorBadAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	err := cmdToken([]string{"--agent", "badagent", "deepseek"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected error for bad agent")
+	}
+}
+
+func TestCmdEnvTailArgs(t *testing.T) {
+	err := cmdEnv([]string{"deepseek", "extra"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected error for extra tail args")
+	}
+}
+
+func TestLoadAppConfigFromEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	os.WriteFile(path, []byte("{}"), 0o644)
+
+	cfg, err := loadAppConfigFrom(path)
+	if err != nil {
+		t.Fatalf("loadAppConfigFrom empty object: %v", err)
+	}
+	if len(cfg.Providers) != 0 {
+		t.Fatalf("expected empty providers, got %d", len(cfg.Providers))
+	}
+}
+
+func TestLoadAppConfigFromInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	os.WriteFile(path, []byte("{invalid"), 0o644)
+
+	_, err := loadAppConfigFrom(path)
+	if err == nil {
+		t.Fatalf("expected error for invalid JSON")
+	}
+}
+
+func TestMigrateLegacyProvidersMigrates(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"minimax": {APIKey: "sk-test"},
+		},
+	}
+	migrateLegacyProviders(cfg)
+	if _, exists := cfg.Providers["minimax"]; exists {
+		t.Fatalf("minimax should have been removed")
+	}
+	if _, exists := cfg.Providers["minimax-cn"]; !exists {
+		t.Fatalf("minimax-cn should have been added")
+	}
+}
+
+func TestMigrateLegacyProvidersNoOverwrite(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"minimax":    {APIKey: "sk-legacy"},
+			"minimax-cn": {APIKey: "sk-existing"},
+		},
+	}
+	migrateLegacyProviders(cfg)
+	if got := cfg.Providers["minimax-cn"].APIKey; got != "sk-existing" {
+		t.Fatalf("minimax-cn should keep existing key, got %q", got)
+	}
+}
+
+func TestCmdEnvTokenMissingProviderArg(t *testing.T) {
+	err := cmdToken([]string{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected error for missing provider arg")
+	}
+}
+
+func TestCmdEnvMissingArg(t *testing.T) {
+	err := cmdEnv([]string{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected error for missing provider arg")
+	}
+}
+
+func TestEnsureNestedMap(t *testing.T) {
+	root := map[string]any{}
+	obj := ensureNestedMap(root, "env")
+	if obj == nil {
+		t.Fatalf("expected non-nil map")
+	}
+	if _, ok := root["env"]; !ok {
+		t.Fatalf("expected env key in root")
+	}
+	existing := ensureNestedMap(root, "env")
+	if existing == nil {
+		t.Fatalf("expected non-nil map for existing key")
+	}
+}
+
+func TestSwitchCodexProviderNonDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{}},
+		},
+	}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	codexDir := filepath.Join(home, ".codex")
+	os.MkdirAll(codexDir, 0o755)
+
+	output := &bytes.Buffer{}
+	if err := switchCodexProvider("ollama-cloud", cfg, "test-key", "", codexDir, output, false); err != nil {
+		t.Fatalf("switchCodexProvider returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "switched Codex") {
+		t.Fatalf("output = %q", output.String())
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	if !strings.Contains(string(configBytes), "model_provider") {
+		t.Fatalf("codex config missing model_provider: %s", string(configBytes))
+	}
+}
+
+func TestCodexResponsesURL(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"https://api.example.com/v1", "https://api.example.com/v1/responses"},
+		{"https://api.example.com/v1/", "https://api.example.com/v1/responses"},
+		{"https://api.example.com", "https://api.example.com/v1/responses"},
+		{"https://api.example.com/", "https://api.example.com/v1/responses"},
+	}
+	for _, tt := range tests {
+		got := codexResponsesURL(tt.input)
+		if got != tt.expected {
+			t.Errorf("codexResponsesURL(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestWriteTextAtomicContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.toml")
+
+	if err := writeTextAtomic(path, "hello world", 0o644); err != nil {
+		t.Fatalf("writeTextAtomic returned error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != "hello world" {
+		t.Fatalf("content = %q, want %q", string(data), "hello world")
+	}
+}
+
+func TestRestoreCodexConfigNonDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "test-key"}}},
+		},
+	}
+
+	codexDir := filepath.Join(home, ".codex")
+	os.MkdirAll(codexDir, 0o755)
+
+	configContent := `model = "qwen3-coder"
+
+[model_providers.ollama-cloud]
+name = "Ollama Cloud"
+base_url = "http://localhost:11434/v1"
+
+[model_providers.ollama-cloud.auth]
+command = "cs"
+args = ["token", "ollama-cloud", "--agent", "codex"]
+`
+	os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte(configContent), 0o644)
+
+	output := &bytes.Buffer{}
+	if err := restoreCodexConfig(codexDir, cfg, output, false); err != nil {
+		t.Fatalf("restoreCodexConfig returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "restored Codex") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestProviderModelsForAgentCodexBase(t *testing.T) {
+	cfg := &AppConfig{}
+	models := providerModelsForAgent(cfg, agentCodex, "ollama-cloud")
+	if len(models) == 0 {
+		t.Fatalf("expected at least one model for ollama-cloud, got none")
+	}
+}
+
+func TestCmdRestoreCodexAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	codexDir := filepath.Join(home, ".codex")
+	os.MkdirAll(codexDir, 0o755)
+
+	output := &bytes.Buffer{}
+	if err := cmdRestore([]string{"--agent", "codex", "--codex-dir", codexDir}, output); err != nil {
+		t.Fatalf("cmdRestore codex returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "restored Codex") {
+		t.Fatalf("expected restored Codex in output, got %q", output.String())
+	}
+}
+
+func TestCmdListVerboseDetailed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--verbose"}, output); err != nil {
+		t.Fatalf("cmdList --verbose returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "deepseek") {
+		t.Fatalf("verbose list should contain deepseek: %s", output.String())
+	}
+}
+
+func TestCmdTestMissingProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"test"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for missing provider arg")
+	}
+}
+
+func TestCmdSetKeyWithAgentClaude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	if err := cmdSetKey([]string{"--agent", "claude", "deepseek", "sk-test-123"}); err != nil {
+		t.Fatalf("cmdSetKey --agent claude returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(configBytes, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := cfg.Providers["deepseek"].APIKey; got != "sk-test-123" {
+		t.Fatalf("stored api key = %q, want sk-test-123", got)
+	}
+}
+
+func TestCmdRemoveForceClaudeAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-or", Model: "auto"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := cmdRemove([]string{"--force", "--agent", "claude", "openrouter"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdRemove --force --agent claude returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "removed openrouter") {
+		t.Fatalf("remove output = %q", output.String())
+	}
+}
+
+func TestCmdRemoveFlagParseError(t *testing.T) {
+	err := cmdRemove([]string{"--unknownflag"}, strings.NewReader(""), &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected error for unknown flag")
+	}
+}
+
+func TestEnsureAppConfigMapsNil(t *testing.T) {
+	cfg := &AppConfig{}
+	ensureAppConfigMaps(cfg)
+	if cfg.Providers == nil {
+		t.Fatalf("expected Providers to be initialized")
+	}
+	if cfg.Agents == nil {
+		t.Fatalf("expected Agents to be initialized")
+	}
+}
+
+func TestEnsureAppConfigMapsNilAgentProviders(t *testing.T) {
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {},
+		},
+	}
+	ensureAppConfigMaps(cfg)
+	if cfg.Agents["codex"].Providers == nil {
+		t.Fatalf("expected codex Providers to be initialized")
+	}
+}
+
+func TestAppConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path, err := appConfigPath()
+	if err != nil {
+		t.Fatalf("appConfigPath error: %v", err)
+	}
+	if !strings.Contains(path, ".code-switch") {
+		t.Fatalf("expected .code-switch in path, got %q", path)
+	}
+}
+
+func TestLegacyAppConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path, err := legacyAppConfigPath()
+	if err != nil {
+		t.Fatalf("legacyAppConfigPath error: %v", err)
+	}
+	if !strings.Contains(path, ".claude-switch") {
+		t.Fatalf("expected .claude-switch in path, got %q", path)
+	}
+}
+
+func TestLoadAppConfigLocked(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	loaded, path, unlock, err := loadAppConfigLocked()
+	if err != nil {
+		t.Fatalf("loadAppConfigLocked error: %v", err)
+	}
+	defer unlock()
+	if loaded.Providers["deepseek"].APIKey != "sk-test" {
+		t.Fatalf("expected deepseek key, got %q", loaded.Providers["deepseek"].APIKey)
+	}
+	if path == "" {
+		t.Fatalf("expected non-empty path")
+	}
+}
+
+func TestCmdTestInvalidProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"test", "nonexistent-provider"}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatalf("expected error for nonexistent provider")
+	}
+}
+
+func TestStoredAPIKeyForAgentCodex(t *testing.T) {
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "codex-key"}}},
+		},
+		Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "claude-key"}},
+	}
+	key := storedAPIKeyForAgent(cfg, agentCodex, "ollama-cloud")
+	if key != "codex-key" {
+		t.Fatalf("expected codex-key, got %q", key)
+	}
+}
+
+func TestStoredAPIKeyForAgentClaudeFallback(t *testing.T) {
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{}},
+		},
+		Providers: map[string]StoredProvider{"deepseek": {APIKey: "claude-key"}},
+	}
+	key := storedAPIKeyForAgent(cfg, agentCodex, "deepseek")
+	if key != "claude-key" {
+		t.Fatalf("expected claude-key fallback, got %q", key)
+	}
+}
+
+func TestStoredAPIKeyForAgentClaude(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}},
+	}
+	key := storedAPIKeyForAgent(cfg, agentClaude, "deepseek")
+	if key != "sk-ds" {
+		t.Fatalf("expected sk-ds, got %q", key)
+	}
+}
+
+func TestCmdSetKeyCodexUnsupportedProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+
+	err := cmdSetKey([]string{"--agent", "codex", "deepseek", "sk-123"})
+	if err == nil {
+		t.Fatalf("expected error for unsupported codex provider")
+	}
+}
+
+func TestCmdRemoveForceFlagOrdering(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := cmdRemove([]string{"--force", "--agent", "claude", "deepseek"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("cmdRemove --force --agent claude returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "removed deepseek") {
+		t.Fatalf("remove output = %q", output.String())
+	}
+}
+
+func TestProviderModelsForAgentCodexOpenRouterFallback(t *testing.T) {
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{}},
+		},
+	}
+	models := providerModelsForAgent(cfg, agentCodex, "openrouter")
+	if len(models) == 0 {
+		t.Fatalf("expected at least one model for openrouter, got none")
+	}
+}
+
+func TestProviderModelsForAgentCodexInvalidProvider(t *testing.T) {
+	cfg := &AppConfig{}
+	models := providerModelsForAgent(cfg, agentCodex, "nonexistent")
+	if models != nil {
+		t.Fatalf("expected nil for invalid provider, got %v", models)
+	}
+}
+
+func TestProviderModelsForAgentCodexNoModels(t *testing.T) {
+	cfg := &AppConfig{}
+	preset := providerPresets["ollama-cloud"]
+	if len(preset.Models) == 0 {
+		models := providerModelsForAgent(cfg, agentCodex, "ollama-cloud")
+		if len(models) != 1 {
+			t.Fatalf("expected 1 model fallback, got %v", models)
+		}
+	}
+}
+
+func TestUpsertAgentProviderConfig(t *testing.T) {
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{}},
+		},
+	}
+	selection := ConfigureSelection{
+		Agent:    "codex",
+		Provider: "ollama-cloud",
+		Model:    "qwen3-coder",
+		Name:     "Ollama Cloud",
+		BaseURL:  "https://example.com",
+	}
+	upsertAgentProviderConfig(cfg, agentCodex, selection, "sk-test")
+
+	stored := cfg.Agents["codex"].Providers["ollama-cloud"]
+	if stored.APIKey != "sk-test" {
+		t.Fatalf("expected sk-test, got %q", stored.APIKey)
+	}
+	if stored.Model != "qwen3-coder" {
+		t.Fatalf("expected qwen3-coder, got %q", stored.Model)
+	}
+	if stored.Name != "Ollama Cloud" {
+		t.Fatalf("expected Ollama Cloud, got %q", stored.Name)
+	}
+}
+
+func TestCmdSwitchDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := cmdSwitchWithOutput([]string{"deepseek", "--dry-run"}, output); err != nil {
+		t.Fatalf("cmdSwitch --dry-run returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "dry-run") {
+		t.Fatalf("expected dry-run in output, got %q", output.String())
+	}
+}
+
+func TestCmdSwitchWithAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	os.MkdirAll(claudeDir, 0o755)
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{}}
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+
+	output := &bytes.Buffer{}
+	if err := cmdSwitchWithOutput([]string{"deepseek", "--api-key", "sk-test-key", "--claude-dir", claudeDir}, output); err != nil {
+		t.Fatalf("cmdSwitch --api-key returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "switched") {
+		t.Fatalf("expected switched in output, got %q", output.String())
+	}
+}
+
+func TestCmdEnvTokenAPIKeyOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+
+	output := &bytes.Buffer{}
+	if err := cmdToken([]string{"--api-key", "override-key", "deepseek"}, output); err != nil {
+		t.Fatalf("cmdToken --api-key returned error: %v", err)
+	}
+	if got := strings.TrimSpace(output.String()); got != "override-key" {
+		t.Fatalf("token output = %q, want override-key", got)
+	}
+}
