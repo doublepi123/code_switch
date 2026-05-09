@@ -45,7 +45,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	reader := bufio.NewReader(in)
 	var selection ConfigureSelection
 	if file, ok := in.(*os.File); ok && shouldUseArrowTUI(file) {
-		selection, err = runArrowTUI(cfg, agent, !agentExplicit, currentProvider, currentModel)
+		selection, err = runArrowTUI(cfg, agent, !agentExplicit, currentProvider, currentModel, *claudeDir, *codexDir)
 		if err != nil {
 			return err
 		}
@@ -146,6 +146,8 @@ type tuiState struct {
 	selectAgent     bool
 	currentProvider string
 	currentModel    string
+	claudeDir       string
+	codexDir        string
 	names           []string
 
 	selectedProvider string
@@ -599,6 +601,16 @@ func (ts *tuiState) showCustomProviderForm() {
 	ts.app.SetFocus(form)
 }
 
+func (ts *tuiState) refreshCurrentConfig() {
+	if ts.agent == agentCodex {
+		_, cp, cm, _, _ := currentCodexProvider(ts.codexDir)
+		ts.currentProvider = codexTOMLProviderKey(cp)
+		ts.currentModel = cm
+	} else {
+		ts.currentProvider, ts.currentModel = currentConfiguredProvider(ts.cfg, ts.claudeDir)
+	}
+}
+
 func (ts *tuiState) showAgents() {
 	agentList := tview.NewList()
 	agentList.ShowSecondaryText(false)
@@ -610,6 +622,7 @@ func (ts *tuiState) showAgents() {
 		agentList.AddItem(agentDisplayName(agentName), "", 0, func() {
 			ts.agent = agentName
 			ts.selectedProvider = ""
+			ts.refreshCurrentConfig()
 			ts.showProviders()
 		})
 	}
@@ -659,7 +672,7 @@ func (ts *tuiState) showRestoreConfirm() {
 	ts.app.SetFocus(confirm)
 }
 
-func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvider, currentModel string) (ConfigureSelection, error) {
+func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvider, currentModel, claudeDir, codexDir string) (ConfigureSelection, error) {
 	names := providerNamesForAgent(agent, cfg, agent == agentClaude, true)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
@@ -681,6 +694,8 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		selectAgent:      selectAgent,
 		currentProvider:  currentProvider,
 		currentModel:     currentModel,
+		claudeDir:        claudeDir,
+		codexDir:         codexDir,
 		names:            names,
 		selectedProvider: selectedProvider,
 		typedAPIKeys:     map[string]string{},
