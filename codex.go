@@ -27,6 +27,8 @@ func codexConfigPath(overrideDir string) string {
 
 func codexTOMLProviderName(provider string) string {
 	switch provider {
+	case "deepseek":
+		return "DeepSeek"
 	case "openrouter":
 		return "OpenRouter"
 	default:
@@ -36,6 +38,8 @@ func codexTOMLProviderName(provider string) string {
 
 func codexTOMLProviderKey(providerName string) string {
 	switch providerName {
+	case "DeepSeek":
+		return "deepseek"
 	case "OpenRouter":
 		return "openrouter"
 	case "ollama-cloud":
@@ -162,7 +166,7 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 	provider, model, _, _ := parseCodexTopLevel(existing)
 
 	isKnownProvider := false
-	for _, p := range []string{"ollama-cloud", "openrouter"} {
+	for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
 		pName := codexTOMLProviderName(p)
 		if provider == pName {
 			isKnownProvider = true
@@ -189,9 +193,9 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 		if name, ok := tomlSectionName(line); ok {
 			section = name
 			skipSection = false
-			for _, p := range []string{"ollama-cloud", "openrouter"} {
-				pName := codexTOMLProviderName(p)
-				if name == "model_providers."+pName || strings.HasPrefix(name, "model_providers."+pName+".") {
+for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
+			pName := codexTOMLProviderName(p)
+			if name == "model_providers."+pName || strings.HasPrefix(name, "model_providers."+pName+".") {
 					skipSection = true
 					break
 				}
@@ -234,14 +238,14 @@ func isManagedCodexModel(model string, cfg *AppConfig) bool {
 	if model == "" {
 		return false
 	}
-	for _, fn := range []func() ProviderPreset{codexOllamaCloudPreset, codexOpenRouterPreset} {
+	for _, fn := range []func() ProviderPreset{codexDeepSeekPreset, codexOllamaCloudPreset, codexOpenRouterPreset} {
 		preset := fn()
 		if model == preset.Model || containsString(preset.Models, model) {
 			return true
 		}
 	}
 	if cfg != nil {
-		for _, p := range []string{"ollama-cloud", "openrouter"} {
+		for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
 			if strings.TrimSpace(codexProviderConfig(cfg, p).Model) == model {
 				return true
 			}

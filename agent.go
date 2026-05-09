@@ -89,12 +89,23 @@ func codexOpenRouterPreset() ProviderPreset {
 	return preset
 }
 
+func codexDeepSeekPreset() ProviderPreset {
+	preset := providerPresets["deepseek"]
+	preset.BaseURL = "https://api.deepseek.com/v1"
+	preset.AuthEnv = "DEEPSEEK_API_KEY"
+	preset.ForceModelTiers = true
+	preset.ReasoningEffort = "xhigh"
+	return preset
+}
+
 func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig) (ProviderPreset, error) {
 	switch agent {
 	case agentCodex:
 		provider = canonicalProviderName(provider)
 		var preset ProviderPreset
 		switch provider {
+		case "deepseek":
+			preset = codexDeepSeekPreset()
 		case "ollama-cloud":
 			preset = codexOllamaCloudPreset()
 		case "openrouter":
@@ -117,6 +128,8 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 		provider = canonicalProviderName(provider)
 		var preset ProviderPreset
 		switch provider {
+		case "deepseek":
+			preset = codexDeepSeekPreset()
 		case "ollama-cloud":
 			preset = codexOllamaCloudPreset()
 		case "openrouter":
@@ -138,7 +151,7 @@ func providerNamesForAgent(agent AgentName, cfg *AppConfig, includeCustomOption 
 	var names []string
 	switch agent {
 	case agentCodex:
-		names = []string{"ollama-cloud", "openrouter"}
+		names = []string{"deepseek", "ollama-cloud", "openrouter"}
 	default:
 		names = sortedProviderNames(cfg, includeCustomOption)
 	}

@@ -535,12 +535,9 @@ func TestCodexListAndTUIProviderNamesIncludeRestore(t *testing.T) {
 	if !strings.Contains(out, "ollama-cloud") {
 		t.Fatalf("codex list missing ollama-cloud: %q", out)
 	}
-	if strings.Contains(out, "deepseek") {
-		t.Fatalf("codex list should not include Claude-only providers: %q", out)
-	}
 
 	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
-	if len(names) != 3 || names[0] != "ollama-cloud" || names[1] != "openrouter" || names[2] != restoreProviderOption {
+	if len(names) != 4 || names[0] != "deepseek" || names[1] != "ollama-cloud" || names[2] != "openrouter" || names[3] != restoreProviderOption {
 		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }
@@ -678,9 +675,9 @@ func TestCodexSwitchRejectsUnsupportedProvider(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	output := &bytes.Buffer{}
-	err := runWithIO([]string{"switch", "deepseek", "--agent", "codex"}, strings.NewReader(""), output)
+	err := runWithIO([]string{"switch", "minimax-cn", "--agent", "codex"}, strings.NewReader(""), output)
 	if err == nil {
-		t.Fatalf("expected error for unsupported provider deepseek on codex")
+		t.Fatalf("expected error for unsupported provider minimax-cn on codex")
 	}
 	if !strings.Contains(err.Error(), "unsupported provider") {
 		t.Fatalf("expected unsupported provider error, got: %v", err)
@@ -696,18 +693,15 @@ func TestCodexListIncludesOpenRouter(t *testing.T) {
 		t.Fatalf("cmdList codex returned error: %v", err)
 	}
 	out := output.String()
-	for _, want := range []string{"ollama-cloud", "openrouter"} {
+	for _, want := range []string{"deepseek", "ollama-cloud", "openrouter"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("codex list missing %q: %q", want, out)
 		}
 	}
-	if strings.Contains(out, "deepseek") {
-		t.Fatalf("codex list should not include Claude-only providers: %q", out)
-	}
 
 	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
-	if len(names) != 3 || names[0] != "ollama-cloud" || names[1] != "openrouter" || names[2] != restoreProviderOption {
-		t.Fatalf("codex TUI provider names = %v, want [ollama-cloud openrouter __restore__]", names)
+	if len(names) != 4 || names[0] != "deepseek" || names[1] != "ollama-cloud" || names[2] != "openrouter" || names[3] != restoreProviderOption {
+		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }
 
@@ -747,5 +741,74 @@ func TestDiscoverOpenRouterModelsEmptyKey(t *testing.T) {
 	models := discoverOpenRouterModels("")
 	if models != nil {
 		t.Fatalf("expected nil for empty key, got %v", models)
+	}
+}
+
+func TestCodexSwitchDeepSeekWritesCorrectTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "deepseek", "--agent", "codex", "--api-key", "sk-ds-test", "--model", "deepseek-v4-pro", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex deepseek switch returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	config := string(configBytes)
+	for _, want := range []string{
+		`model = "deepseek-v4-pro"`,
+		`model_provider = "DeepSeek"`,
+		`approvals_reviewer = "user"`,
+		`reasoning_effort = "xhigh"`,
+		`[model_providers.DeepSeek]`,
+		`name = "DeepSeek"`,
+		`base_url = "https://api.deepseek.com/v1"`,
+		`wire_api = "responses"`,
+		`[model_providers.DeepSeek.auth]`,
+		`command = "cs"`,
+		`args = ["token", "deepseek", "--agent", "codex"]`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("codex deepseek config missing %q:\n%s", want, config)
+		}
+	}
+	if strings.Contains(config, "sk-ds-test") {
+		t.Fatalf("codex config must not contain plaintext api key:\n%s", config)
+	}
+}
+
+func TestCodexListIncludesDeepSeek(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--agent", "codex"}, output); err != nil {
+		t.Fatalf("cmdList codex returned error: %v", err)
+	}
+	out := output.String()
+	for _, want := range []string{"deepseek", "ollama-cloud", "openrouter"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("codex list missing %q: %q", want, out)
+		}
+	}
+}
+
+func TestDeepSeekCodexPresetForcesModelTiers(t *testing.T) {
+	preset := codexDeepSeekPreset()
+	if !preset.ForceModelTiers {
+		t.Fatalf("codexDeepSeekPreset should have ForceModelTiers = true")
+	}
+	if preset.BaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("codexDeepSeekPreset BaseURL = %q, want https://api.deepseek.com/v1", preset.BaseURL)
+	}
+	if preset.AuthEnv != "DEEPSEEK_API_KEY" {
+		t.Fatalf("codexDeepSeekPreset AuthEnv = %q, want DEEPSEEK_API_KEY", preset.AuthEnv)
+	}
+	if preset.ReasoningEffort != "xhigh" {
+		t.Fatalf("codexDeepSeekPreset ReasoningEffort = %q, want xhigh", preset.ReasoningEffort)
 	}
 }

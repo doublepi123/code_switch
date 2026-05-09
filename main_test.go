@@ -7321,7 +7321,7 @@ func TestCmdSetKeyCodexUnsupportedProvider(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
 
-	err := cmdSetKey([]string{"--agent", "codex", "deepseek", "sk-123"})
+	err := cmdSetKey([]string{"--agent", "codex", "minimax-cn", "sk-123"})
 	if err == nil {
 		t.Fatalf("expected error for unsupported codex provider")
 	}
