@@ -5148,6 +5148,44 @@ func TestTUIStateBuildModels(t *testing.T) {
 	}
 }
 
+func TestTUIStateBuildModelsCodexOpenRouterUsesTypedKey(t *testing.T) {
+	oldTransport := http.DefaultTransport
+	var gotAuth string
+	var gotPath string
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotAuth = req.Header.Get("Authorization")
+		gotPath = req.URL.Path
+		return testHTTPResponse(req, http.StatusOK, []byte(`{"data":[{"id":"z-model"},{"id":"a-model"}]}`)), nil
+	})
+	t.Cleanup(func() {
+		http.DefaultTransport = oldTransport
+	})
+
+	ts := &tuiState{
+		cfg: &AppConfig{
+			Providers: map[string]StoredProvider{},
+			Agents: map[string]AgentConfig{
+				"codex": {Providers: map[string]StoredProvider{}},
+			},
+		},
+		agent:        agentCodex,
+		typedAPIKeys: map[string]string{"openrouter": "typed-key"},
+		resetKeys:    map[string]bool{"openrouter": true},
+		customModels: map[string]string{},
+	}
+
+	models := ts.buildModels("openrouter")
+	if gotPath != "/api/v1/models" {
+		t.Fatalf("expected OpenRouter models request, got path %q", gotPath)
+	}
+	if gotAuth != "Bearer typed-key" {
+		t.Fatalf("authorization header = %q, want %q", gotAuth, "Bearer typed-key")
+	}
+	if len(models) != 2 || models[0] != "a-model" || models[1] != "z-model" {
+		t.Fatalf("models = %v, want [a-model z-model]", models)
+	}
+}
+
 func TestTUIStateFinishSelection(t *testing.T) {
 	app := tview.NewApplication()
 	ts := &tuiState{

@@ -122,7 +122,11 @@ func cmdList(args []string, out io.Writer) error {
 			keyStatus = "✓"
 		}
 		if *verbose {
-			fmt.Fprintf(out, "%s\t%s\t%s\t%v\t%s\n", name, preset.BaseURL, preset.Model, preset.Models, keyStatus)
+			models := providerModelsForAgent(cfg, agent, name)
+			if len(models) == 0 {
+				models = preset.Models
+			}
+			fmt.Fprintf(out, "%s\t%s\t%s\t%v\t%s\n", name, preset.BaseURL, preset.Model, models, keyStatus)
 		} else {
 			fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", name, preset.BaseURL, preset.Model, keyStatus)
 		}

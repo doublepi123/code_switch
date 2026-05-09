@@ -164,13 +164,18 @@ func providerNamesForAgent(agent AgentName, cfg *AppConfig, includeCustomOption 
 }
 
 func providerModelsForAgent(cfg *AppConfig, agent AgentName, provider string) []string {
+	return providerModelsForAgentWithAPIKey(cfg, agent, provider, "")
+}
+
+func providerModelsForAgentWithAPIKey(cfg *AppConfig, agent AgentName, provider, apiKey string) []string {
 	if agent == agentCodex {
+		provider = canonicalProviderName(provider)
 		preset, err := resolveAgentProviderPreset(agent, provider, cfg)
 		if err != nil {
 			return nil
 		}
 		if provider == "openrouter" {
-			if models := openRouterModels(cfg); len(models) > 0 {
+			if models := openRouterModelsWithAPIKey(cfg, apiKey); len(models) > 0 {
 				return models
 			}
 		}
@@ -211,7 +216,11 @@ func modelIndexForAgent(cfg *AppConfig, agent AgentName, provider, currentProvid
 }
 
 func buildModelListForAgent(cfg *AppConfig, agent AgentName, provider string, customModels map[string]string) []string {
-	models := providerModelsForAgent(cfg, agent, provider)
+	return buildModelListForAgentWithAPIKey(cfg, agent, provider, customModels, "")
+}
+
+func buildModelListForAgentWithAPIKey(cfg *AppConfig, agent AgentName, provider string, customModels map[string]string, apiKey string) []string {
+	models := providerModelsForAgentWithAPIKey(cfg, agent, provider, apiKey)
 	customModel := strings.TrimSpace(customModels[provider])
 	if customModel == "" {
 		return models

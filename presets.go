@@ -101,7 +101,14 @@ func discoverOpenRouterModels(apiKey string) []string {
 }
 
 func openRouterModels(cfg *AppConfig) []string {
-	apiKey := storedAPIKeyForAgent(cfg, agentCodex, "openrouter")
+	return openRouterModelsWithAPIKey(cfg, "")
+}
+
+func openRouterModelsWithAPIKey(cfg *AppConfig, apiKey string) []string {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		apiKey = storedAPIKeyForAgent(cfg, agentCodex, "openrouter")
+	}
 	if apiKey == "" {
 		apiKey = storedAPIKeyForAgent(cfg, agentClaude, "openrouter")
 	}

@@ -705,6 +705,53 @@ func TestCodexListIncludesOpenRouter(t *testing.T) {
 	}
 }
 
+func TestCodexListVerboseOpenRouterUsesSavedKeyForDynamicModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			"codex": {
+				Providers: map[string]StoredProvider{
+					"openrouter": {APIKey: "or-sk-saved"},
+				},
+			},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	oldTransport := http.DefaultTransport
+	var gotAuth string
+	var gotPath string
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotAuth = req.Header.Get("Authorization")
+		gotPath = req.URL.Path
+		return testHTTPResponse(req, http.StatusOK, []byte(`{"data":[{"id":"z-model"},{"id":"a-model"}]}`)), nil
+	})
+	t.Cleanup(func() {
+		http.DefaultTransport = oldTransport
+	})
+
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--agent", "codex", "--verbose"}, output); err != nil {
+		t.Fatalf("cmdList codex verbose returned error: %v", err)
+	}
+
+	if gotPath != "/api/v1/models" {
+		t.Fatalf("expected OpenRouter models request, got path %q", gotPath)
+	}
+	if gotAuth != "Bearer or-sk-saved" {
+		t.Fatalf("authorization header = %q, want %q", gotAuth, "Bearer or-sk-saved")
+	}
+	out := output.String()
+	if !strings.Contains(out, "[a-model z-model]") {
+		t.Fatalf("verbose list should include discovered models, got %q", out)
+	}
+}
+
 func TestCodexEnvOpenRouterPrintsCorrectOutput(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

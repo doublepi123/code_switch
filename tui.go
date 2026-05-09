@@ -166,7 +166,7 @@ type tuiState struct {
 
 func (ts *tuiState) buildModels(provider string) []string {
 	if ts.agent == agentCodex {
-		return buildModelListForAgent(ts.cfg, ts.agent, provider, ts.customModels)
+		return buildModelListForAgentWithAPIKey(ts.cfg, ts.agent, provider, ts.customModels, ts.typedAPIKeys[provider])
 	}
 	return buildModelList(ts.cfg, provider, ts.customModels)
 }
