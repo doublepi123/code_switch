@@ -236,7 +236,7 @@ var providerPresets = map[string]ProviderPreset{
 		APIKeyURL: "https://platform.deepseek.com/api_keys",
 		ExtraEnv: map[string]any{
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":  "1",
-			"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
+			"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "0",
 			"CLAUDE_CODE_EFFORT_LEVEL":                  "xhigh",
 		},
 	},

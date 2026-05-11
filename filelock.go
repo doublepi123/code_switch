@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -60,6 +61,9 @@ func readLockPID(lockPath string) int {
 }
 
 func processExists(pid int) bool {
-	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
-	return err == nil
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
 }

@@ -513,8 +513,8 @@ func TestApplyPresetDeepSeekUsesAuthTokenAndExtraEnv(t *testing.T) {
 	if got := env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"]; got != "1" {
 		t.Fatalf("disable traffic = %v, want %v", got, "1")
 	}
-	if got := env["CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"]; got != "1" {
-		t.Fatalf("disable fallback = %v, want %v", got, "1")
+	if got := env["CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"]; got != "0" {
+		t.Fatalf("disable fallback = %v, want %v", got, "0")
 	}
 	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "xhigh" {
 		t.Fatalf("effort level = %v, want %v", got, "xhigh")
@@ -1680,7 +1680,11 @@ func TestSwitchProviderOpenRouterDoesNotSetSubagent(t *testing.T) {
 }
 
 func TestCmdSwitchNoAPIKeyError(t *testing.T) {
-	if err := cmdSwitch([]string{"openrouter"}); err == nil {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	if err := cmdSwitch([]string{"openrouter", "--claude-dir", claudeDir}); err == nil {
 		t.Fatal("expected error for missing api key")
 	}
 }

@@ -361,7 +361,12 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			}
 			modelName := model
 			modelList.AddItem(label, "", 0, func() {
-				preset, _ := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+				preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+				if err != nil {
+					ts.resultErr = err
+					ts.app.Stop()
+					return
+				}
 				if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
 					ts.showKeyForm(provider, backPage, func() {
 						ts.showModels(provider, backPage)
