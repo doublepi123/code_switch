@@ -294,7 +294,7 @@ var providerPresets = map[string]ProviderPreset{
 	},
 	"zai": {
 		Name:      "Z.AI GLM Coding Plan",
-		BaseURL:   "https://api.z.ai/api/coding/paas/v4",
+		BaseURL:   "https://api.z.ai/api/anthropic",
 		Model:     "glm-5.1",
 		Models:    []string{"glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
 		Haiku:     "glm-4.5-air",
