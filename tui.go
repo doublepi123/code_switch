@@ -473,7 +473,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	page.AddItem(modelList, 0, 1, true)
 	page.AddItem(help, 1, 0, false)
 	ts.pages.AddAndSwitchToPage("models", page, true)
-	ts.app.SetFocus(searchInput)
+	ts.app.SetFocus(modelList)
 }
 
 func (ts *tuiState) showKeyForm(provider, backPage string, onSave func()) {
