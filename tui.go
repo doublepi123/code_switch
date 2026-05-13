@@ -369,7 +369,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 				}
 				if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
 					ts.showKeyForm(provider, backPage, func() {
-						ts.showModels(provider, backPage)
+						ts.finishSelection(provider, modelName)
 					})
 					return
 				}
