@@ -292,6 +292,22 @@ var providerPresets = map[string]ProviderPreset{
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
+	"zai": {
+		Name:      "Z.AI GLM Coding Plan",
+		BaseURL:   "https://api.z.ai/api/anthropic",
+		Model:     "glm-5.1",
+		Models:    []string{"glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
+		Haiku:     "glm-4.5-air",
+		Sonnet:    "glm-5-turbo",
+		Opus:      "glm-5.1",
+		Subagent:  "glm-5-turbo",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://open.z.ai",
+		APIKeyURL: "https://open.z.ai",
+		ExtraEnv: map[string]any{
+			"API_TIMEOUT_MS": "3000000",
+		},
+	},
 	"ollama-cloud": {
 		Name:    "Ollama Cloud",
 		BaseURL: "https://ollama.com",
@@ -351,6 +367,9 @@ var providerAliases = map[string]string{
 	"mimo":                 "xiaomimimo-cn",
 	"ollamacloud":          "ollama-cloud",
 	"ollama.com":           "ollama-cloud",
+	"z.ai":                 "zai",
+	"zai":                  "zai",
+	"glm":                  "zai",
 }
 
 const customProviderOption = "__custom__"
@@ -560,6 +579,8 @@ func detectProvider(baseURL, model string) string {
 		return "opencode-go"
 	case strings.HasSuffix(host, ".xiaomimimo.com"):
 		return "xiaomimimo-cn"
+	case host == "api.z.ai" || strings.HasSuffix(host, ".z.ai"):
+		return "zai"
 	default:
 		return customDetectedProvider
 	}
