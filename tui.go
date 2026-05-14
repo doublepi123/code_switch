@@ -370,8 +370,6 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 
 	var haikuVal, sonnetVal, opusVal, subagentVal string
 
-	form := tview.NewForm()
-
 	modelIndexFor := func(val string) int {
 		for i, m := range modelOptions {
 			if m == val {
@@ -381,36 +379,28 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 		return 0
 	}
 
-	form.AddDropDown("Haiku", modelOptions, modelIndexFor(haikuDefault), func(option string, idx int) {
-		if idx == 0 {
-			haikuVal = ""
-		} else {
-			haikuVal = option
-		}
-	})
-	form.AddDropDown("Sonnet", modelOptions, modelIndexFor(sonnetDefault), func(option string, idx int) {
-		if idx == 0 {
-			sonnetVal = ""
-		} else {
-			sonnetVal = option
-		}
-	})
-	form.AddDropDown("Opus", modelOptions, modelIndexFor(opusDefault), func(option string, idx int) {
-		if idx == 0 {
-			opusVal = ""
-		} else {
-			opusVal = option
-		}
-	})
-	form.AddDropDown("Subagent", modelOptions, modelIndexFor(subagentDefault), func(option string, idx int) {
-		if idx == 0 {
-			subagentVal = ""
-		} else {
-			subagentVal = option
-		}
-	})
+	const labelWidth = 10
+	createDD := func(label, defaultVal string, val *string) *tview.DropDown {
+		dd := tview.NewDropDown().
+			SetLabel(label).
+			SetLabelWidth(labelWidth).
+			SetOptions(modelOptions, func(text string, idx int) {
+				if idx == 0 {
+					*val = ""
+				} else {
+					*val = text
+				}
+			})
+		dd.SetCurrentOption(modelIndexFor(defaultVal))
+		return dd
+	}
 
-	form.AddButton("Save", func() {
+	haikuDD := createDD("Haiku: ", haikuDefault, &haikuVal)
+	sonnetDD := createDD("Sonnet: ", sonnetDefault, &sonnetVal)
+	opusDD := createDD("Opus: ", opusDefault, &opusVal)
+	subagentDD := createDD("Subagent: ", subagentDefault, &subagentVal)
+
+	saveBtn := tview.NewButton("  Save  ").SetSelectedFunc(func() {
 		ov := ts.tierOverrides[provider]
 		ov.Haiku = haikuVal
 		ov.Sonnet = sonnetVal
@@ -419,29 +409,80 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 		ts.tierOverrides[provider] = ov
 		ts.showDetail(provider, backPage)
 	})
-	form.AddButton("Cancel", func() {
+	cancelBtn := tview.NewButton(" Cancel ").SetSelectedFunc(func() {
 		ts.showDetail(provider, backPage)
 	})
-	form.SetBorder(true)
-	form.SetTitle(" Edit Tier Models ")
-	form.SetButtonsAlign(tview.AlignLeft)
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			ts.showDetail(provider, backPage)
-			return nil
+
+	btnRow := tview.NewFlex().SetDirection(tview.FlexColumn)
+	btnRow.AddItem(saveBtn, 10, 0, false)
+	btnRow.AddItem(nil, 1, 0, false)
+	btnRow.AddItem(cancelBtn, 10, 0, false)
+
+	inner := tview.NewFlex().SetDirection(tview.FlexRow)
+	inner.AddItem(haikuDD, 1, 0, true)
+	inner.AddItem(sonnetDD, 1, 0, false)
+	inner.AddItem(opusDD, 1, 0, false)
+	inner.AddItem(subagentDD, 1, 0, false)
+	inner.AddItem(nil, 1, 0, false)
+	inner.AddItem(btnRow, 1, 0, false)
+	inner.SetBorder(true)
+	inner.SetTitle(" Edit Tier Models ")
+
+	items := []tview.Primitive{haikuDD, sonnetDD, opusDD, subagentDD, saveBtn, cancelBtn}
+	navigate := func(from tview.Primitive, delta int) {
+		for i, item := range items {
+			if item == from {
+				ts.app.SetFocus(items[(i+delta+len(items))%len(items)])
+				return
+			}
 		}
-		return event
-	})
+	}
+	goBack := func() { ts.showDetail(provider, backPage) }
+
+	for _, dd := range []*tview.DropDown{haikuDD, sonnetDD, opusDD, subagentDD} {
+		dd := dd
+		dd.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch event.Key() {
+			case tcell.KeyUp:
+				navigate(dd, -1)
+				return nil
+			case tcell.KeyDown:
+				navigate(dd, 1)
+				return nil
+			case tcell.KeyEscape:
+				goBack()
+				return nil
+			}
+			return event
+		})
+	}
+
+	for _, btn := range []*tview.Button{saveBtn, cancelBtn} {
+		btn := btn
+		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch event.Key() {
+			case tcell.KeyUp:
+				navigate(btn, -1)
+				return nil
+			case tcell.KeyDown:
+				navigate(btn, 1)
+				return nil
+			case tcell.KeyEscape:
+				goBack()
+				return nil
+			}
+			return event
+		})
+	}
 
 	help := tview.NewTextView()
-	help.SetText(fmt.Sprintf("Provider: %s  |  Leave empty for preset default  |  Esc cancel", providerTitle(provider, ts.cfg)))
+	help.SetText(fmt.Sprintf("Provider: %s  |  ↑↓ navigate  Enter select  |  Leave empty for preset default  |  Esc cancel", providerTitle(provider, ts.cfg)))
 
-	page := tview.NewFlex()
-	page.SetDirection(tview.FlexRow)
+	page := tview.NewFlex().SetDirection(tview.FlexRow)
 	page.AddItem(help, 1, 0, false)
-	page.AddItem(form, 0, 1, true)
+	page.AddItem(inner, 0, 1, true)
 	ts.pages.AddAndSwitchToPage("tier-config", page, true)
-	ts.app.SetFocus(form)
+	ts.app.SetFocus(haikuDD)
 }
 
 func (ts *tuiState) showModels(provider, backPage string) {

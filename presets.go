@@ -350,20 +350,43 @@ var providerPresets = map[string]ProviderPreset{
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
+	"volcengine": {
+		Name:      "Volcengine Ark Coding Plan",
+		BaseURL:   "https://ark.cn-beijing.volces.com/api/coding",
+		Model:     "ark-code-latest",
+		Models:    []string{"ark-code-latest", "doubao-seed-2.0-code", "doubao-seed-2.0-pro", "doubao-seed-2.0-lite", "doubao-seed-code", "minimax-latest", "glm-5.1", "deepseek-v3.2", "kimi-k2.6"},
+		Haiku:     "ark-code-latest",
+		Sonnet:    "ark-code-latest",
+		Opus:      "ark-code-latest",
+		Subagent:  "ark-code-latest",
+		ForceModelTiers: true,
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://www.volcengine.com/activity/codingplan",
+		APIKeyURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+		ExtraEnv: map[string]any{
+			"API_TIMEOUT_MS": "3000000",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		},
+	},
 }
 
 var unsupportedOpenCodeGoAnthropicModels = map[string]string{
-	"glm-5":         "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"glm-5.1":       "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"kimi-k2.5":     "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"kimi-k2.6":     "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"mimo-v2-pro":   "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"mimo-v2-omni":  "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"mimo-v2.5-pro": "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"mimo-v2.5":     "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"mimo-v2-flash": "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"qwen3.6-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"qwen3.5-plus":  "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"glm-5":                 "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"glm-5.1":               "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"kimi-k2.5":            "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"kimi-k2.6":            "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-pro":          "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-omni":         "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2.5-pro":        "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2.5":            "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-flash":         "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"qwen3.6-plus":         "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"qwen3.5-plus":         "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"doubao-seed-code":     "Doubao is available via Volcengine Ark, not OpenCode Go",
+	"doubao-seed-2.0-code": "Doubao is available via Volcengine Ark, not OpenCode Go",
+	"doubao-seed-2.0-pro":  "Doubao is available via Volcengine Ark, not OpenCode Go",
+	"doubao-seed-2.0-lite": "Doubao is available via Volcengine Ark, not OpenCode Go",
+	"ark-code-latest":     "ark-code-latest is available via Volcengine Ark, not OpenCode Go",
 }
 
 var providerAliases = map[string]string{
@@ -378,6 +401,10 @@ var providerAliases = map[string]string{
 	"z.ai":                 "zai",
 	"zai":                  "zai",
 	"glm":                  "zai",
+	"ark":                  "volcengine",
+	"volcengine-ark":       "volcengine",
+	"volcengine.com":       "volcengine",
+	"ark.cn-beijing.volces.com": "volcengine",
 }
 
 const customProviderOption = "__custom__"
@@ -600,6 +627,8 @@ func detectProvider(baseURL, model string) string {
 		return "xiaomimimo-cn"
 	case host == "api.z.ai" || strings.HasSuffix(host, ".z.ai"):
 		return "zai"
+	case host == "ark.cn-beijing.volces.com" || strings.HasSuffix(host, ".volces.com"):
+		return "volcengine"
 	default:
 		return customDetectedProvider
 	}

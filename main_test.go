@@ -563,6 +563,64 @@ func TestApplyPresetOllamaCloudUsesBearerAuth(t *testing.T) {
 	}
 }
 
+func TestApplyPresetVolcengineUsesBearerAuth(t *testing.T) {
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_API_KEY": "stale-api-key",
+		},
+	}
+
+	applyPreset(root, providerPresets["volcengine"], "ark-sk-test")
+
+	env := root["env"].(map[string]any)
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for volcengine")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "ark-sk-test" {
+		t.Fatalf("auth token = %v, want %v", got, "ark-sk-test")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://ark.cn-beijing.volces.com/api/coding" {
+		t.Fatalf("base url = %v, want %v", got, "https://ark.cn-beijing.volces.com/api/coding")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "ark-code-latest" {
+		t.Fatalf("model = %v, want %v", got, "ark-code-latest")
+	}
+	for _, key := range []string{
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+	} {
+		if got := env[key]; got != "ark-code-latest" {
+			t.Fatalf("expected %s to be ark-code-latest, got %v", key, got)
+		}
+	}
+	if got := env["API_TIMEOUT_MS"]; got != "3000000" {
+		t.Fatalf("API_TIMEOUT_MS = %v, want %v", got, "3000000")
+	}
+}
+
+func TestApplyPresetVolcengineCustomModelForceTiers(t *testing.T) {
+	root := map[string]any{}
+	preset := withSelectedModel(providerPresets["volcengine"], "doubao-seed-2.0-pro")
+	applyPreset(root, preset, "ark-sk-test")
+
+	env := root["env"].(map[string]any)
+	if got := env["ANTHROPIC_MODEL"]; got != "doubao-seed-2.0-pro" {
+		t.Fatalf("model = %v, want %v", got, "doubao-seed-2.0-pro")
+	}
+	for _, key := range []string{
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+	} {
+		if got := env[key]; got != "doubao-seed-2.0-pro" {
+			t.Fatalf("expected %s to be doubao-seed-2.0-pro, got %v", key, got)
+		}
+	}
+}
+
 func TestApplyPresetDeepSeekCustomModelOverridesAllModels(t *testing.T) {
 	root := map[string]any{}
 	preset := withSelectedModel(providerPresets["deepseek"], "deepseek-custom")
@@ -936,6 +994,8 @@ func TestDetectProvider(t *testing.T) {
 		{baseURL: "http://[::1]:11434/v1", want: "ollama"},
 		{baseURL: "https://ollama.com", want: "ollama-cloud"},
 		{baseURL: "https://ollama.com/v1", want: "ollama-cloud"},
+		{baseURL: "https://ark.cn-beijing.volces.com/api/coding", want: "volcengine"},
+		{baseURL: "https://ark.cn-beijing.volces.com/api/coding/v3", want: "volcengine"},
 	}
 
 	for _, tc := range cases {
@@ -986,6 +1046,9 @@ func TestCanonicalProviderName(t *testing.T) {
 		"minimax-cn-token":     "minimax-cn",
 		"minimax-global-token": "minimax-global",
 		" openrouter ":         "openrouter",
+		"ark":                  "volcengine",
+		"volcengine-ark":       "volcengine",
+		"VOLCENGINE":          "volcengine",
 	}
 
 	for input, want := range cases {
@@ -1241,6 +1304,12 @@ func TestUniqueCustomProviderKeyRejectsAliases(t *testing.T) {
 	}
 	if got := uniqueCustomProviderKey(cfg, "minimax-cn-token"); got == "minimax-cn-token" {
 		t.Fatalf("expected minimax-cn-token alias to be rejected, got %q", got)
+	}
+	if got := uniqueCustomProviderKey(cfg, "ark"); got == "ark" {
+		t.Fatalf("expected ark alias to be rejected, got %q", got)
+	}
+	if got := uniqueCustomProviderKey(cfg, "volcengine-ark"); got == "volcengine-ark" {
+		t.Fatalf("expected volcengine-ark alias to be rejected, got %q", got)
 	}
 	if got := uniqueCustomProviderKey(cfg, "my-provider"); got != "my-provider" {
 		t.Fatalf("expected my-provider to be accepted, got %q", got)
@@ -2062,6 +2131,68 @@ func TestCmdSwitchOllamaCloudReasoningEffortForModel(t *testing.T) {
 	env := readSettingsEnv(t, filepath.Join(claudeDir, "settings.json"))
 	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "xhigh" {
 		t.Fatalf("CLAUDE_CODE_EFFORT_LEVEL = %v, want xhigh", got)
+	}
+}
+
+func TestCmdSwitchVolcengineUsesBearerAuth(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	if err := cmdSwitch([]string{"volcengine", "--api-key", "ark-test-key", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	env := readSettingsEnv(t, filepath.Join(claudeDir, "settings.json"))
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for volcengine")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "ark-test-key" {
+		t.Fatalf("auth token = %v, want %v", got, "ark-test-key")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://ark.cn-beijing.volces.com/api/coding" {
+		t.Fatalf("base url = %v, want %v", got, "https://ark.cn-beijing.volces.com/api/coding")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "ark-code-latest" {
+		t.Fatalf("model = %v, want %v", got, "ark-code-latest")
+	}
+	for _, key := range []string{
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+	} {
+		if got := env[key]; got != "ark-code-latest" {
+			t.Fatalf("expected %s to be ark-code-latest, got %v", key, got)
+		}
+	}
+	if got := env["API_TIMEOUT_MS"]; got != "3000000" {
+		t.Fatalf("API_TIMEOUT_MS = %v, want %v", got, "3000000")
+	}
+}
+
+func TestCmdSwitchVolcengineCustomModelForceTiers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	if err := cmdSwitch([]string{"volcengine", "--api-key", "ark-test-key", "--model", "doubao-seed-2.0-pro", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	env := readSettingsEnv(t, filepath.Join(claudeDir, "settings.json"))
+	if got := env["ANTHROPIC_MODEL"]; got != "doubao-seed-2.0-pro" {
+		t.Fatalf("model = %v, want %v", got, "doubao-seed-2.0-pro")
+	}
+	for _, key := range []string{
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+	} {
+		if got := env[key]; got != "doubao-seed-2.0-pro" {
+			t.Fatalf("expected %s to be doubao-seed-2.0-pro, got %v", key, got)
+		}
 	}
 }
 
