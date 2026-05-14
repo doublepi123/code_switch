@@ -146,11 +146,15 @@ type ProviderPreset struct {
 }
 
 type StoredProvider struct {
-	Name    string `json:"name,omitempty"`
-	BaseURL string `json:"baseUrl,omitempty"`
-	Model   string `json:"model,omitempty"`
-	APIKey  string `json:"apiKey,omitempty"`
-	AuthEnv string `json:"authEnv,omitempty"`
+	Name     string `json:"name,omitempty"`
+	BaseURL  string `json:"baseUrl,omitempty"`
+	Model    string `json:"model,omitempty"`
+	APIKey   string `json:"apiKey,omitempty"`
+	AuthEnv  string `json:"authEnv,omitempty"`
+	Haiku    string `json:"haiku,omitempty"`
+	Sonnet   string `json:"sonnet,omitempty"`
+	Opus     string `json:"opus,omitempty"`
+	Subagent string `json:"subagent,omitempty"`
 }
 
 type AgentConfig struct {
@@ -171,6 +175,10 @@ type ConfigureSelection struct {
 	Name     string
 	BaseURL  string
 	AuthEnv  string
+	Haiku    string
+	Sonnet   string
+	Opus     string
+	Subagent string
 }
 
 type AgentName string
