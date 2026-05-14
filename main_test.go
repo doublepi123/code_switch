@@ -798,6 +798,63 @@ func TestSwitchProviderOpenRouterOfficialOverrideResetsSavedCustomTierMapping(t 
 	}
 }
 
+func TestResolveSwitchPresetStoredTierOverrides(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {
+				Model:    "anthropic/claude-opus-4.7",
+				Haiku:    "anthropic/claude-haiku-4.5-custom",
+				Sonnet:   "anthropic/claude-sonnet-4.6-custom",
+				Opus:     "anthropic/claude-opus-4.7-custom",
+				Subagent: "anthropic/claude-haiku-4.5-custom",
+			},
+		},
+	}
+
+	preset, err := resolveSwitchPreset("openrouter", cfg, "")
+	if err != nil {
+		t.Fatalf("resolveSwitchPreset returned error: %v", err)
+	}
+	if got := preset.Haiku; got != "anthropic/claude-haiku-4.5-custom" {
+		t.Fatalf("haiku = %v, want %v", got, "anthropic/claude-haiku-4.5-custom")
+	}
+	if got := preset.Sonnet; got != "anthropic/claude-sonnet-4.6-custom" {
+		t.Fatalf("sonnet = %v, want %v", got, "anthropic/claude-sonnet-4.6-custom")
+	}
+	if got := preset.Opus; got != "anthropic/claude-opus-4.7-custom" {
+		t.Fatalf("opus = %v, want %v", got, "anthropic/claude-opus-4.7-custom")
+	}
+	if got := preset.Subagent; got != "anthropic/claude-haiku-4.5-custom" {
+		t.Fatalf("subagent = %v, want %v", got, "anthropic/claude-haiku-4.5-custom")
+	}
+}
+
+func TestResolveSwitchPresetPartialTierOverride(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {
+				Model:  "anthropic/claude-opus-4.7",
+				Haiku:  "anthropic/claude-haiku-4.5-custom",
+				Sonnet: "",
+			},
+		},
+	}
+
+	preset, err := resolveSwitchPreset("openrouter", cfg, "")
+	if err != nil {
+		t.Fatalf("resolveSwitchPreset returned error: %v", err)
+	}
+	if got := preset.Haiku; got != "anthropic/claude-haiku-4.5-custom" {
+		t.Fatalf("haiku = %v, want %v", got, "anthropic/claude-haiku-4.5-custom")
+	}
+	if got := preset.Sonnet; got != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("sonnet = %v, want %v (preset default)", got, "anthropic/claude-sonnet-4.6")
+	}
+	if got := preset.Opus; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("opus = %v, want %v (preset default)", got, "anthropic/claude-opus-4.7")
+	}
+}
+
 func TestDetectProvider(t *testing.T) {
 	cases := []struct {
 		baseURL string

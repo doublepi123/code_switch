@@ -480,14 +480,18 @@ func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) 
 		if err := validateProviderModel(provider, model); err != nil {
 			return ProviderPreset{}, err
 		}
-		return withSelectedModel(preset, model), nil
+		preset = withSelectedModel(preset, model)
+		applyStoredTierOverrides(&preset, cfg.Providers[provider])
+		return preset, nil
 	}
 
 	preset, err := resolveProviderPreset(provider, cfg)
 	if err != nil {
 		return ProviderPreset{}, err
 	}
-	return withSelectedModel(preset, modelOverride), nil
+	preset = withSelectedModel(preset, modelOverride)
+	applyStoredTierOverrides(&preset, cfg.Providers[provider])
+	return preset, nil
 }
 
 func validateProviderModel(provider, model string) error {
@@ -558,6 +562,21 @@ func withOverrideTiers(preset ProviderPreset, tiers ModelTiers) ProviderPreset {
 	preset.Opus = tiers.Opus
 	preset.Subagent = tiers.Subagent
 	return preset
+}
+
+func applyStoredTierOverrides(preset *ProviderPreset, stored StoredProvider) {
+	if v := strings.TrimSpace(stored.Haiku); v != "" {
+		preset.Haiku = v
+	}
+	if v := strings.TrimSpace(stored.Sonnet); v != "" {
+		preset.Sonnet = v
+	}
+	if v := strings.TrimSpace(stored.Opus); v != "" {
+		preset.Opus = v
+	}
+	if v := strings.TrimSpace(stored.Subagent); v != "" {
+		preset.Subagent = v
+	}
 }
 
 func detectProvider(baseURL, model string) string {
