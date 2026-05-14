@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 )
@@ -100,20 +101,26 @@ func codexDeepSeekPreset() ProviderPreset {
 	return preset
 }
 
+func codexPresetForProvider(provider string) (ProviderPreset, error) {
+	switch provider {
+	case "deepseek":
+		return codexDeepSeekPreset(), nil
+	case "ollama-cloud":
+		return codexOllamaCloudPreset(), nil
+	case "openrouter":
+		return codexOpenRouterPreset(), nil
+	default:
+		return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent codex", provider)
+	}
+}
+
 func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig) (ProviderPreset, error) {
 	switch agent {
 	case agentCodex:
 		provider = canonicalProviderName(provider)
-		var preset ProviderPreset
-		switch provider {
-		case "deepseek":
-			preset = codexDeepSeekPreset()
-		case "ollama-cloud":
-			preset = codexOllamaCloudPreset()
-		case "openrouter":
-			preset = codexOpenRouterPreset()
-		default:
-			return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent codex", provider)
+		preset, err := codexPresetForProvider(provider)
+		if err != nil {
+			return ProviderPreset{}, err
 		}
 		if stored := codexProviderConfig(cfg, provider); strings.TrimSpace(stored.Model) != "" {
 			preset = withSelectedModel(preset, stored.Model)
@@ -128,16 +135,9 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 	switch agent {
 	case agentCodex:
 		provider = canonicalProviderName(provider)
-		var preset ProviderPreset
-		switch provider {
-		case "deepseek":
-			preset = codexDeepSeekPreset()
-		case "ollama-cloud":
-			preset = codexOllamaCloudPreset()
-		case "openrouter":
-			preset = codexOpenRouterPreset()
-		default:
-			return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent codex", provider)
+		preset, err := codexPresetForProvider(provider)
+		if err != nil {
+			return ProviderPreset{}, err
 		}
 		model := strings.TrimSpace(modelOverride)
 		if model == "" {
@@ -172,6 +172,7 @@ func providerModelsForAgentWithAPIKey(cfg *AppConfig, agent AgentName, provider,
 		provider = canonicalProviderName(provider)
 		preset, err := resolveAgentProviderPreset(agent, provider, cfg)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to resolve preset for provider %q: %v\n", provider, err)
 			return nil
 		}
 		if provider == "openrouter" {

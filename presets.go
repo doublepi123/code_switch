@@ -508,7 +508,7 @@ func applyDefaultModel(preset ProviderPreset) ProviderPreset {
 		preset.ReasoningEffort = re
 	}
 	if preset.ForceModelTiers {
-		return withForcedModelTiers(preset, preset.Model)
+		return withSingleModelTiers(preset, preset.Model)
 	}
 	return preset
 }
@@ -525,7 +525,7 @@ func applyModelOverride(preset ProviderPreset, model string) ProviderPreset {
 	}
 
 	if preset.ForceModelTiers {
-		return withForcedModelTiers(preset, model)
+		return withSingleModelTiers(preset, model)
 	}
 
 	if !isKnown {
@@ -549,14 +549,6 @@ func withOverrideTiers(preset ProviderPreset, tiers ModelTiers) ProviderPreset {
 	preset.Sonnet = tiers.Sonnet
 	preset.Opus = tiers.Opus
 	preset.Subagent = tiers.Subagent
-	return preset
-}
-
-func withForcedModelTiers(preset ProviderPreset, model string) ProviderPreset {
-	preset.Haiku = model
-	preset.Sonnet = model
-	preset.Opus = model
-	preset.Subagent = model
 	return preset
 }
 

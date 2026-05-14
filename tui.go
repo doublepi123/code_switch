@@ -36,11 +36,13 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 
-	currentProvider, currentModel := currentConfiguredProvider(cfg, *claudeDir)
+	var currentProvider, currentModel string
 	if agent == agentCodex {
 		_, cp, cm, _, _ := currentCodexProvider(*codexDir)
 		currentProvider = codexTOMLProviderKey(cp)
 		currentModel = cm
+	} else {
+		currentProvider, currentModel = currentConfiguredProvider(cfg, *claudeDir)
 	}
 	reader := bufio.NewReader(in)
 	var selection ConfigureSelection
@@ -327,10 +329,10 @@ func (ts *tuiState) updateTierInfo(provider, model string) {
 	}
 	preset = withSelectedModel(preset, model)
 	if preset.ForceModelTiers {
-		fmt.Fprintf(ts.tierInfo, "all tiers: %s", preset.Model)
+		ts.tierInfo.SetText(fmt.Sprintf("all tiers: %s", preset.Model))
 	} else {
-		fmt.Fprintf(ts.tierInfo, "haiku: %s | sonnet: %s | opus: %s | sub: %s",
-			preset.Haiku, preset.Sonnet, preset.Opus, preset.Subagent)
+		ts.tierInfo.SetText(fmt.Sprintf("haiku: %s | sonnet: %s | opus: %s | sub: %s",
+			preset.Haiku, preset.Sonnet, preset.Opus, preset.Subagent))
 	}
 }
 
@@ -386,7 +388,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 		if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
 			selectedIndex = 0
 		}
-		if selectedIndex >= 0 && selectedIndex < modelList.GetItemCount()-1 {
+		if selectedIndex >= 0 && selectedIndex < len(allModels) {
 			modelList.SetCurrentItem(selectedIndex)
 		}
 	}
@@ -443,24 +445,15 @@ func (ts *tuiState) showModels(provider, backPage string) {
 
 	modelList.SetChangedFunc(func(index int, mainText string, secondaryText string, shortcut rune) {
 		filter := strings.ToLower(strings.TrimSpace(searchInput.GetText()))
-		matching := 0
+		filtered := []string{}
 		for _, m := range allModels {
 			if filter != "" && !strings.Contains(strings.ToLower(m), filter) {
 				continue
 			}
-			matching++
+			filtered = append(filtered, m)
 		}
-		if index >= 0 && index < matching {
-			filtered := []string{}
-			for _, m := range allModels {
-				if filter != "" && !strings.Contains(strings.ToLower(m), filter) {
-					continue
-				}
-				filtered = append(filtered, m)
-			}
-			if index < len(filtered) {
-				ts.updateTierInfo(provider, filtered[index])
-			}
+		if index >= 0 && index < len(filtered) {
+			ts.updateTierInfo(provider, filtered[index])
 		} else {
 			ts.tierInfo.SetText("")
 		}

@@ -48,7 +48,11 @@ func cmdEnv(args []string, out io.Writer) error {
 			fmt.Fprintf(out, "export CLAUDE_CODE_EFFORT_LEVEL=%s\n", shellSingleQuote(preset.ReasoningEffort))
 		}
 		for _, key := range sortedExtraEnv(preset.ExtraEnv) {
-			fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(preset.ExtraEnv[key])))
+			val := preset.ExtraEnv[key]
+			if val == nil {
+				continue
+			}
+			fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(val)))
 		}
 		return nil
 	}
@@ -64,7 +68,11 @@ func cmdEnv(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "export CLAUDE_CODE_EFFORT_LEVEL=%s\n", shellSingleQuote(preset.ReasoningEffort))
 	}
 	for _, key := range sortedExtraEnv(preset.ExtraEnv) {
-		fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(preset.ExtraEnv[key])))
+		val := preset.ExtraEnv[key]
+		if val == nil {
+			continue
+		}
+		fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(val)))
 	}
 	return nil
 }

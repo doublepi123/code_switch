@@ -159,6 +159,7 @@ func writeJSONAtomic(path string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	os.Chmod(filepath.Dir(path), 0o755)
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -185,6 +186,7 @@ func writeJSONAtomic(path string, value any) error {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	// Ensure config files containing API keys are never world-readable.
@@ -203,6 +205,7 @@ func backupIfExists(path string) error {
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return err
 	}
+	os.Chmod(backupDir, 0o755)
 	f, err := os.CreateTemp(backupDir, filepath.Base(path)+".bak-*")
 	if err != nil {
 		return err
@@ -217,7 +220,11 @@ func backupIfExists(path string) error {
 		os.Remove(f.Name())
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return err
+	}
+	return nil
 }
 
 func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey string) {
@@ -254,6 +261,7 @@ func upsertAgentProviderConfig(cfg *AppConfig, agent AgentName, selection Config
 func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
 	root, err := readJSONMap(claudeSettingsPath(claudeDir))
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "warning: read settings:", err)
 		return "", ""
 	}
 	env := nestedMap(root, "env")

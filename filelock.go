@@ -29,7 +29,11 @@ func (cf *configFile) lock() (func(), error) {
 	for attempt := 0; attempt < 10; attempt++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			fmt.Fprintf(f, "%d\n", os.Getpid())
+			if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
+				f.Close()
+				os.Remove(lockPath)
+				return nil, fmt.Errorf("write lock file: %w", err)
+			}
 			f.Close()
 			unlock := func() {
 				os.Remove(lockPath)

@@ -249,7 +249,7 @@ func cmdSetKey(args []string, out io.Writer) error {
 	defer unlock()
 	preset, err := resolveProviderPreset(provider, cfg)
 	if err != nil {
-		return fmt.Errorf("unsupported provider %q", remaining[0])
+		return fmt.Errorf("resolve provider %q: %w", remaining[0], err)
 	}
 	if preset.NoAPIKey {
 		return fmt.Errorf("provider %q does not require an API key", provider)

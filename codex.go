@@ -18,7 +18,7 @@ func codexConfigPath(overrideDir string) string {
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return filepath.Join(".codex", "config.toml")
+			return filepath.Join(os.TempDir(), ".codex", "config.toml")
 		}
 		dir = filepath.Join(home, ".codex")
 	}
@@ -79,7 +79,9 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 	}
 
 	stored := codexProviderConfig(cfg, provider)
-	stored.APIKey = apiKey
+	if apiKey != "" {
+		stored.APIKey = apiKey
+	}
 	stored.Model = preset.Model
 	setAgentProviderConfig(cfg, agentCodex, provider, stored)
 
@@ -382,6 +384,7 @@ func writeTextAtomic(path, content string, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	os.Chmod(filepath.Dir(path), 0o755)
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
@@ -402,6 +405,7 @@ func writeTextAtomic(path, content string, perm os.FileMode) error {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Chmod(path, perm)

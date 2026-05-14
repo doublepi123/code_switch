@@ -390,7 +390,7 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 		return err
 	}
 	defer file.Close()
-	_, err = io.Copy(file, resp.Body)
+	_, err = io.Copy(file, io.LimitReader(resp.Body, 500*1024*1024))
 	return err
 }
 
@@ -439,8 +439,9 @@ func extractZipBinary(archivePath, binaryName, dest string) error {
 		if err != nil {
 			return err
 		}
-		defer src.Close()
-		return writeExtractedBinary(src, dest)
+		err = writeExtractedBinary(src, dest)
+		src.Close()
+		return err
 	}
 	return fmt.Errorf("archive does not contain %s", binaryName)
 }
@@ -562,7 +563,8 @@ func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo
 
 	findEntry := func(entries []checksumEntry, asset string) *checksumEntry {
 		for _, e := range entries {
-			if e.file == asset || e.file == "./"+asset {
+			name := strings.TrimPrefix(e.file, "*")
+			if name == asset || name == "./"+asset {
 				return &e
 			}
 		}

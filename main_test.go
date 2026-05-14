@@ -7954,7 +7954,7 @@ func TestFileLockLockStaleCleanup(t *testing.T) {
 	unlock()
 }
 
-func TestWriteTextAtomicChmodError(t *testing.T) {
+func TestWriteTextAtomicChmodFixesReadOnlyDir(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("skipping chmod test as root")
 	}
@@ -7964,8 +7964,15 @@ func TestWriteTextAtomicChmodError(t *testing.T) {
 	path := filepath.Join(subdir, "test.toml")
 
 	err := writeTextAtomic(path, "content", 0o644)
-	if err == nil {
-		t.Fatalf("expected chmod error on read-only dir")
+	if err != nil {
+		t.Fatalf("writeTextAtomic should fix read-only dir permissions: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != "content" {
+		t.Fatalf("content = %q, want %q", string(data), "content")
 	}
 }
 
