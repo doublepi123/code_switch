@@ -186,11 +186,12 @@ func cmdCurrent(args []string, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "Codex\n")
+		providerKey := codexTOMLProviderKey(provider)
 		fmt.Fprintf(out, "  %s\n", formatLabel("config", configPath))
 		if provider == "" {
 			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
 		} else {
-			fmt.Fprintf(out, "  %s\n", formatLabel("provider", provider))
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", providerKey))
 			if baseURL != "" {
 				fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
 			}
@@ -223,7 +224,7 @@ func cmdSetKey(args []string, out io.Writer) error {
 	if agent == agentCodex {
 		if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepseek" {
 			return fmt.Errorf("unsupported provider %q for agent codex", remaining[0])
-	}
+		}
 		cfg, path, unlock, err := loadAppConfigLocked()
 		if err != nil {
 			return err

@@ -111,13 +111,16 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return err
 	}
 	if agent == agentCodex {
-		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun); err != nil {
-			return err
-		}
 		if !*dryRun {
-			return writeJSONAtomic(configPath, cfg)
+			stored := codexProviderConfig(cfg, pa.Provider)
+			stored.APIKey = pa.APIKey
+			stored.Model = pa.Model
+			setAgentProviderConfig(cfg, agentCodex, pa.Provider, stored)
+			if err := writeJSONAtomic(configPath, cfg); err != nil {
+				return err
+			}
 		}
-		return nil
+		return switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun)
 	}
 	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun)
 }

@@ -207,6 +207,11 @@ func backupIfExists(path string) error {
 	if err != nil {
 		return err
 	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return err
+	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		os.Remove(f.Name())

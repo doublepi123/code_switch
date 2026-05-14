@@ -41,6 +41,8 @@ func (cf *configFile) lock() (func(), error) {
 		}
 		if pid := readLockPID(lockPath); pid > 0 && !processExists(pid) {
 			os.Remove(lockPath)
+			// Immediately retry without sleeping so another process can't
+			// race between our Remove and the next OpenFile attempt.
 			continue
 		}
 		time.Sleep(100 * time.Millisecond)

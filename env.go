@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -43,6 +44,12 @@ func cmdEnv(args []string, out io.Writer) error {
 			authEnv = "ANTHROPIC_API_KEY"
 		}
 		fmt.Fprintf(out, "export %s=%s\n", authEnv, shellSingleQuote(pa.APIKey))
+		if preset.ReasoningEffort != "" {
+			fmt.Fprintf(out, "export CLAUDE_CODE_EFFORT_LEVEL=%s\n", shellSingleQuote(preset.ReasoningEffort))
+		}
+		for _, key := range sortedExtraEnv(preset.ExtraEnv) {
+			fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(preset.ExtraEnv[key])))
+		}
 		return nil
 	}
 
@@ -56,8 +63,8 @@ func cmdEnv(args []string, out io.Writer) error {
 	if preset.ReasoningEffort != "" {
 		fmt.Fprintf(out, "export CLAUDE_CODE_EFFORT_LEVEL=%s\n", shellSingleQuote(preset.ReasoningEffort))
 	}
-	for key, value := range preset.ExtraEnv {
-		fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(value)))
+	for _, key := range sortedExtraEnv(preset.ExtraEnv) {
+		fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(preset.ExtraEnv[key])))
 	}
 	return nil
 }
@@ -88,4 +95,13 @@ func cmdToken(args []string, out io.Writer) error {
 
 func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func sortedExtraEnv(extra map[string]any) []string {
+	keys := make([]string, 0, len(extra))
+	for k := range extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

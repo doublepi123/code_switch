@@ -149,16 +149,17 @@ func restoreCodexConfig(codexDir string, cfg *AppConfig, out io.Writer, dryRun b
 	if err := backupIfExists(configPath); err != nil {
 		return err
 	}
-	if strings.TrimSpace(existing) == "" && strings.TrimSpace(updated) == "" {
-		fmt.Fprintf(out, "restored Codex official config\n")
-		fmt.Fprintf(out, "config: %s\n", configPath)
-		return nil
+	if strings.TrimSpace(updated) == "" {
+		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
+			return err
+		}
 	}
-	if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "restored Codex official config\n")
-	fmt.Fprintf(out, "config: %s\n", configPath)
+	fmt.Fprintf(out, "%s\n", successPrefix("restored Codex official config"))
+	fmt.Fprintf(out, "%s\n", formatLabel("config", configPath))
 	return nil
 }
 

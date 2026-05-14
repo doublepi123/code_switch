@@ -115,6 +115,13 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		return nil
 	}
 
+	cf := newConfigFile(configPath)
+	unlock, lockErr := cf.lock()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+
 	switch agent {
 	case agentCodex:
 		if err := switchCodexProvider(provider, cfg, apiKey, selection.Model, *codexDir, out, false); err != nil {
@@ -125,12 +132,6 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	cf := newConfigFile(configPath)
-	unlock, lockErr := cf.lock()
-	if lockErr != nil {
-		return lockErr
-	}
-	defer unlock()
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		return err
 	}
@@ -368,8 +369,10 @@ func (ts *tuiState) showModels(provider, backPage string) {
 					return
 				}
 				if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
-					ts.showKeyForm(provider, backPage, func() {
+					ts.showKeyFormWithCancel(provider, backPage, func() {
 						ts.finishSelection(provider, modelName)
+					}, func() {
+						ts.showModels(provider, backPage)
 					})
 					return
 				}
@@ -477,6 +480,10 @@ func (ts *tuiState) showModels(provider, backPage string) {
 }
 
 func (ts *tuiState) showKeyForm(provider, backPage string, onSave func()) {
+	ts.showKeyFormWithCancel(provider, backPage, onSave, onSave)
+}
+
+func (ts *tuiState) showKeyFormWithCancel(provider, backPage string, onSave func(), onCancel func()) {
 	currentValue := strings.TrimSpace(ts.typedAPIKeys[provider])
 	keyValue := currentValue
 	form := tview.NewForm()
@@ -489,13 +496,13 @@ func (ts *tuiState) showKeyForm(provider, backPage string, onSave func()) {
 		ts.resetKeys[provider] = true
 		onSave()
 	})
-	form.AddButton("Cancel", onSave)
+	form.AddButton("Cancel", onCancel)
 	form.SetBorder(true)
 	form.SetTitle(" Edit API Key ")
 	form.SetButtonsAlign(tview.AlignLeft)
 	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			onSave()
+			onCancel()
 			return nil
 		}
 		return event
