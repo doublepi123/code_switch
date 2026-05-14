@@ -442,6 +442,12 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 	for _, dd := range []*tview.DropDown{haikuDD, sonnetDD, opusDD, subagentDD} {
 		dd := dd
 		dd.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if dd.IsOpen() {
+				if event.Key() == tcell.KeyEscape {
+					return event
+				}
+				return event
+			}
 			switch event.Key() {
 			case tcell.KeyUp:
 				navigate(dd, -1)
