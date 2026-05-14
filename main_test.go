@@ -1613,6 +1613,41 @@ func TestCmdCurrentWithSettings(t *testing.T) {
 	}
 }
 
+func TestCmdCurrentShowsTierModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL":             "https://openrouter.ai/api",
+			"ANTHROPIC_MODEL":                "anthropic/claude-opus-4.7",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "anthropic/claude-haiku-4.5",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic/claude-sonnet-4.6",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL":   "anthropic/claude-opus-4.7",
+		},
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	if err := writeJSONAtomic(settingsPath, settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := cmdCurrent([]string{"--claude-dir", claudeDir}, output); err != nil {
+		t.Fatalf("cmdCurrent returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "haiku:") {
+		t.Fatalf("expected haiku tier in output, got %q", out)
+	}
+	if !strings.Contains(out, "sonnet:") {
+		t.Fatalf("expected sonnet tier in output, got %q", out)
+	}
+	if !strings.Contains(out, "opus:") {
+		t.Fatalf("expected opus tier in output, got %q", out)
+	}
+}
+
 func TestCmdCurrentUnknownProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -174,6 +174,18 @@ func cmdCurrent(args []string, out io.Writer) error {
 			if model != "" {
 				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
 			}
+			haikuModel, _ := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"].(string)
+			sonnetModel, _ := env["ANTHROPIC_DEFAULT_SONNET_MODEL"].(string)
+			opusModel, _ := env["ANTHROPIC_DEFAULT_OPUS_MODEL"].(string)
+			if haikuModel != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("haiku", haikuModel))
+			}
+			if sonnetModel != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("sonnet", sonnetModel))
+			}
+			if opusModel != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("opus", opusModel))
+			}
 		}
 		if showBoth {
 			fmt.Fprintln(out)
