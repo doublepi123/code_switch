@@ -30,11 +30,12 @@ func cmdUpgrade(args []string, out io.Writer) error {
 	tag := fs.String("tag", "", "release tag to install instead of latest")
 	installPath := fs.String("install-path", "", "override target executable path")
 	dryRun := fs.Bool("dry-run", false, "print the download URL and target path without installing")
+	force := fs.Bool("force", false, "force upgrade even if already on the latest version")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: code-switch upgrade [--tag vX.Y.Z] [--install-path PATH]")
+		return errors.New("usage: code-switch upgrade [--tag vX.Y.Z] [--install-path PATH] [--force]")
 	}
 
 	target := strings.TrimSpace(*installPath)
@@ -54,6 +55,7 @@ func cmdUpgrade(args []string, out io.Writer) error {
 		client:      &http.Client{Timeout: 5 * time.Minute},
 		out:         out,
 		dryRun:      *dryRun,
+		force:       *force,
 	}
 	return performUpgrade(opts)
 }
@@ -66,6 +68,7 @@ type upgradeOptions struct {
 	client      *http.Client
 	out         io.Writer
 	dryRun      bool
+	force       bool
 }
 
 func performUpgrade(opts upgradeOptions) error {
@@ -98,7 +101,7 @@ func performUpgrade(opts upgradeOptions) error {
 			return err
 		}
 	}
-	if shouldSkipUpgrade(version, targetTag) {
+	if !opts.force && shouldSkipUpgrade(version, targetTag) {
 		fmt.Fprintf(opts.out, "code-switch is already up to date (%s)\n", version)
 		return nil
 	}
