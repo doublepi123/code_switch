@@ -855,6 +855,34 @@ func TestResolveSwitchPresetPartialTierOverride(t *testing.T) {
 	}
 }
 
+func TestUpsertProviderConfigPersistsTierOverrides(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	selection := ConfigureSelection{
+		Agent:    string(agentClaude),
+		Provider: "openrouter",
+		Model:    "anthropic/claude-opus-4.7",
+		Haiku:    "anthropic/claude-haiku-4.5-custom",
+		Sonnet:   "anthropic/claude-sonnet-4.6-custom",
+		Opus:     "anthropic/claude-opus-4.7-custom",
+		Subagent: "anthropic/claude-haiku-4.5-custom",
+	}
+	upsertProviderConfig(cfg, selection, "sk-test")
+
+	stored := cfg.Providers["openrouter"]
+	if got := stored.Haiku; got != "anthropic/claude-haiku-4.5-custom" {
+		t.Fatalf("haiku = %v, want %v", got, "anthropic/claude-haiku-4.5-custom")
+	}
+	if got := stored.Sonnet; got != "anthropic/claude-sonnet-4.6-custom" {
+		t.Fatalf("sonnet = %v, want %v", got, "anthropic/claude-sonnet-4.6-custom")
+	}
+	if got := stored.Opus; got != "anthropic/claude-opus-4.7-custom" {
+		t.Fatalf("opus = %v, want %v", got, "anthropic/claude-opus-4.7-custom")
+	}
+	if got := stored.Subagent; got != "anthropic/claude-haiku-4.5-custom" {
+		t.Fatalf("subagent = %v, want %v", got, "anthropic/claude-haiku-4.5-custom")
+	}
+}
+
 func TestDetectProvider(t *testing.T) {
 	cases := []struct {
 		baseURL string

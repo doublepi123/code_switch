@@ -236,6 +236,10 @@ func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey s
 	stored.APIKey = apiKey
 	stored.Model = strings.TrimSpace(selection.Model)
 	stored.AuthEnv = strings.TrimSpace(selection.AuthEnv)
+	stored.Haiku = strings.TrimSpace(selection.Haiku)
+	stored.Sonnet = strings.TrimSpace(selection.Sonnet)
+	stored.Opus = strings.TrimSpace(selection.Opus)
+	stored.Subagent = strings.TrimSpace(selection.Subagent)
 	if selection.Name != "" {
 		stored.Name = strings.TrimSpace(selection.Name)
 	}
