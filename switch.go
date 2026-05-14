@@ -17,6 +17,10 @@ type providerArgs struct {
 	ClaudeDir string
 	CodexDir  string
 	DryRun    bool
+	Haiku     string
+	Sonnet    string
+	Opus      string
+	Subagent  string
 }
 
 func resolveKey(agent AgentName, cfg *AppConfig, provider, apiKeyFlag string, preset ProviderPreset) (string, error) {
@@ -89,11 +93,15 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
 	codexDir := fs.String("codex-dir", "", "override Codex config dir")
 	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
+	haikuFlag := fs.String("haiku", "", "override haiku tier model")
+	sonnetFlag := fs.String("sonnet", "", "override sonnet tier model")
+	opusFlag := fs.String("opus", "", "override opus tier model")
+	subagentFlag := fs.String("subagent", "", "override subagent tier model")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return errors.New("usage: code-switch switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id]")
+		return errors.New("usage: code-switch switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model]")
 	}
 	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
@@ -110,6 +118,29 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	pa.Haiku = strings.TrimSpace(*haikuFlag)
+	pa.Sonnet = strings.TrimSpace(*sonnetFlag)
+	pa.Opus = strings.TrimSpace(*opusFlag)
+	pa.Subagent = strings.TrimSpace(*subagentFlag)
+
+	// Persist CLI tier overrides to config
+	if pa.Haiku != "" || pa.Sonnet != "" || pa.Opus != "" || pa.Subagent != "" {
+		stored := cfg.Providers[pa.Provider]
+		if pa.Haiku != "" {
+			stored.Haiku = pa.Haiku
+		}
+		if pa.Sonnet != "" {
+			stored.Sonnet = pa.Sonnet
+		}
+		if pa.Opus != "" {
+			stored.Opus = pa.Opus
+		}
+		if pa.Subagent != "" {
+			stored.Subagent = pa.Subagent
+		}
+		cfg.Providers[pa.Provider] = stored
+	}
+
 	if agent == agentCodex {
 		if !*dryRun {
 			stored := codexProviderConfig(cfg, pa.Provider)
@@ -122,7 +153,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		}
 		return switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun)
 	}
-	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun)
+	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent})
 }
 
 func splitSwitchArgs(args []string) (string, []string) {
@@ -148,17 +179,40 @@ func switchFlagNeedsValue(arg string) bool {
 		return false
 	}
 	switch arg {
-	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-agent", "--agent":
+	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-agent", "--agent", "-haiku", "--haiku", "-sonnet", "--sonnet", "-opus", "--opus", "-subagent", "--subagent":
 		return true
 	default:
 		return false
 	}
 }
 
-func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string, out io.Writer, dryRun bool) error {
+type withTierOverrides struct {
+	Haiku    string
+	Sonnet   string
+	Opus     string
+	Subagent string
+}
+
+func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string, out io.Writer, dryRun bool, tierOverrides ...withTierOverrides) error {
 	preset, err := resolveSwitchPreset(provider, cfg, modelOverride)
 	if err != nil {
 		return err
+	}
+
+	if len(tierOverrides) > 0 {
+		o := tierOverrides[0]
+		if v := strings.TrimSpace(o.Haiku); v != "" {
+			preset.Haiku = v
+		}
+		if v := strings.TrimSpace(o.Sonnet); v != "" {
+			preset.Sonnet = v
+		}
+		if v := strings.TrimSpace(o.Opus); v != "" {
+			preset.Opus = v
+		}
+		if v := strings.TrimSpace(o.Subagent); v != "" {
+			preset.Subagent = v
+		}
 	}
 
 	settingsPath := claudeSettingsPath(claudeDir)

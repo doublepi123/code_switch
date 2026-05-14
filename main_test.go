@@ -798,6 +798,36 @@ func TestSwitchProviderOpenRouterOfficialOverrideResetsSavedCustomTierMapping(t 
 	}
 }
 
+func TestSwitchWithTierFlags(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "openrouter", "--model", "anthropic/claude-opus-4.7", "--haiku", "anthropic/claude-haiku-4.5", "--sonnet", "anthropic/claude-sonnet-4.6", "--api-key", "sk-test", "--claude-dir", claudeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO returned error: %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	env := settings["env"].(map[string]any)
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "anthropic/claude-haiku-4.5" {
+		t.Fatalf("haiku = %v, want anthropic/claude-haiku-4.5", got)
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("sonnet = %v, want anthropic/claude-sonnet-4.6", got)
+	}
+}
+
 func TestResolveSwitchPresetStoredTierOverrides(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
