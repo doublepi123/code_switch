@@ -64,6 +64,18 @@ func cmdEnv(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
 	fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
 	fmt.Fprintf(out, "export %s=%s\n", authEnv, shellSingleQuote(pa.APIKey))
+	if preset.Haiku != "" {
+		fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_HAIKU_MODEL=%s\n", shellSingleQuote(preset.Haiku))
+	}
+	if preset.Sonnet != "" {
+		fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_SONNET_MODEL=%s\n", shellSingleQuote(preset.Sonnet))
+	}
+	if preset.Opus != "" {
+		fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_OPUS_MODEL=%s\n", shellSingleQuote(preset.Opus))
+	}
+	if preset.Subagent != "" {
+		fmt.Fprintf(out, "export CLAUDE_CODE_SUBAGENT_MODEL=%s\n", shellSingleQuote(preset.Subagent))
+	}
 	if preset.ReasoningEffort != "" {
 		fmt.Fprintf(out, "export CLAUDE_CODE_EFFORT_LEVEL=%s\n", shellSingleQuote(preset.ReasoningEffort))
 	}

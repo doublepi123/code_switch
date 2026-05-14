@@ -7058,6 +7058,37 @@ func TestCmdEnvWithExtraEnv(t *testing.T) {
 	}
 }
 
+func TestCmdEnvShowsTierModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".code-switch")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {APIKey: "sk-test"},
+		},
+	}
+	cfgData, _ := json.Marshal(cfg)
+	os.WriteFile(filepath.Join(configDir, "config.json"), cfgData, 0o600)
+
+	output := &bytes.Buffer{}
+	if err := cmdEnv([]string{"openrouter"}, output); err != nil {
+		t.Fatalf("cmdEnv returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "ANTHROPIC_DEFAULT_HAIKU_MODEL") {
+		t.Fatalf("expected ANTHROPIC_DEFAULT_HAIKU_MODEL in env output, got %q", out)
+	}
+	if !strings.Contains(out, "ANTHROPIC_DEFAULT_SONNET_MODEL") {
+		t.Fatalf("expected ANTHROPIC_DEFAULT_SONNET_MODEL in env output, got %q", out)
+	}
+	if !strings.Contains(out, "ANTHROPIC_DEFAULT_OPUS_MODEL") {
+		t.Fatalf("expected ANTHROPIC_DEFAULT_OPUS_MODEL in env output, got %q", out)
+	}
+}
+
 func TestShellSingleQuote(t *testing.T) {
 	tests := []struct {
 		input    string
