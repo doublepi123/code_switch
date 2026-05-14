@@ -157,6 +157,7 @@ type tuiState struct {
 	typedAPIKeys     map[string]string
 	resetKeys        map[string]bool
 	customModels     map[string]string
+	tierOverrides    map[string]StoredProvider
 
 	result    ConfigureSelection
 	resultErr error
@@ -175,12 +176,17 @@ func (ts *tuiState) buildModels(provider string) []string {
 }
 
 func (ts *tuiState) finishSelection(provider, model string) {
+	ov := ts.tierOverrides[provider]
 	ts.result = ConfigureSelection{
 		Agent:    string(ts.agent),
 		Provider: provider,
 		Model:    model,
 		ResetKey: ts.resetKeys[provider],
 		APIKey:   strings.TrimSpace(ts.typedAPIKeys[provider]),
+		Haiku:    ov.Haiku,
+		Sonnet:   ov.Sonnet,
+		Opus:     ov.Opus,
+		Subagent: ov.Subagent,
 	}
 	ts.resultErr = nil
 	ts.app.Stop()
@@ -285,6 +291,9 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			})
 		})
 	}
+	actions.AddItem("Edit Tiers", "", 't', func() {
+		ts.showTierConfig(provider, backPage)
+	})
 	actions.AddItem("Back", "", 'b', ts.showProviders)
 	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
@@ -302,6 +311,9 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 		case canSwitch && (event.Rune() == 's' || event.Rune() == 'S'):
 			ts.finishSelection(provider, preset.Model)
 			return nil
+		case event.Rune() == 't' || event.Rune() == 'T':
+			ts.showTierConfig(provider, backPage)
+			return nil
 		}
 		return event
 	})
@@ -309,7 +321,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
 	page.AddItem(ts.detailText, 0, 1, false)
-	page.AddItem(actions, 8, 0, true)
+	page.AddItem(actions, 9, 0, true)
 	ts.pages.AddAndSwitchToPage("detail", page, true)
 	ts.app.SetFocus(actions)
 }
@@ -334,6 +346,102 @@ func (ts *tuiState) updateTierInfo(provider, model string) {
 		ts.tierInfo.SetText(fmt.Sprintf("haiku: %s | sonnet: %s | opus: %s | sub: %s",
 			preset.Haiku, preset.Sonnet, preset.Opus, preset.Subagent))
 	}
+}
+
+func (ts *tuiState) showTierConfig(provider, backPage string) {
+	ts.selectedProvider = provider
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+
+	models := ts.buildModels(provider)
+	modelOptions := append([]string{""}, models...)
+
+	override := ts.tierOverrides[provider]
+	stored := ts.cfg.Providers[provider]
+
+	haikuDefault := firstNonEmpty(strings.TrimSpace(override.Haiku), strings.TrimSpace(stored.Haiku), preset.Haiku)
+	sonnetDefault := firstNonEmpty(strings.TrimSpace(override.Sonnet), strings.TrimSpace(stored.Sonnet), preset.Sonnet)
+	opusDefault := firstNonEmpty(strings.TrimSpace(override.Opus), strings.TrimSpace(stored.Opus), preset.Opus)
+	subagentDefault := firstNonEmpty(strings.TrimSpace(override.Subagent), strings.TrimSpace(stored.Subagent), preset.Subagent)
+
+	var haikuVal, sonnetVal, opusVal, subagentVal string
+
+	form := tview.NewForm()
+
+	modelIndexFor := func(val string) int {
+		for i, m := range modelOptions {
+			if m == val {
+				return i
+			}
+		}
+		return 0
+	}
+
+	form.AddDropDown("Haiku", modelOptions, modelIndexFor(haikuDefault), func(option string, idx int) {
+		if idx == 0 {
+			haikuVal = ""
+		} else {
+			haikuVal = option
+		}
+	})
+	form.AddDropDown("Sonnet", modelOptions, modelIndexFor(sonnetDefault), func(option string, idx int) {
+		if idx == 0 {
+			sonnetVal = ""
+		} else {
+			sonnetVal = option
+		}
+	})
+	form.AddDropDown("Opus", modelOptions, modelIndexFor(opusDefault), func(option string, idx int) {
+		if idx == 0 {
+			opusVal = ""
+		} else {
+			opusVal = option
+		}
+	})
+	form.AddDropDown("Subagent", modelOptions, modelIndexFor(subagentDefault), func(option string, idx int) {
+		if idx == 0 {
+			subagentVal = ""
+		} else {
+			subagentVal = option
+		}
+	})
+
+	form.AddButton("Save", func() {
+		ov := ts.tierOverrides[provider]
+		ov.Haiku = haikuVal
+		ov.Sonnet = sonnetVal
+		ov.Opus = opusVal
+		ov.Subagent = subagentVal
+		ts.tierOverrides[provider] = ov
+		ts.showDetail(provider, backPage)
+	})
+	form.AddButton("Cancel", func() {
+		ts.showDetail(provider, backPage)
+	})
+	form.SetBorder(true)
+	form.SetTitle(" Edit Tier Models ")
+	form.SetButtonsAlign(tview.AlignLeft)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			ts.showDetail(provider, backPage)
+			return nil
+		}
+		return event
+	})
+
+	help := tview.NewTextView()
+	help.SetText(fmt.Sprintf("Provider: %s  |  Leave empty for preset default  |  Esc cancel", providerTitle(provider, ts.cfg)))
+
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(help, 1, 0, false)
+	page.AddItem(form, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("tier-config", page, true)
+	ts.app.SetFocus(form)
 }
 
 func (ts *tuiState) showModels(provider, backPage string) {
@@ -733,6 +841,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		typedAPIKeys:     map[string]string{},
 		resetKeys:        map[string]bool{},
 		customModels:     map[string]string{},
+		tierOverrides:    map[string]StoredProvider{},
 		resultErr:        errCancelled,
 	}
 
