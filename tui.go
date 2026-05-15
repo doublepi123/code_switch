@@ -152,6 +152,7 @@ type tuiState struct {
 	claudeDir       string
 	codexDir        string
 	names           []string
+	displayNames    []string
 
 	selectedProvider string
 	typedAPIKeys     map[string]string
@@ -201,17 +202,20 @@ func (ts *tuiState) showProviders() {
 
 func (ts *tuiState) rebuildProviderList() {
 	ts.providerList.Clear()
+	ts.displayNames = nil
 	selectedIndex := 0
-	for i, name := range ts.names {
+	for _, name := range ts.names {
 		if name == ts.selectedProvider {
-			selectedIndex = i
+			selectedIndex = len(ts.displayNames)
 		}
 		if name == customProviderOption {
 			ts.providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
+			ts.displayNames = append(ts.displayNames, name)
 			continue
 		}
 		if name == restoreProviderOption {
 			ts.providerList.AddItem("Restore official config...", agentDisplayName(ts.agent), 0, nil)
+			ts.displayNames = append(ts.displayNames, name)
 			continue
 		}
 		preset, err := resolveAgentProviderPreset(ts.agent, name, ts.cfg)
@@ -232,6 +236,7 @@ func (ts *tuiState) rebuildProviderList() {
 			title += " [" + strings.Join(suffix, ", ") + "]"
 		}
 		ts.providerList.AddItem(title, preset.BaseURL, 0, nil)
+		ts.displayNames = append(ts.displayNames, name)
 	}
 	ts.providerList.SetCurrentItem(selectedIndex)
 }
@@ -443,9 +448,6 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 		dd := dd
 		dd.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			if dd.IsOpen() {
-				if event.Key() == tcell.KeyEscape {
-					return event
-				}
 				return event
 			}
 			switch event.Key() {
@@ -540,11 +542,13 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			ts.showCustomModelForm(provider)
 		})
 		selectedIndex := modelIndexForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
-		if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
-			selectedIndex = 0
-		}
-		if selectedIndex >= 0 && selectedIndex < len(allModels) {
-			modelList.SetCurrentItem(selectedIndex)
+		if filter == "" {
+			if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
+				selectedIndex = 0
+			}
+			if selectedIndex >= 0 && selectedIndex < modelList.GetItemCount() {
+				modelList.SetCurrentItem(selectedIndex)
+			}
 		}
 	}
 
@@ -609,6 +613,8 @@ func (ts *tuiState) showModels(provider, backPage string) {
 		}
 		if index >= 0 && index < len(filtered) {
 			ts.updateTierInfo(provider, filtered[index])
+		} else if index == len(filtered) {
+			ts.tierInfo.SetText("enter a custom model name")
 		} else {
 			ts.tierInfo.SetText("")
 		}
@@ -917,15 +923,15 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 	ts.tierInfo.SetWrap(true)
 
 	ts.providerList.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		if index >= 0 && index < len(ts.names) {
-			ts.selectedProvider = ts.names[index]
+		if index >= 0 && index < len(ts.displayNames) {
+			ts.selectedProvider = ts.displayNames[index]
 		}
 	})
 	ts.providerList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		if index < 0 || index >= len(ts.names) {
+		if index < 0 || index >= len(ts.displayNames) {
 			return
 		}
-		ts.selectedProvider = ts.names[index]
+		ts.selectedProvider = ts.displayNames[index]
 		if ts.selectedProvider == customProviderOption {
 			ts.showCustomProviderForm()
 			return
@@ -943,8 +949,8 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		switch {
 		case event.Key() == tcell.KeyRight:
 			index := ts.providerList.GetCurrentItem()
-			if index >= 0 && index < len(ts.names) {
-				ts.selectedProvider = ts.names[index]
+			if index >= 0 && index < len(ts.displayNames) {
+				ts.selectedProvider = ts.displayNames[index]
 				if ts.selectedProvider == customProviderOption {
 					ts.showCustomProviderForm()
 				} else if ts.selectedProvider == restoreProviderOption {

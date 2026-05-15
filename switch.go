@@ -222,6 +222,21 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 		fmt.Fprintf(out, "[dry-run] settings: %s\n", settingsPath)
 		fmt.Fprintf(out, "[dry-run] base_url: %s\n", preset.BaseURL)
 		fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
+		if preset.Haiku != "" {
+			fmt.Fprintf(out, "[dry-run] haiku: %s\n", preset.Haiku)
+		}
+		if preset.Sonnet != "" {
+			fmt.Fprintf(out, "[dry-run] sonnet: %s\n", preset.Sonnet)
+		}
+		if preset.Opus != "" {
+			fmt.Fprintf(out, "[dry-run] opus: %s\n", preset.Opus)
+		}
+		if preset.Subagent != "" {
+			fmt.Fprintf(out, "[dry-run] subagent: %s\n", preset.Subagent)
+		}
+		if preset.ReasoningEffort != "" {
+			fmt.Fprintf(out, "[dry-run] reasoning_effort: %s\n", preset.ReasoningEffort)
+		}
 		return nil
 	}
 

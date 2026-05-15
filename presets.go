@@ -490,10 +490,10 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 		BaseURL:  strings.TrimSpace(stored.BaseURL),
 		Model:    model,
 		Models:   []string{model},
-		Haiku:    model,
-		Sonnet:   model,
-		Opus:     model,
-		Subagent: model,
+		Haiku:    firstNonEmpty(stored.Haiku, model),
+		Sonnet:   firstNonEmpty(stored.Sonnet, model),
+		Opus:     firstNonEmpty(stored.Opus, model),
+		Subagent: firstNonEmpty(stored.Subagent, model),
 		AuthEnv:  strings.TrimSpace(stored.AuthEnv),
 	}, nil
 }

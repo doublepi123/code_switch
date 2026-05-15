@@ -24,10 +24,11 @@ func cmdRestore(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, _, err := loadAppConfig()
+	cfg, _, unlock, err := loadAppConfigLocked()
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	switch agent {
 	case agentCodex:
 		return restoreCodexConfig(*codexDir, cfg, out, *dryRun)

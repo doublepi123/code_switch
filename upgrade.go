@@ -125,12 +125,13 @@ func performUpgrade(opts upgradeOptions) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
+	canonicalAsset := assets[0]
 	asset, archivePath, err := downloadUpgradeArchive(context.Background(), opts.client, opts.baseURL, opts.repo, targetTag, tmpDir, assets, opts.out)
 	if err != nil {
 		return err
 	}
 
-	if err := verifyAssetChecksum(context.Background(), opts.client, opts.baseURL, opts.repo, targetTag, asset, archivePath); err != nil {
+	if err := verifyAssetChecksum(context.Background(), opts.client, opts.baseURL, opts.repo, targetTag, asset, archivePath, canonicalAsset); err != nil {
 		if errors.Is(err, errNoChecksumAvailable) {
 			fmt.Fprintf(opts.out, "checksum: %v\n", err)
 		} else {
@@ -393,8 +394,15 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 		return err
 	}
 	defer file.Close()
-	_, err = io.Copy(file, io.LimitReader(resp.Body, 500*1024*1024))
-	return err
+	const maxDownloadSize = 500 * 1024 * 1024
+	written, err := io.Copy(file, io.LimitReader(resp.Body, maxDownloadSize))
+	if err != nil {
+		return err
+	}
+	if written == maxDownloadSize {
+		return fmt.Errorf("download exceeded maximum size of %d bytes; file may be corrupted", maxDownloadSize)
+	}
+	return nil
 }
 
 func extractTarGzBinary(archivePath, binaryName, dest string) error {
@@ -539,7 +547,7 @@ func copyFile(src, target string) error {
 	return dest.Close()
 }
 
-func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo, tag, asset, archivePath string) error {
+func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo, tag, asset, archivePath string, canonicalAsset ...string) error {
 	type checksumEntry struct {
 		hash string
 		file string
@@ -592,6 +600,13 @@ func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo
 		}
 		if entry := findEntry(entries, asset); entry != nil {
 			return validateSHA256(archivePath, entry.hash)
+		}
+		// If the downloaded asset name differs from canonical (e.g. legacy fallback),
+		// try the canonical name as well.
+		if len(canonicalAsset) > 0 && canonicalAsset[0] != asset {
+			if entry := findEntry(entries, canonicalAsset[0]); entry != nil {
+				return validateSHA256(archivePath, entry.hash)
+			}
 		}
 	}
 
