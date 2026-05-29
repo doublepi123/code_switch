@@ -595,6 +595,26 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			allModels = ts.buildModels(provider)
 			populateModels(searchInput.GetText())
 			return nil
+		case event.Rune() == '1':
+			filter := strings.ToLower(strings.TrimSpace(searchInput.GetText()))
+			filtered := []string{}
+			for _, m := range allModels {
+				if filter != "" && !strings.Contains(strings.ToLower(m), filter) {
+					continue
+				}
+				filtered = append(filtered, m)
+			}
+			idx := modelList.GetCurrentItem()
+			if idx >= 0 && idx < len(filtered) {
+				model := filtered[idx]
+				if strings.HasSuffix(model, "[1m]") {
+					model = strings.TrimSuffix(model, "[1m]")
+				} else {
+					model = model + "[1m]"
+				}
+				ts.finishSelection(provider, model)
+			}
+			return nil
 		}
 		return event
 	})
@@ -621,7 +641,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	})
 
 	help := tview.NewTextView()
-	help.SetText("Enter apply   / filter   c custom   k edit key   r refresh   q/esc/← back")
+	help.SetText("Enter apply   / filter   c custom   k edit key   1 toggle 1m   r refresh   q/esc/← back")
 
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
