@@ -103,7 +103,7 @@ func codexDeepSeekPreset() ProviderPreset {
 
 func codexKimiCodingPreset() ProviderPreset {
 	preset := providerPresets["kimi-coding"]
-	preset.BaseURL = "https://api.kimi.com/v1"
+	preset.BaseURL = "https://api.kimi.com/coding/v1"
 	preset.AuthEnv = "KIMI_API_KEY"
 	preset.ForceModelTiers = true
 	return preset
