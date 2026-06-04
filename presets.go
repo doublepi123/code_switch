@@ -192,11 +192,11 @@ var providerPresets = map[string]ProviderPreset{
 	"minimax-cn": {
 		Name:      "MiniMax CN Token Plan",
 		BaseURL:   "https://api.minimaxi.com/anthropic",
-		Model:     "MiniMax-M2.7",
-		Models:    []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
-		Haiku:     "MiniMax-M2.7",
-		Sonnet:    "MiniMax-M2.7",
-		Opus:      "MiniMax-M2.7",
+		Model:     "MiniMax-M3",
+		Models:    []string{"MiniMax-M3", "MiniMax-M3-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
+		Haiku:     "MiniMax-M3",
+		Sonnet:    "MiniMax-M3",
+		Opus:      "MiniMax-M3",
 		Website:   "https://platform.minimaxi.com",
 		APIKeyURL: "https://platform.minimaxi.com/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
@@ -207,11 +207,11 @@ var providerPresets = map[string]ProviderPreset{
 	"minimax-global": {
 		Name:      "MiniMax Global Token Plan",
 		BaseURL:   "https://api.minimax.io/anthropic",
-		Model:     "MiniMax-M2.7",
-		Models:    []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
-		Haiku:     "MiniMax-M2.7",
-		Sonnet:    "MiniMax-M2.7",
-		Opus:      "MiniMax-M2.7",
+		Model:     "MiniMax-M3",
+		Models:    []string{"MiniMax-M3", "MiniMax-M3-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
+		Haiku:     "MiniMax-M3",
+		Sonnet:    "MiniMax-M3",
+		Opus:      "MiniMax-M3",
 		Website:   "https://platform.minimax.io",
 		APIKeyURL: "https://platform.minimax.io/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
