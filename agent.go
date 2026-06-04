@@ -101,6 +101,14 @@ func codexDeepSeekPreset() ProviderPreset {
 	return preset
 }
 
+func codexKimiCodingPreset() ProviderPreset {
+	preset := providerPresets["kimi-coding"]
+	preset.BaseURL = "https://api.kimi.com/v1"
+	preset.AuthEnv = "KIMI_API_KEY"
+	preset.ForceModelTiers = true
+	return preset
+}
+
 func codexPresetForProvider(provider string) (ProviderPreset, error) {
 	switch provider {
 	case "deepseek":
@@ -109,6 +117,8 @@ func codexPresetForProvider(provider string) (ProviderPreset, error) {
 		return codexOllamaCloudPreset(), nil
 	case "openrouter":
 		return codexOpenRouterPreset(), nil
+	case "kimi-coding":
+		return codexKimiCodingPreset(), nil
 	default:
 		return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent codex", provider)
 	}
@@ -153,7 +163,7 @@ func providerNamesForAgent(agent AgentName, cfg *AppConfig, includeCustomOption 
 	var names []string
 	switch agent {
 	case agentCodex:
-		names = []string{"deepseek", "ollama-cloud", "openrouter"}
+		names = []string{"deepseek", "kimi-coding", "ollama-cloud", "openrouter"}
 	default:
 		names = sortedProviderNames(cfg, includeCustomOption)
 	}

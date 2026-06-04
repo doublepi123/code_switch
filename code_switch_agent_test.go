@@ -537,7 +537,7 @@ func TestCodexListAndTUIProviderNamesIncludeRestore(t *testing.T) {
 	}
 
 	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
-	if len(names) != 4 || names[0] != "deepseek" || names[1] != "ollama-cloud" || names[2] != "openrouter" || names[3] != restoreProviderOption {
+	if len(names) != 5 || names[0] != "deepseek" || names[1] != "kimi-coding" || names[2] != "ollama-cloud" || names[3] != "openrouter" || names[4] != restoreProviderOption {
 		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }
@@ -693,14 +693,14 @@ func TestCodexListIncludesOpenRouter(t *testing.T) {
 		t.Fatalf("cmdList codex returned error: %v", err)
 	}
 	out := output.String()
-	for _, want := range []string{"deepseek", "ollama-cloud", "openrouter"} {
+	for _, want := range []string{"deepseek", "kimi-coding", "ollama-cloud", "openrouter"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("codex list missing %q: %q", want, out)
 		}
 	}
 
 	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
-	if len(names) != 4 || names[0] != "deepseek" || names[1] != "ollama-cloud" || names[2] != "openrouter" || names[3] != restoreProviderOption {
+	if len(names) != 5 || names[0] != "deepseek" || names[1] != "kimi-coding" || names[2] != "ollama-cloud" || names[3] != "openrouter" || names[4] != restoreProviderOption {
 		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }

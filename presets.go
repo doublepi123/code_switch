@@ -368,6 +368,23 @@ var providerPresets = map[string]ProviderPreset{
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
+	"kimi-coding": {
+		Name:      "Kimi Coding",
+		BaseURL:   "https://api.kimi.com/anthropic",
+		Model:     "kimi-k2.6",
+		Models:    []string{"kimi-k2.6", "kimi-k2.5", "kimi-k1.6"},
+		Haiku:     "kimi-k2.5",
+		Sonnet:    "kimi-k2.6",
+		Opus:      "kimi-k2.6",
+		Subagent:  "kimi-k2.6",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://platform.kimi.com",
+		APIKeyURL: "https://platform.kimi.com",
+		ExtraEnv: map[string]any{
+			"API_TIMEOUT_MS": "3000000",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		},
+	},
 }
 
 var unsupportedOpenCodeGoAnthropicModels = map[string]string{
@@ -405,6 +422,9 @@ var providerAliases = map[string]string{
 	"volcengine-ark":       "volcengine",
 	"volcengine.com":       "volcengine",
 	"ark.cn-beijing.volces.com": "volcengine",
+	"kimi":                 "kimi-coding",
+	"kimi.com":             "kimi-coding",
+	"api.kimi.com":         "kimi-coding",
 }
 
 const customProviderOption = "__custom__"
@@ -629,6 +649,8 @@ func detectProvider(baseURL, model string) string {
 		return "zai"
 	case host == "ark.cn-beijing.volces.com" || strings.HasSuffix(host, ".volces.com"):
 		return "volcengine"
+	case host == "api.kimi.com" || strings.HasSuffix(host, ".kimi.com"):
+		return "kimi-coding"
 	default:
 		return customDetectedProvider
 	}

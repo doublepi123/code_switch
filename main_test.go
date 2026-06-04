@@ -8773,8 +8773,8 @@ func TestProviderNamesForAgentCodex(t *testing.T) {
 	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
 	ensureAppConfigMaps(cfg)
 	names := providerNamesForAgent(agentCodex, cfg, false, false)
-	if len(names) != 3 {
-		t.Fatalf("expected 3 codex providers, got %d: %v", len(names), names)
+	if len(names) != 4 {
+		t.Fatalf("expected 4 codex providers, got %d: %v", len(names), names)
 	}
 }
 

@@ -31,6 +31,8 @@ func codexTOMLProviderName(provider string) string {
 		return "DeepSeek"
 	case "openrouter":
 		return "OpenRouter"
+	case "kimi-coding":
+		return "Kimi"
 	default:
 		return provider
 	}
@@ -44,6 +46,8 @@ func codexTOMLProviderKey(providerName string) string {
 		return "openrouter"
 	case "ollama-cloud":
 		return "ollama-cloud"
+	case "Kimi":
+		return "kimi-coding"
 	default:
 		return providerName
 	}
@@ -169,7 +173,7 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 	provider, model, _, _ := parseCodexTopLevel(existing)
 
 	isKnownProvider := false
-	for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
+	for _, p := range []string{"ollama-cloud", "openrouter", "deepseek", "kimi-coding"} {
 		pName := codexTOMLProviderName(p)
 		if provider == pName {
 			isKnownProvider = true
@@ -196,7 +200,7 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 		if name, ok := tomlSectionName(line); ok {
 			section = name
 			skipSection = false
-			for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
+			for _, p := range []string{"ollama-cloud", "openrouter", "deepseek", "kimi-coding"} {
 				pName := codexTOMLProviderName(p)
 				if name == "model_providers."+pName || strings.HasPrefix(name, "model_providers."+pName+".") {
 					skipSection = true
@@ -241,14 +245,14 @@ func isManagedCodexModel(model string, cfg *AppConfig) bool {
 	if model == "" {
 		return false
 	}
-	for _, fn := range []func() ProviderPreset{codexDeepSeekPreset, codexOllamaCloudPreset, codexOpenRouterPreset} {
+	for _, fn := range []func() ProviderPreset{codexDeepSeekPreset, codexOllamaCloudPreset, codexOpenRouterPreset, codexKimiCodingPreset} {
 		preset := fn()
 		if model == preset.Model || containsString(preset.Models, model) {
 			return true
 		}
 	}
 	if cfg != nil {
-		for _, p := range []string{"ollama-cloud", "openrouter", "deepseek"} {
+		for _, p := range []string{"ollama-cloud", "openrouter", "deepseek", "kimi-coding"} {
 			if strings.TrimSpace(codexProviderConfig(cfg, p).Model) == model {
 				return true
 			}

@@ -234,7 +234,7 @@ func cmdSetKey(args []string, out io.Writer) error {
 	provider := canonicalProviderName(remaining[0])
 
 	if agent == agentCodex {
-		if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepseek" {
+		if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepseek" && provider != "kimi-coding" {
 			return fmt.Errorf("unsupported provider %q for agent codex", remaining[0])
 		}
 		cfg, path, unlock, err := loadAppConfigLocked()
@@ -462,7 +462,7 @@ func printUsage(out io.Writer) {
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}
-	fmt.Fprint(out, "\nCodex providers:\n  deepseek\n  ollama-cloud\n  openrouter\n")
+	fmt.Fprint(out, "\nCodex providers:\n  deepseek\n  kimi-coding\n  ollama-cloud\n  openrouter\n")
 }
 
 func makeCustomProviderKey(name string) string {
