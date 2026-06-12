@@ -13,10 +13,10 @@ func parseAgentName(value string) (AgentName, error) {
 		return agentClaude, nil
 	}
 	switch AgentName(value) {
-	case agentClaude, agentCodex:
+	case agentClaude, agentCodex, agentOpencode:
 		return AgentName(value), nil
 	default:
-		return "", fmt.Errorf("unsupported agent %q, use claude or codex", value)
+		return "", fmt.Errorf("unsupported agent %q, use claude, codex, or opencode", value)
 	}
 }
 
@@ -26,6 +26,8 @@ func agentDisplayName(agent AgentName) string {
 		return "Codex"
 	case agentClaude:
 		return "Claude Code"
+	case agentOpencode:
+		return "OpenCode"
 	default:
 		return fmt.Sprintf("Unknown (%s)", string(agent))
 	}
@@ -67,9 +69,20 @@ func codexProviderConfig(cfg *AppConfig, provider string) StoredProvider {
 	return agentCfg.Providers[provider]
 }
 
+func opencodeProviderConfig(cfg *AppConfig, provider string) StoredProvider {
+	agentCfg := agentConfig(cfg, agentOpencode)
+	return agentCfg.Providers[provider]
+}
+
 func storedAPIKeyForAgent(cfg *AppConfig, agent AgentName, provider string) string {
 	if agent == agentCodex {
 		key := strings.TrimSpace(codexProviderConfig(cfg, provider).APIKey)
+		if key != "" {
+			return key
+		}
+	}
+	if agent == agentOpencode {
+		key := strings.TrimSpace(opencodeProviderConfig(cfg, provider).APIKey)
 		if key != "" {
 			return key
 		}
@@ -136,6 +149,8 @@ func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig
 			preset = withSelectedModel(preset, stored.Model)
 		}
 		return preset, nil
+	case agentOpencode:
+		return resolveProviderPreset(provider, cfg)
 	default:
 		return resolveProviderPreset(provider, cfg)
 	}
@@ -154,6 +169,8 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 			model = strings.TrimSpace(codexProviderConfig(cfg, provider).Model)
 		}
 		return withSelectedModel(preset, model), nil
+	case agentOpencode:
+		return resolveSwitchPreset(provider, cfg, modelOverride)
 	default:
 		return resolveSwitchPreset(provider, cfg, modelOverride)
 	}
@@ -164,6 +181,8 @@ func providerNamesForAgent(agent AgentName, cfg *AppConfig, includeCustomOption 
 	switch agent {
 	case agentCodex:
 		names = []string{"deepseek", "kimi-coding", "ollama-cloud", "openrouter"}
+	case agentOpencode:
+		names = sortedProviderNames(cfg, includeCustomOption)
 	default:
 		names = sortedProviderNames(cfg, includeCustomOption)
 	}
@@ -199,7 +218,7 @@ func providerModelsForAgentWithAPIKey(cfg *AppConfig, agent AgentName, provider,
 }
 
 func defaultSelectionModelForAgent(cfg *AppConfig, agent AgentName, provider, currentProvider, currentModel string) string {
-	if agent == agentClaude {
+	if agent == agentClaude || agent == agentOpencode {
 		return defaultSelectionModel(cfg, provider, currentProvider, currentModel)
 	}
 	if provider == currentProvider && currentModel != "" {
@@ -246,7 +265,7 @@ func buildModelListForAgentWithAPIKey(cfg *AppConfig, agent AgentName, provider 
 }
 
 func sortedAgentNames() []AgentName {
-	names := []AgentName{agentClaude, agentCodex}
+	names := []AgentName{agentClaude, agentCodex, agentOpencode}
 	sort.Slice(names, func(i, j int) bool {
 		return agentDisplayName(names[i]) < agentDisplayName(names[j])
 	})

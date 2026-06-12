@@ -6726,11 +6726,11 @@ func TestBuildModelListForAgent(t *testing.T) {
 
 func TestSortedAgentNames(t *testing.T) {
 	names := sortedAgentNames()
-	if len(names) != 2 {
-		t.Fatalf("expected 2 agent names, got %d", len(names))
+	if len(names) != 3 {
+		t.Fatalf("expected 3 agent names, got %d", len(names))
 	}
-	if names[0] != agentClaude || names[1] != agentCodex {
-		t.Fatalf("expected [claude, codex], got %v", names)
+	if names[0] != agentClaude || names[1] != agentCodex || names[2] != agentOpencode {
+		t.Fatalf("expected [claude, codex, opencode], got %v", names)
 	}
 }
 

@@ -184,8 +184,9 @@ type ConfigureSelection struct {
 type AgentName string
 
 const (
-	agentClaude AgentName = "claude"
-	agentCodex  AgentName = "codex"
+	agentClaude   AgentName = "claude"
+	agentCodex    AgentName = "codex"
+	agentOpencode AgentName = "opencode"
 )
 
 var providerPresets = map[string]ProviderPreset{
