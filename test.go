@@ -18,7 +18,7 @@ func cmdTest(args []string, out io.Writer) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	model := fs.String("model", "", "model id to test with")
 	testPath := fs.String("path", "", "override API path (default: /v1/messages)")
@@ -26,7 +26,7 @@ func cmdTest(args []string, out io.Writer) error {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return errors.New("usage: code-switch test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]")
+		return errors.New("usage: code-switch test <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]")
 	}
 	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
@@ -44,6 +44,9 @@ func cmdTest(args []string, out io.Writer) error {
 	}
 	if agent == agentCodex {
 		return testCodexProvider(out, preset, pa.APIKey)
+	}
+	if agent == agentOpencode {
+		return testProvider(out, preset, pa.APIKey, "/v1/messages")
 	}
 
 	return testProvider(out, preset, pa.APIKey, strings.TrimSpace(*testPath))

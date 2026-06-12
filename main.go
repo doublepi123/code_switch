@@ -95,7 +95,7 @@ func isVersionRequest(args []string) bool {
 func cmdList(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	verbose := fs.Bool("verbose", false, "show all available models for each provider")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -137,9 +137,10 @@ func cmdList(args []string, out io.Writer) error {
 func cmdCurrent(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("current", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", "", "target agent: claude or codex (default: show both)")
+	agentFlag := fs.String("agent", "", "target agent: claude, codex, or opencode (default: show both)")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
 	codexDir := fs.String("codex-dir", "", "override Codex config dir")
+	opencodeDir := fs.String("opencode-dir", "", "override OpenCode config dir")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -211,6 +212,32 @@ func cmdCurrent(args []string, out io.Writer) error {
 				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
 			}
 		}
+		if showBoth {
+			fmt.Fprintln(out)
+		}
+	}
+
+	if showBoth || agent == agentOpencode {
+		configPath, model, baseURL, authEnv, err := currentOpencodeProvider(*opencodeDir)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "OpenCode\n")
+		fmt.Fprintf(out, "  %s\n", formatLabel("config", configPath))
+		if baseURL == "" {
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
+		} else {
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", detectProvider(baseURL, model)))
+			if baseURL != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
+			}
+			if model != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
+			}
+			if authEnv != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("api_key_env", authEnv))
+			}
+		}
 	}
 	return nil
 }
@@ -218,13 +245,13 @@ func cmdCurrent(args []string, out io.Writer) error {
 func cmdSetKey(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("set-key", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	remaining := fs.Args()
 	if len(remaining) != 2 {
-		return fmt.Errorf("usage: code-switch set-key <provider> <api-key> [--agent claude|codex]")
+		return fmt.Errorf("usage: code-switch set-key <provider> <api-key> [--agent claude|codex|opencode]")
 	}
 
 	agent, err := parseAgentName(*agentFlag)
@@ -251,6 +278,29 @@ func cmdSetKey(args []string, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "saved api key for %s (codex) in %s\n", provider, path)
+		return nil
+	}
+
+	if agent == agentOpencode {
+		cfg, path, unlock, err := loadAppConfigLocked()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		preset, err := resolveProviderPreset(provider, cfg)
+		if err != nil {
+			return fmt.Errorf("unsupported provider %q for agent opencode", remaining[0])
+		}
+		_ = preset
+		agentCfg := agentConfig(cfg, agentOpencode)
+		stored := agentCfg.Providers[provider]
+		stored.APIKey = remaining[1]
+		agentCfg.Providers[provider] = stored
+		cfg.Agents[string(agentOpencode)] = agentCfg
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "saved api key for %s (opencode) in %s\n", provider, path)
 		return nil
 	}
 
@@ -281,7 +331,7 @@ func cmdSetKey(args []string, out io.Writer) error {
 func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	force := fs.Bool("force", false, "skip confirmation prompt")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -289,7 +339,7 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 
 	providerArg := strings.TrimSpace(fs.Arg(0))
 	if providerArg == "" {
-		return fmt.Errorf("usage: code-switch remove <provider> [--agent claude|codex] [--force]")
+		return fmt.Errorf("usage: code-switch remove <provider> [--agent claude|codex|opencode] [--force]")
 	}
 
 	agent, err := parseAgentName(*agentFlag)
@@ -326,6 +376,32 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 		delete(agentCfg.Providers, provider)
 		cfg.Agents[string(agentCodex)] = agentCfg
 		fmt.Fprintf(out, "removed %s (codex) from %s\n", provider, path)
+		return writeJSONAtomic(path, cfg)
+	}
+
+	if agent == agentOpencode {
+		agentCfg := agentConfig(cfg, agentOpencode)
+		_, ok := agentCfg.Providers[provider]
+		if !ok {
+			return fmt.Errorf("no saved configuration for provider %q for agent opencode", provider)
+		}
+		if !*force {
+			stored := opencodeProviderConfig(cfg, provider)
+			showKey := maskAPIKey(stored.APIKey)
+			fmt.Fprintf(out, "Remove saved config for %s (opencode, key: %s)? [y/N]: ", provider, showKey)
+			reader := bufio.NewReader(in)
+			response, err := readLine(reader)
+			if err != nil {
+				return fmt.Errorf("read confirmation: %w", err)
+			}
+			if strings.ToLower(strings.TrimSpace(response)) != "y" {
+				fmt.Fprintln(out, "cancelled")
+				return nil
+			}
+		}
+		delete(agentCfg.Providers, provider)
+		cfg.Agents[string(agentOpencode)] = agentCfg
+		fmt.Fprintf(out, "removed %s (opencode) from %s\n", provider, path)
 		return writeJSONAtomic(path, cfg)
 	}
 

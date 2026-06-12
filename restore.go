@@ -10,15 +10,16 @@ import (
 func cmdRestore(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
 	codexDir := fs.String("codex-dir", "", "override Codex config dir")
+	opencodeDir := fs.String("opencode-dir", "", "override OpenCode config dir")
 	dryRun := fs.Bool("dry-run", false, "preview what would be restored without modifying config")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: code-switch restore [--agent claude|codex] [--dry-run]")
+		return fmt.Errorf("usage: code-switch restore [--agent claude|codex|opencode] [--dry-run]")
 	}
 	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
@@ -32,6 +33,8 @@ func cmdRestore(args []string, out io.Writer) error {
 	switch agent {
 	case agentCodex:
 		return restoreCodexConfig(*codexDir, cfg, out, *dryRun)
+	case agentOpencode:
+		return restoreOpencodeConfig(*opencodeDir, cfg, out, *dryRun)
 	default:
 		return restoreClaudeConfig(*claudeDir, out, *dryRun)
 	}

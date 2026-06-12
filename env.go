@@ -13,13 +13,13 @@ func cmdEnv(args []string, out io.Writer) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("env", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return fmt.Errorf("usage: code-switch env <provider> [--agent claude|codex] [--api-key sk-xxx]")
+		return fmt.Errorf("usage: code-switch env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]")
 	}
 	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
@@ -54,6 +54,18 @@ func cmdEnv(args []string, out io.Writer) error {
 			}
 			fmt.Fprintf(out, "export %s=%s\n", key, shellSingleQuote(fmt.Sprint(val)))
 		}
+		return nil
+	}
+
+	if agent == agentOpencode {
+		fmt.Fprintf(out, "# OpenCode uses env-based auth; export these variables:\n")
+		fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
+		fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+		authEnv := strings.TrimSpace(preset.AuthEnv)
+		if authEnv == "" {
+			authEnv = "ANTHROPIC_API_KEY"
+		}
+		fmt.Fprintf(out, "export %s=%s\n", authEnv, shellSingleQuote(pa.APIKey))
 		return nil
 	}
 
@@ -93,13 +105,13 @@ func cmdToken(args []string, out io.Writer) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("token", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return fmt.Errorf("usage: code-switch token <provider> [--agent claude|codex] [--api-key sk-xxx]")
+		return fmt.Errorf("usage: code-switch token <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]")
 	}
 	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
