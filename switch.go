@@ -10,17 +10,18 @@ import (
 )
 
 type providerArgs struct {
-	Agent     AgentName
-	Provider  string
-	APIKey    string
-	Model     string
-	ClaudeDir string
-	CodexDir  string
-	DryRun    bool
-	Haiku     string
-	Sonnet    string
-	Opus      string
-	Subagent  string
+	Agent       AgentName
+	Provider    string
+	APIKey      string
+	Model       string
+	ClaudeDir   string
+	CodexDir    string
+	OpencodeDir string
+	DryRun      bool
+	Haiku       string
+	Sonnet      string
+	Opus        string
+	Subagent    string
 }
 
 func resolveKey(agent AgentName, cfg *AppConfig, provider, apiKeyFlag string, preset ProviderPreset) (string, error) {
@@ -28,6 +29,11 @@ func resolveKey(agent AgentName, cfg *AppConfig, provider, apiKeyFlag string, pr
 	if key == "" {
 		if agent == agentCodex {
 			key = strings.TrimSpace(codexProviderConfig(cfg, provider).APIKey)
+			if key == "" {
+				key = strings.TrimSpace(cfg.Providers[provider].APIKey)
+			}
+		} else if agent == agentOpencode {
+			key = strings.TrimSpace(opencodeProviderConfig(cfg, provider).APIKey)
 			if key == "" {
 				key = strings.TrimSpace(cfg.Providers[provider].APIKey)
 			}
@@ -87,11 +93,12 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("switch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	model := fs.String("model", "", "override model id")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
 	codexDir := fs.String("codex-dir", "", "override Codex config dir")
+	opencodeDir := fs.String("opencode-dir", "", "override OpenCode config dir")
 	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
 	haikuFlag := fs.String("haiku", "", "override haiku tier model")
 	sonnetFlag := fs.String("sonnet", "", "override sonnet tier model")
@@ -101,7 +108,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return errors.New("usage: code-switch switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model]")
+		return errors.New("usage: code-switch switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]")
 	}
 	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
@@ -153,6 +160,18 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		}
 		return switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun)
 	}
+	if agent == agentOpencode {
+		if !*dryRun {
+			stored := opencodeProviderConfig(cfg, pa.Provider)
+			stored.APIKey = pa.APIKey
+			stored.Model = pa.Model
+			setAgentProviderConfig(cfg, agentOpencode, pa.Provider, stored)
+			if err := writeJSONAtomic(configPath, cfg); err != nil {
+				return err
+			}
+		}
+		return switchOpencodeProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *opencodeDir, out, *dryRun)
+	}
 	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent})
 }
 
@@ -179,7 +198,7 @@ func switchFlagNeedsValue(arg string) bool {
 		return false
 	}
 	switch arg {
-	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-agent", "--agent", "-haiku", "--haiku", "-sonnet", "--sonnet", "-opus", "--opus", "-subagent", "--subagent":
+	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-opencode-dir", "--opencode-dir", "-agent", "--agent", "-haiku", "--haiku", "-sonnet", "--sonnet", "-opus", "--opus", "-subagent", "--subagent":
 		return true
 	default:
 		return false
