@@ -17,9 +17,10 @@ import (
 func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
 	codexDir := fs.String("codex-dir", "", "override Codex config dir")
+	opencodeDir := fs.String("opencode-dir", "", "override OpenCode config dir")
 	resetKey := fs.Bool("reset-key", false, "force re-enter api key for the selected provider")
 	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
 	if err := fs.Parse(args); err != nil {
@@ -37,17 +38,37 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	}
 
 	var currentProvider, currentModel string
-	if agent == agentCodex {
+	switch agent {
+	case agentCodex:
 		_, cp, cm, _, _ := currentCodexProvider(*codexDir)
 		currentProvider = codexTOMLProviderKey(cp)
 		currentModel = cm
-	} else {
+	case agentOpencode:
+		_, cm, _, _, _ := currentOpencodeProvider(*opencodeDir)
+		currentModel = cm
+		if cm != "" {
+			for name, stored := range cfg.Providers {
+				if stored.Model == cm {
+					currentProvider = name
+					break
+				}
+			}
+		}
+		if currentProvider == "" {
+			for name, stored := range agentConfig(cfg, agentOpencode).Providers {
+				if stored.Model == cm {
+					currentProvider = name
+					break
+				}
+			}
+		}
+	default:
 		currentProvider, currentModel = currentConfiguredProvider(cfg, *claudeDir)
 	}
 	reader := bufio.NewReader(in)
 	var selection ConfigureSelection
 	if file, ok := in.(*os.File); ok && shouldUseArrowTUI(file) {
-		selection, err = runArrowTUI(cfg, agent, !agentExplicit, currentProvider, currentModel, *claudeDir, *codexDir)
+		selection, err = runArrowTUI(cfg, agent, !agentExplicit, currentProvider, currentModel, *claudeDir, *codexDir, *opencodeDir)
 		if err != nil {
 			return err
 		}
@@ -69,11 +90,13 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		switch agent {
 		case agentCodex:
 			return restoreCodexConfig(*codexDir, cfg, out, *dryRun)
+		case agentOpencode:
+			return restoreOpencodeConfig(*opencodeDir, cfg, out, *dryRun)
 		default:
 			return restoreClaudeConfig(*claudeDir, out, *dryRun)
 		}
 	}
-	if agent == agentClaude && strings.TrimSpace(selection.BaseURL) != "" {
+	if (agent == agentClaude || agent == agentOpencode) && strings.TrimSpace(selection.BaseURL) != "" {
 		existingKey := strings.TrimSpace(cfg.Providers[selection.Provider].APIKey)
 		keyToSave := strings.TrimSpace(selection.APIKey)
 		if keyToSave == "" {
@@ -129,6 +152,10 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		if err := switchCodexProvider(provider, cfg, apiKey, selection.Model, *codexDir, out, false); err != nil {
 			return err
 		}
+	case agentOpencode:
+		if err := switchOpencodeProvider(provider, cfg, apiKey, selection.Model, *opencodeDir, out, false); err != nil {
+			return err
+		}
 	default:
 		if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out, false); err != nil {
 			return err
@@ -151,6 +178,7 @@ type tuiState struct {
 	currentModel    string
 	claudeDir       string
 	codexDir        string
+	opencodeDir     string
 	names           []string
 	displayNames    []string
 
@@ -194,7 +222,7 @@ func (ts *tuiState) finishSelection(provider, model string) {
 }
 
 func (ts *tuiState) showProviders() {
-	ts.names = providerNamesForAgent(ts.agent, ts.cfg, ts.agent == agentClaude, true)
+	ts.names = providerNamesForAgent(ts.agent, ts.cfg, ts.agent == agentClaude || ts.agent == agentOpencode, true)
 	ts.rebuildProviderList()
 	ts.pages.SwitchToPage("providers")
 	ts.app.SetFocus(ts.providerList)
@@ -296,9 +324,11 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			})
 		})
 	}
-	actions.AddItem("Edit Tiers", "", 't', func() {
-		ts.showTierConfig(provider, backPage)
-	})
+	if ts.agent != agentOpencode {
+		actions.AddItem("Edit Tiers", "", 't', func() {
+			ts.showTierConfig(provider, backPage)
+		})
+	}
 	actions.AddItem("Back", "", 'b', ts.showProviders)
 	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
@@ -815,11 +845,32 @@ func (ts *tuiState) showCustomProviderForm() {
 }
 
 func (ts *tuiState) refreshCurrentConfig() {
-	if ts.agent == agentCodex {
+	switch ts.agent {
+	case agentCodex:
 		_, cp, cm, _, _ := currentCodexProvider(ts.codexDir)
 		ts.currentProvider = codexTOMLProviderKey(cp)
 		ts.currentModel = cm
-	} else {
+	case agentOpencode:
+		_, cm, _, _, _ := currentOpencodeProvider(ts.opencodeDir)
+		ts.currentModel = cm
+		ts.currentProvider = ""
+		if cm != "" {
+			for name, stored := range ts.cfg.Providers {
+				if stored.Model == cm {
+					ts.currentProvider = name
+					break
+				}
+			}
+		}
+		if ts.currentProvider == "" {
+			for name, stored := range agentConfig(ts.cfg, agentOpencode).Providers {
+				if stored.Model == cm {
+					ts.currentProvider = name
+					break
+				}
+			}
+		}
+	default:
 		ts.currentProvider, ts.currentModel = currentConfiguredProvider(ts.cfg, ts.claudeDir)
 	}
 }
@@ -829,7 +880,7 @@ func (ts *tuiState) showAgents() {
 	agentList.ShowSecondaryText(false)
 	agentList.SetBorder(true)
 	agentList.SetTitle(" Agents ")
-	agents := []AgentName{agentClaude, agentCodex}
+	agents := sortedAgentNames()
 	for _, agent := range agents {
 		agentName := agent
 		agentList.AddItem(agentDisplayName(agentName), "", 0, func() {
@@ -885,8 +936,8 @@ func (ts *tuiState) showRestoreConfirm() {
 	ts.app.SetFocus(confirm)
 }
 
-func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvider, currentModel, claudeDir, codexDir string) (ConfigureSelection, error) {
-	names := providerNamesForAgent(agent, cfg, agent == agentClaude, true)
+func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvider, currentModel, claudeDir, codexDir, opencodeDir string) (ConfigureSelection, error) {
+	names := providerNamesForAgent(agent, cfg, agent == agentClaude || agent == agentOpencode, true)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
 	}
@@ -909,6 +960,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		currentModel:     currentModel,
 		claudeDir:        claudeDir,
 		codexDir:         codexDir,
+		opencodeDir:      opencodeDir,
 		names:            names,
 		selectedProvider: selectedProvider,
 		typedAPIKeys:     map[string]string{},
@@ -1013,7 +1065,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 }
 
 func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig, agent AgentName, currentProvider, currentModel string) (ConfigureSelection, error) {
-	names := providerNamesForAgent(agent, cfg, agent == agentClaude, true)
+	names := providerNamesForAgent(agent, cfg, agent == agentClaude || agent == agentOpencode, true)
 
 	for {
 		fmt.Fprintf(out, "%s providers:\n", agentDisplayName(agent))

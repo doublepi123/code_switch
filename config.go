@@ -232,6 +232,10 @@ func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey s
 		upsertAgentProviderConfig(cfg, agentCodex, selection, apiKey)
 		return
 	}
+	if selection.Agent == string(agentOpencode) {
+		upsertAgentProviderConfig(cfg, agentOpencode, selection, apiKey)
+		return
+	}
 	stored := cfg.Providers[selection.Provider]
 	stored.APIKey = apiKey
 	stored.Model = strings.TrimSpace(selection.Model)
@@ -250,7 +254,8 @@ func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey s
 }
 
 func upsertAgentProviderConfig(cfg *AppConfig, agent AgentName, selection ConfigureSelection, apiKey string) {
-	stored := codexProviderConfig(cfg, selection.Provider)
+	agentCfg := agentConfig(cfg, agent)
+	stored := agentCfg.Providers[selection.Provider]
 	stored.APIKey = apiKey
 	stored.Model = strings.TrimSpace(selection.Model)
 	if selection.Name != "" {
