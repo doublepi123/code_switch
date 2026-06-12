@@ -534,11 +534,12 @@ func sortedPresetNames() []string {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs version\n  cs list [--agent claude|codex] [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex] [--claude-dir DIR] [--codex-dir DIR]\n  cs set-key <provider> <api-key> [--agent claude|codex]\n  cs switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--dry-run]\n  cs env <provider> [--agent claude|codex] [--api-key sk-xxx]\n  cs token <provider> [--agent claude|codex] [--api-key sk-xxx]\n  cs restore [--agent claude|codex] [--dry-run]\n  cs test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--agent claude|codex] [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
+	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs version\n  cs list [--agent claude|codex|opencode] [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex|opencode] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex|opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]\n  cs set-key <provider> <api-key> [--agent claude|codex|opencode]\n  cs switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR] [--dry-run]\n  cs env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]\n  cs token <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]\n  cs restore [--agent claude|codex|opencode] [--dry-run]\n  cs test <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--agent claude|codex|opencode] [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}
 	fmt.Fprint(out, "\nCodex providers:\n  deepseek\n  kimi-coding\n  ollama-cloud\n  openrouter\n")
+	fmt.Fprint(out, "\nOpenCode providers:\n  <all Claude providers>\n")
 }
 
 func makeCustomProviderKey(name string) string {
