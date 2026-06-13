@@ -126,7 +126,6 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	} else {
 		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
-	upsertProviderConfig(cfg, selection, apiKey)
 
 	if *dryRun {
 		preset, err := resolveAgentSwitchPreset(agent, provider, cfg, selection.Model)
@@ -147,6 +146,26 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	}
 	defer unlock()
 
+	cfg, err = loadAppConfigFrom(configPath)
+	if err != nil {
+		return err
+	}
+
+	if agent == agentClaude && strings.TrimSpace(selection.BaseURL) != "" {
+		existingKey := strings.TrimSpace(cfg.Providers[selection.Provider].APIKey)
+		keyToSave := strings.TrimSpace(selection.APIKey)
+		if keyToSave == "" {
+			keyToSave = existingKey
+		}
+		upsertProviderConfig(cfg, selection, keyToSave)
+	}
+	upsertProviderConfig(cfg, selection, apiKey)
+
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
+
 	switch agent {
 	case agentCodex:
 		if err := switchCodexProvider(provider, cfg, apiKey, selection.Model, *codexDir, out, false); err != nil {
@@ -161,10 +180,6 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	if err := writeJSONAtomic(configPath, cfg); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
 	return nil
 }
 
@@ -231,17 +246,17 @@ func (ts *tuiState) showProviders() {
 func (ts *tuiState) rebuildProviderList() {
 	ts.providerList.Clear()
 	ts.displayNames = nil
+	filteredNames := make([]string, 0, len(ts.names))
 	selectedIndex := 0
 	for _, name := range ts.names {
-		if name == ts.selectedProvider {
-			selectedIndex = len(ts.displayNames)
-		}
 		if name == customProviderOption {
+			filteredNames = append(filteredNames, name)
 			ts.providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
 			ts.displayNames = append(ts.displayNames, name)
 			continue
 		}
 		if name == restoreProviderOption {
+			filteredNames = append(filteredNames, name)
 			ts.providerList.AddItem("Restore official config...", agentDisplayName(ts.agent), 0, nil)
 			ts.displayNames = append(ts.displayNames, name)
 			continue
@@ -250,6 +265,10 @@ func (ts *tuiState) rebuildProviderList() {
 		if err != nil {
 			continue
 		}
+		if name == ts.selectedProvider {
+			selectedIndex = len(filteredNames)
+		}
+		filteredNames = append(filteredNames, name)
 		suffix := []string{}
 		if name == ts.currentProvider {
 			suffix = append(suffix, "current")
@@ -266,6 +285,7 @@ func (ts *tuiState) rebuildProviderList() {
 		ts.providerList.AddItem(title, preset.BaseURL, 0, nil)
 		ts.displayNames = append(ts.displayNames, name)
 	}
+	ts.names = filteredNames
 	ts.providerList.SetCurrentItem(selectedIndex)
 }
 
@@ -891,10 +911,12 @@ func (ts *tuiState) showAgents() {
 		})
 	}
 	agentList.SetDoneFunc(func() {
+		ts.resultErr = errCancelled
 		ts.app.Stop()
 	})
 	agentList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' || event.Rune() == 'Q' {
+			ts.resultErr = errCancelled
 			ts.app.Stop()
 			return nil
 		}
@@ -967,7 +989,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		resetKeys:        map[string]bool{},
 		customModels:     map[string]string{},
 		tierOverrides:    map[string]StoredProvider{},
-		resultErr:        errCancelled,
+		resultErr:        nil,
 	}
 
 	ts.providerList = tview.NewList()
@@ -1015,6 +1037,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		ts.showDetail(ts.selectedProvider, "providers")
 	})
 	ts.providerList.SetDoneFunc(func() {
+		ts.resultErr = errCancelled
 		ts.app.Stop()
 	})
 	ts.providerList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -1033,9 +1056,11 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 			}
 			return nil
 		case event.Key() == tcell.KeyEscape:
+			ts.resultErr = errCancelled
 			ts.app.Stop()
 			return nil
 		case event.Rune() == 'q' || event.Rune() == 'Q':
+			ts.resultErr = errCancelled
 			ts.app.Stop()
 			return nil
 		}
@@ -1045,6 +1070,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 	ts.app.SetRoot(ts.pages, true)
 	ts.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyCtrlC {
+			ts.resultErr = errCancelled
 			ts.app.Stop()
 			return nil
 		}

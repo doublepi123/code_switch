@@ -97,10 +97,10 @@ func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderP
 	}
 
 	authEnv := strings.TrimSpace(preset.AuthEnv)
-	if authEnv == "ANTHROPIC_AUTH_TOKEN" {
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	} else {
+	if authEnv == "ANTHROPIC_API_KEY" || authEnv == "" {
 		httpReq.Header.Set("x-api-key", apiKey)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("User-Agent", "code-switch/"+version)

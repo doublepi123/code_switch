@@ -417,7 +417,6 @@ var providerAliases = map[string]string{
 	"ollamacloud":          "ollama-cloud",
 	"ollama.com":           "ollama-cloud",
 	"z.ai":                 "zai",
-	"zai":                  "zai",
 	"glm":                  "zai",
 	"ark":                  "volcengine",
 	"volcengine-ark":       "volcengine",

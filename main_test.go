@@ -7152,7 +7152,7 @@ func TestCmdEnvCodexAgent(t *testing.T) {
 		t.Fatalf("cmdEnv codex returned error: %v", err)
 	}
 	out := output.String()
-	if !strings.Contains(out, "Codex uses command-based auth") {
+	if !strings.Contains(out, "Codex uses config.toml with command-based auth") {
 		t.Fatalf("env codex output missing header: %s", out)
 	}
 	if !strings.Contains(out, "export ANTHROPIC_BASE_URL=") {
@@ -8641,7 +8641,7 @@ func TestCmdEnvCodex(t *testing.T) {
 		t.Fatalf("env codex: %v", err)
 	}
 	out := output.String()
-	if !strings.Contains(out, "Codex uses command-based auth") {
+	if !strings.Contains(out, "Codex uses config.toml with command-based auth") {
 		t.Fatalf("expected Codex note: %s", out)
 	}
 }

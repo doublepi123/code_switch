@@ -26,7 +26,10 @@ func (cf *configFile) lock() (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
 	}
-	for attempt := 0; attempt < 10; attempt++ {
+	// Total budget ~5s: 50 attempts × 100ms, but back off on repeated failures
+	// so heavy load still has a chance to acquire without spinning.
+	const maxAttempts = 50
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
@@ -49,7 +52,13 @@ func (cf *configFile) lock() (func(), error) {
 			// race between our Remove and the next OpenFile attempt.
 			continue
 		}
-		time.Sleep(100 * time.Millisecond)
+		// Linear backoff capped at 200ms so we don't burn CPU but still
+		// recover promptly once the holder finishes.
+		delay := time.Duration(attempt+1) * 20 * time.Millisecond
+		if delay > 200*time.Millisecond {
+			delay = 200 * time.Millisecond
+		}
+		time.Sleep(delay)
 	}
 	return nil, fmt.Errorf("config file is locked by another process (try again in a few seconds)")
 }
@@ -59,8 +68,13 @@ func readLockPID(lockPath string) int {
 	if err != nil {
 		return 0
 	}
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return 0
+	}
 	var pid int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil || pid <= 0 {
+	n, err := fmt.Sscanf(text, "%d", &pid)
+	if err != nil || n != 1 || pid <= 0 {
 		return 0
 	}
 	return pid

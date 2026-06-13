@@ -47,6 +47,12 @@ func restoreClaudeConfig(claudeDir string, out io.Writer, dryRun bool) error {
 		fmt.Fprintf(out, "[dry-run] settings: %s\n", settingsPath)
 		return nil
 	}
+	cf := newConfigFile(settingsPath)
+	unlock, err := cf.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	root, err := readJSONMap(settingsPath)
 	if err != nil {
 		return err

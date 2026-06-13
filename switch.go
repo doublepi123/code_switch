@@ -44,7 +44,7 @@ func resolveKey(agent AgentName, cfg *AppConfig, provider, apiKeyFlag string, pr
 	if key == "" && !preset.NoAPIKey {
 		return "", fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
 	}
-	if key == "" {
+	if key == "" && preset.NoAPIKey {
 		key = provider
 	}
 	return key, nil
@@ -236,6 +236,15 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 	}
 
 	settingsPath := claudeSettingsPath(claudeDir)
+
+	if !dryRun {
+		cf := newConfigFile(settingsPath)
+		unlock, err := cf.lock()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 
 	if dryRun {
 		fmt.Fprintf(out, "[dry-run] would switch Claude to %s\n", preset.Name)

@@ -61,6 +61,15 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 	}
 	configPath := codexConfigPath(codexDir)
 
+	if !dryRun {
+		cf := newConfigFile(configPath)
+		unlock, err := cf.lock()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+
 	if dryRun {
 		fmt.Fprintf(out, "[dry-run] would switch Codex to %s\n", preset.Name)
 		fmt.Fprintf(out, "[dry-run] config: %s\n", configPath)
@@ -98,13 +107,15 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 }
 
 func applyCodexPresetTOML(existing string, preset ProviderPreset, provider string) string {
+	provider = canonicalProviderName(provider)
 	cleaned := removeCodexManagedTOML(existing, true, true, nil)
 	topLevel, sections := splitBeforeFirstTOMLSection(cleaned)
 	var b strings.Builder
 
-	if top := strings.TrimRight(topLevel, "\n"); strings.TrimSpace(top) != "" {
-		b.WriteString(top)
-		b.WriteString("\n")
+	topLevel = strings.TrimRight(topLevel, "\n")
+	if strings.TrimSpace(topLevel) != "" {
+		b.WriteString(topLevel)
+		b.WriteString("\n\n")
 	}
 	fmt.Fprintf(&b, "model = %q\n", preset.Model)
 	providerName := codexTOMLProviderName(provider)
@@ -114,11 +125,12 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset, provider strin
 		fmt.Fprintf(&b, "reasoning_effort = %q\n", preset.ReasoningEffort)
 	}
 
-	if strings.TrimSpace(sections) != "" {
+	sections = strings.TrimSpace(sections)
+	if sections != "" {
+		b.WriteString("\n")
+		b.WriteString(sections)
 		b.WriteString("\n\n")
-		b.WriteString(strings.TrimRight(strings.TrimLeft(sections, "\n"), "\n"))
 	}
-	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "[model_providers.%s]\n", providerName)
 	fmt.Fprintf(&b, "name = %q\n", preset.Name)
 	fmt.Fprintf(&b, "base_url = %q\n", preset.BaseURL)
@@ -129,9 +141,75 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset, provider strin
 	return b.String()
 }
 
+func isMultilineStringBoundary(line string) (enter bool, exit bool) {
+	text := strings.TrimSpace(line)
+	if text == `"""` {
+		return true, true
+	}
+	if text == "'''" {
+		return true, true
+	}
+	if strings.HasPrefix(text, `"""`) && strings.HasSuffix(text, `"""`) && len(text) >= 6 {
+		return false, false
+	}
+	if strings.HasPrefix(text, "'''") && strings.HasSuffix(text, "'''") && len(text) >= 6 {
+		return false, false
+	}
+	// A line like `key = """` opens a multi-line string; treat it as enter
+	// even when the trimmed text also ends with `"""`.
+	if multilineValueSide(text, `"""`) {
+		return true, false
+	}
+	if multilineValueSide(text, "'''") {
+		return true, false
+	}
+	if strings.HasPrefix(text, `"""`) {
+		return true, false
+	}
+	if strings.HasPrefix(text, "'''") {
+		return true, false
+	}
+	if strings.HasSuffix(text, `"""`) {
+		return false, true
+	}
+	if strings.HasSuffix(text, "'''") {
+		return false, true
+	}
+	return false, false
+}
+
+// multilineValueSide reports whether the line is a `key = """` style opener
+// where `"""` (or `'''`) appears as the start of the value side and the value
+// is not closed on the same line.
+func multilineValueSide(text, quote string) bool {
+	parts := strings.SplitN(text, "=", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	value := strings.TrimSpace(parts[1])
+	if !strings.HasPrefix(value, quote) {
+		return false
+	}
+	return !strings.HasSuffix(value, quote) || len(value) < 6
+}
+
 func splitBeforeFirstTOMLSection(content string) (string, string) {
 	offset := 0
+	inMultiline := false
 	for _, line := range strings.SplitAfter(content, "\n") {
+		enter, exit := isMultilineStringBoundary(line)
+		if inMultiline {
+			if exit {
+				inMultiline = false
+			}
+			offset += len(line)
+			continue
+		}
+		if enter {
+			inMultiline = true
+			offset += len(line)
+			continue
+		}
 		if _, ok := tomlSectionName(line); ok {
 			return content[:offset], content[offset:]
 		}
@@ -146,12 +224,18 @@ func restoreCodexConfig(codexDir string, cfg *AppConfig, out io.Writer, dryRun b
 	if err != nil {
 		return err
 	}
-	updated := removeCodexManagedTOML(existing, false, false, cfg)
+	updated := removeCodexManagedTOML(existing, true, true, cfg)
 	if dryRun {
 		fmt.Fprintf(out, "[dry-run] would restore Codex official config\n")
 		fmt.Fprintf(out, "[dry-run] config: %s\n", configPath)
 		return nil
 	}
+	cf := newConfigFile(configPath)
+	unlock, err := cf.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := backupIfExists(configPath); err != nil {
 		return err
 	}
@@ -170,33 +254,27 @@ func restoreCodexConfig(codexDir string, cfg *AppConfig, out io.Writer, dryRun b
 }
 
 func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTopLevelProvider bool, cfg *AppConfig) string {
-	provider, model, _, _ := parseCodexTopLevel(existing)
-
-	isKnownProvider := false
-	for _, p := range []string{"ollama-cloud", "openrouter", "deepseek", "kimi-coding"} {
-		pName := codexTOMLProviderName(p)
-		if provider == pName {
-			isKnownProvider = true
-			break
-		}
-	}
-
-	if !removeTopLevelProvider {
-		removeTopLevelProvider = isKnownProvider
-	}
-	if !removeTopLevelModel {
-		removeTopLevelModel = isKnownProvider && isManagedCodexModel(model, cfg)
-	}
 	removeTopLevelApprovalsReviewer := removeTopLevelModel && removeTopLevelProvider
-	if !removeTopLevelApprovalsReviewer {
-		removeTopLevelApprovalsReviewer = isKnownProvider
-	}
 
 	lines := strings.Split(existing, "\n")
 	out := make([]string, 0, len(lines))
 	section := ""
 	skipSection := false
+	inMultiline := false
 	for _, line := range lines {
+		enter, exit := isMultilineStringBoundary(line)
+		if inMultiline {
+			if exit {
+				inMultiline = false
+			}
+			out = append(out, line)
+			continue
+		}
+		if enter {
+			inMultiline = true
+			out = append(out, line)
+			continue
+		}
 		if name, ok := tomlSectionName(line); ok {
 			section = name
 			skipSection = false
@@ -264,7 +342,19 @@ func isManagedCodexModel(model string, cfg *AppConfig) bool {
 func parseCodexTopLevel(content string) (provider string, model string, baseURL string, err error) {
 	lines := strings.Split(content, "\n")
 	section := ""
+	inMultiline := false
 	for _, line := range lines {
+		enter, exit := isMultilineStringBoundary(line)
+		if inMultiline {
+			if exit {
+				inMultiline = false
+			}
+			continue
+		}
+		if enter {
+			inMultiline = true
+			continue
+		}
 		if name, ok := tomlSectionName(line); ok {
 			section = name
 			continue
@@ -273,18 +363,41 @@ func parseCodexTopLevel(content string) (provider string, model string, baseURL 
 		if !ok {
 			continue
 		}
-		switch section {
-		case "":
+		if section == "" {
 			switch key {
 			case "model_provider":
 				provider = tomlStringValue(value)
 			case "model":
 				model = tomlStringValue(value)
 			}
-		default:
-			if key == "base_url" {
-				baseURL = tomlStringValue(value)
+		}
+	}
+
+	// Second pass: read base_url only from the section matching the current provider.
+	section = ""
+	inMultiline = false
+	for _, line := range lines {
+		enter, exit := isMultilineStringBoundary(line)
+		if inMultiline {
+			if exit {
+				inMultiline = false
 			}
+			continue
+		}
+		if enter {
+			inMultiline = true
+			continue
+		}
+		if name, ok := tomlSectionName(line); ok {
+			section = name
+			continue
+		}
+		key, value, ok := tomlKeyValue(line)
+		if !ok {
+			continue
+		}
+		if key == "base_url" && section == "model_providers."+provider {
+			baseURL = tomlStringValue(value)
 		}
 	}
 	return provider, model, baseURL, nil
@@ -292,8 +405,12 @@ func parseCodexTopLevel(content string) (provider string, model string, baseURL 
 
 func tomlSectionName(line string) (string, bool) {
 	text := strings.TrimSpace(line)
-	if strings.HasPrefix(text, "[[") || !strings.HasPrefix(text, "[") || !strings.HasSuffix(text, "]") {
+	if !strings.HasPrefix(text, "[") || !strings.HasSuffix(text, "]") {
 		return "", false
+	}
+	// Handle array-of-tables [[...]]
+	if strings.HasPrefix(text, "[[") && strings.HasSuffix(text, "]]") {
+		return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "[["), "]]")), true
 	}
 	return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "["), "]")), true
 }
@@ -309,6 +426,14 @@ func tomlKeyValue(line string) (string, string, bool) {
 	}
 	key := strings.TrimSpace(parts[0])
 	rawValue := strings.TrimSpace(parts[1])
+	// Reject multi-line string starters that span multiple lines;
+	// this simplistic parser cannot track them.
+	if strings.HasPrefix(rawValue, `"""`) && !strings.HasSuffix(rawValue, `"""`) {
+		return "", "", false
+	}
+	if strings.HasPrefix(rawValue, "'''") && !strings.HasSuffix(rawValue, "'''") {
+		return "", "", false
+	}
 	return key, rawValue, true
 }
 
@@ -365,8 +490,8 @@ func tomlUnquoteString(value string) string {
 }
 
 func tomlUnquoteLiteralString(value string) string {
-	value = strings.TrimPrefix(value, `'`)
-	end := strings.Index(value, `'`)
+	value = strings.TrimPrefix(value, "'")
+	end := strings.Index(value, "'")
 	if end < 0 {
 		return value
 	}
@@ -483,6 +608,8 @@ func testCodexProviderWithClient(ctx context.Context, out io.Writer, preset Prov
 	return fmt.Errorf("test %s: status %d", preset.Name, resp.StatusCode)
 }
 
+// codexResponsesURL constructs the Responses API test URL.
+// It assumes the standard /v1/responses path; custom endpoints may need adjustment.
 func codexResponsesURL(baseURL string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if strings.HasSuffix(base, "/v1") {

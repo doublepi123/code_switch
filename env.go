@@ -36,7 +36,7 @@ func cmdEnv(args []string, out io.Writer) error {
 	}
 
 	if agent == agentCodex {
-		fmt.Fprintf(out, "# Codex uses command-based auth; set these env vars for shell use:\n")
+		fmt.Fprintf(out, "# Codex uses config.toml with command-based auth; these env vars are for reference or other tools:\n")
 		fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
 		fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
 		authEnv := strings.TrimSpace(preset.AuthEnv)
