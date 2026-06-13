@@ -1048,7 +1048,7 @@ func TestCanonicalProviderName(t *testing.T) {
 		" openrouter ":         "openrouter",
 		"ark":                  "volcengine",
 		"volcengine-ark":       "volcengine",
-		"VOLCENGINE":          "volcengine",
+		"VOLCENGINE":           "volcengine",
 	}
 
 	for input, want := range cases {
@@ -2376,6 +2376,26 @@ func TestWriteJSONAtomic(t *testing.T) {
 	// Should end with newline
 	if !strings.HasSuffix(string(data), "\n") {
 		t.Fatalf("expected trailing newline in %q", string(data))
+	}
+}
+
+func TestWriteJSONAtomicPreservesExistingDirectoryPermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir := filepath.Join(tmpDir, "private")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir private dir: %v", err)
+	}
+	path := filepath.Join(dir, "test.json")
+
+	if err := writeJSONAtomic(path, map[string]any{"hello": "world"}); err != nil {
+		t.Fatalf("writeJSONAtomic returned error: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat private dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("directory mode = %o, want 700", got)
 	}
 }
 
@@ -6597,8 +6617,8 @@ func TestLoadAppConfigLockedReadWrite(t *testing.T) {
 
 func TestApplyDefaultModel(t *testing.T) {
 	preset := ProviderPreset{
-		Name:  "test",
-		Model: "default-model",
+		Name:   "test",
+		Model:  "default-model",
 		Models: []string{"default-model"},
 	}
 	result := applyDefaultModel(preset)
@@ -6638,12 +6658,12 @@ func TestApplyDefaultModelWithReasoningEffort(t *testing.T) {
 
 func TestApplyModelOverrideCustomModel(t *testing.T) {
 	preset := ProviderPreset{
-		Name:    "test",
-		Model:   "default-model",
-		Models:  []string{"default-model"},
-		Haiku:   "default-haiku",
-		Sonnet:  "default-sonnet",
-		Opus:    "default-opus",
+		Name:     "test",
+		Model:    "default-model",
+		Models:   []string{"default-model"},
+		Haiku:    "default-haiku",
+		Sonnet:   "default-sonnet",
+		Opus:     "default-opus",
 		Subagent: "default-sub",
 	}
 	result := applyModelOverride(preset, "custom-model")
@@ -6660,12 +6680,12 @@ func TestApplyModelOverrideCustomModel(t *testing.T) {
 
 func TestApplyModelOverridePresetModelWithTiers(t *testing.T) {
 	preset := ProviderPreset{
-		Name:    "test",
-		Model:   "default-model",
-		Models:  []string{"default-model", "tiered-model"},
-		Haiku:   "default-haiku",
-		Sonnet:  "default-sonnet",
-		Opus:    "default-opus",
+		Name:     "test",
+		Model:    "default-model",
+		Models:   []string{"default-model", "tiered-model"},
+		Haiku:    "default-haiku",
+		Sonnet:   "default-sonnet",
+		Opus:     "default-opus",
 		Subagent: "default-sub",
 		ModelTierOverrides: map[string]ModelTiers{
 			"tiered-model": {Haiku: "tier-haiku", Sonnet: "tier-sonnet", Opus: "tier-opus", Subagent: "tier-sub"},
@@ -7598,6 +7618,25 @@ func TestWriteTextAtomicContent(t *testing.T) {
 	}
 }
 
+func TestWriteTextAtomicPreservesExistingDirectoryPermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "private")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir private dir: %v", err)
+	}
+	path := filepath.Join(dir, "test.toml")
+
+	if err := writeTextAtomic(path, "hello world", 0o644); err != nil {
+		t.Fatalf("writeTextAtomic returned error: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat private dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("directory mode = %o, want 700", got)
+	}
+}
+
 func TestRestoreCodexConfigNonDryRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -7948,6 +7987,34 @@ func TestCmdSwitchDryRun(t *testing.T) {
 	}
 }
 
+func TestCmdSwitchPersistsClaudeTierOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	if err := cmdSwitch([]string{"deepseek", "--haiku", "custom-haiku", "--sonnet", "custom-sonnet", "--opus", "custom-opus", "--subagent", "custom-subagent", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	appBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read app config: %v", err)
+	}
+	var appCfg AppConfig
+	if err := json.Unmarshal(appBytes, &appCfg); err != nil {
+		t.Fatalf("unmarshal app config: %v", err)
+	}
+	stored := appCfg.Providers["deepseek"]
+	if stored.Haiku != "custom-haiku" || stored.Sonnet != "custom-sonnet" || stored.Opus != "custom-opus" || stored.Subagent != "custom-subagent" {
+		t.Fatalf("tier overrides were not persisted: %+v", stored)
+	}
+}
+
 func TestCmdSwitchWithAPIKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -8266,25 +8333,88 @@ func TestFileLockLockStaleCleanup(t *testing.T) {
 	unlock()
 }
 
-func TestWriteTextAtomicChmodFixesReadOnlyDir(t *testing.T) {
+func TestWriteTextAtomicDoesNotChmodReadOnlyDir(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("skipping chmod test as root")
 	}
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "ro")
-	os.Mkdir(subdir, 0o555)
+	if err := os.Mkdir(subdir, 0o555); err != nil {
+		t.Fatalf("mkdir read-only dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(subdir, 0o755)
+	})
 	path := filepath.Join(subdir, "test.toml")
 
 	err := writeTextAtomic(path, "content", 0o644)
-	if err != nil {
-		t.Fatalf("writeTextAtomic should fix read-only dir permissions: %v", err)
+	if err == nil {
+		t.Fatal("expected writeTextAtomic to fail without changing read-only directory permissions")
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read file: %v", err)
+	info, statErr := os.Stat(subdir)
+	if statErr != nil {
+		t.Fatalf("stat read-only dir: %v", statErr)
 	}
-	if string(data) != "content" {
-		t.Fatalf("content = %q, want %q", string(data), "content")
+	if got := info.Mode().Perm(); got != 0o555 {
+		t.Fatalf("directory mode = %o, want 555", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file should not be written, stat err = %v", err)
+	}
+}
+
+func TestWriteJSONAtomicDoesNotChmodReadOnlyDir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping chmod test as root")
+	}
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "ro-json")
+	if err := os.Mkdir(subdir, 0o555); err != nil {
+		t.Fatalf("mkdir read-only dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(subdir, 0o755)
+	})
+	path := filepath.Join(subdir, "test.json")
+
+	err := writeJSONAtomic(path, map[string]string{"hello": "world"})
+	if err == nil {
+		t.Fatal("expected writeJSONAtomic to fail without changing read-only directory permissions")
+	}
+	info, statErr := os.Stat(subdir)
+	if statErr != nil {
+		t.Fatalf("stat read-only dir: %v", statErr)
+	}
+	if got := info.Mode().Perm(); got != 0o555 {
+		t.Fatalf("directory mode = %o, want 555", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file should not be written, stat err = %v", err)
+	}
+}
+
+func TestBackupIfExistsDoesNotChmodParentDir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping chmod test as root")
+	}
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "backup-private")
+	if err := os.Mkdir(subdir, 0o700); err != nil {
+		t.Fatalf("mkdir private dir: %v", err)
+	}
+	path := filepath.Join(subdir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"hello":"world"}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := backupIfExists(path); err != nil {
+		t.Fatalf("backupIfExists returned error: %v", err)
+	}
+	info, err := os.Stat(subdir)
+	if err != nil {
+		t.Fatalf("stat private dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("directory mode = %o, want 700", got)
 	}
 }
 

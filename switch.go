@@ -130,8 +130,10 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	pa.Opus = strings.TrimSpace(*opusFlag)
 	pa.Subagent = strings.TrimSpace(*subagentFlag)
 
-	// Persist CLI tier overrides to config
-	if pa.Haiku != "" || pa.Sonnet != "" || pa.Opus != "" || pa.Subagent != "" {
+	shouldPersistTierOverrides := pa.Haiku != "" || pa.Sonnet != "" || pa.Opus != "" || pa.Subagent != ""
+
+	// Persist Claude CLI tier overrides to config after a successful switch.
+	if shouldPersistTierOverrides && agent == agentClaude {
 		stored := cfg.Providers[pa.Provider]
 		if pa.Haiku != "" {
 			stored.Haiku = pa.Haiku
@@ -173,7 +175,15 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		}
 		return nil
 	}
-	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent})
+	if err := switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent}); err != nil {
+		return err
+	}
+	if shouldPersistTierOverrides && !*dryRun {
+		if err := writeJSONAtomic(configPath, cfg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func splitSwitchArgs(args []string) (string, []string) {

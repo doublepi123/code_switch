@@ -159,7 +159,6 @@ func writeJSONAtomic(path string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	os.Chmod(filepath.Dir(path), 0o755)
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -205,7 +204,6 @@ func backupIfExists(path string) error {
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return err
 	}
-	os.Chmod(backupDir, 0o755)
 	f, err := os.CreateTemp(backupDir, filepath.Base(path)+".bak-*")
 	if err != nil {
 		return err

@@ -513,7 +513,6 @@ func writeTextAtomic(path, content string, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	os.Chmod(filepath.Dir(path), 0o755)
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err

@@ -49,7 +49,10 @@ func switchOpencodeProvider(provider string, cfg *AppConfig, apiKey, modelOverri
 		return err
 	}
 
-	updated := applyOpencodePresetJSON(existing, preset, provider, apiKey)
+	updated, err := applyOpencodePresetJSON(existing, preset, provider, apiKey)
+	if err != nil {
+		return err
+	}
 	if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
 		return err
 	}
@@ -75,10 +78,12 @@ func opencodeNPMForProvider(providerKey string) string {
 	return "@ai-sdk/anthropic"
 }
 
-func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey string, apiKey string) string {
+func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey string, apiKey string) (string, error) {
 	root := map[string]any{}
 	if strings.TrimSpace(existing) != "" {
-		_ = json.Unmarshal([]byte(existing), &root)
+		if err := json.Unmarshal([]byte(existing), &root); err != nil {
+			return "", fmt.Errorf("parse existing OpenCode config: %w", err)
+		}
 	}
 
 	root["$schema"] = "https://opencode.ai/config.json"
@@ -90,8 +95,8 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 	models[preset.Model] = map[string]any{"name": preset.Model}
 
 	providerEntry := map[string]any{
-		"npm":     npmPkg,
-		"name":    preset.Name,
+		"npm":  npmPkg,
+		"name": preset.Name,
 		"options": map[string]any{
 			"baseURL": preset.BaseURL,
 			"apiKey":  apiKey,
@@ -99,13 +104,19 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 		"models": models,
 	}
 
-	// Replace entire provider object with single entry for the selected provider
-	root["provider"] = map[string]any{
-		providerKey: providerEntry,
+	providers := map[string]any{}
+	if raw, ok := root["provider"]; ok {
+		existingProviders, ok := raw.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("parse existing OpenCode config: provider must be an object")
+		}
+		providers = existingProviders
 	}
+	providers[providerKey] = providerEntry
+	root["provider"] = providers
 
 	data, _ := json.MarshalIndent(root, "", "  ")
-	return string(data) + "\n"
+	return string(data) + "\n", nil
 }
 
 func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dryRun bool) error {
@@ -120,7 +131,7 @@ func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dr
 		return err
 	}
 	existing := string(existingBytes)
-	updated := removeOpencodeManagedJSON(existing)
+	updated := removeOpencodeManagedJSON(existing, cfg)
 
 	if dryRun {
 		fmt.Fprintf(out, "[dry-run] would restore OpenCode official config\n")
@@ -147,7 +158,7 @@ func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dr
 	return nil
 }
 
-func removeOpencodeManagedJSON(existing string) string {
+func removeOpencodeManagedJSON(existing string, cfg *AppConfig) string {
 	root := map[string]any{}
 	if strings.TrimSpace(existing) == "" {
 		return ""
@@ -157,7 +168,22 @@ func removeOpencodeManagedJSON(existing string) string {
 	}
 
 	delete(root, "model")
-	delete(root, "provider")
+	if raw, ok := root["provider"]; ok {
+		providers, ok := raw.(map[string]any)
+		if !ok {
+			return existing
+		}
+		for key := range providers {
+			if isOpencodeManagedProviderKey(key, cfg) {
+				delete(providers, key)
+			}
+		}
+		if len(providers) == 0 {
+			delete(root, "provider")
+		} else {
+			root["provider"] = providers
+		}
+	}
 
 	// If only $schema remains, return empty to trigger file deletion
 	if len(root) == 1 {
@@ -171,6 +197,19 @@ func removeOpencodeManagedJSON(existing string) string {
 	}
 	data, _ := json.MarshalIndent(root, "", "  ")
 	return string(data) + "\n"
+}
+
+func isOpencodeManagedProviderKey(provider string, cfg *AppConfig) bool {
+	provider = canonicalProviderName(provider)
+	if _, ok := providerPresets[provider]; ok {
+		return true
+	}
+	if cfg != nil {
+		agentCfg := agentConfig(cfg, agentOpencode)
+		_, exists := agentCfg.Providers[provider]
+		return exists
+	}
+	return false
 }
 
 func currentOpencodeProvider(opencodeDir string) (string, string, string, string, string, error) {

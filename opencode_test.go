@@ -116,6 +116,93 @@ func TestOpencodeSwitchWithPlaintextAPIKey(t *testing.T) {
 	// but the config should store the key in plaintext, not as {env:...}
 }
 
+func TestOpencodeSwitchPreservesExistingProviders(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	configPath := filepath.Join(opencodeDir, "opencode.json")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir opencode dir: %v", err)
+	}
+	existing := `{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "legacy-model",
+  "provider": {
+    "legacy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Legacy Provider",
+      "options": {
+        "baseURL": "https://legacy.example.com",
+        "apiKey": "legacy-key"
+      },
+      "models": {
+        "legacy-model": { "name": "legacy-model" }
+      }
+    }
+  },
+  "tools": {
+    "write": true
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("write opencode config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "deepseek", "--agent", "opencode", "--api-key", "sk-ds-test", "--opencode-dir", opencodeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("opencode switch returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read opencode config: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(configBytes, &cfg); err != nil {
+		t.Fatalf("parse opencode config: %v", err)
+	}
+	providers := cfg["provider"].(map[string]any)
+	if _, ok := providers["legacy"]; !ok {
+		t.Fatalf("switch lost existing provider block:\n%s", string(configBytes))
+	}
+	if _, ok := providers["deepseek"]; !ok {
+		t.Fatalf("switch did not add selected provider:\n%s", string(configBytes))
+	}
+	if _, ok := cfg["tools"].(map[string]any); !ok {
+		t.Fatalf("switch lost user tools section:\n%s", string(configBytes))
+	}
+}
+
+func TestOpencodeSwitchRejectsInvalidExistingJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	configPath := filepath.Join(opencodeDir, "opencode.json")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir opencode dir: %v", err)
+	}
+	original := []byte(`{"provider":`)
+	if err := os.WriteFile(configPath, original, 0o644); err != nil {
+		t.Fatalf("write invalid opencode config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"switch", "deepseek", "--agent", "opencode", "--api-key", "sk-ds-test", "--opencode-dir", opencodeDir}, strings.NewReader(""), output)
+	if err == nil {
+		t.Fatal("expected invalid existing opencode config to fail")
+	}
+	if !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("error = %v, want parse context", err)
+	}
+	after, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("read opencode config after failed switch: %v", readErr)
+	}
+	if string(after) != string(original) {
+		t.Fatalf("invalid config was modified, got %q want %q", string(after), string(original))
+	}
+}
+
 func TestOpencodeRestoreRemovesManagedSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -169,6 +256,71 @@ func TestOpencodeRestoreRemovesManagedSettings(t *testing.T) {
 	// $schema should be preserved since tools section is present
 	if !strings.Contains(restored, `"$schema"`) {
 		t.Fatalf("restored config lost $schema:\n%s", restored)
+	}
+}
+
+func TestOpencodeRestorePreservesUnmanagedProviders(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	configPath := filepath.Join(opencodeDir, "opencode.json")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir opencode dir: %v", err)
+	}
+	existing := `{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "deepseek-v4-pro",
+  "provider": {
+    "deepseek": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "DeepSeek",
+      "options": {
+        "baseURL": "https://api.deepseek.com/anthropic",
+        "apiKey": "sk-ds-test"
+      },
+      "models": {
+        "deepseek-v4-pro": { "name": "deepseek-v4-pro" }
+      }
+    },
+    "legacy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Legacy Provider",
+      "options": {
+        "baseURL": "https://legacy.example.com",
+        "apiKey": "legacy-key"
+      },
+      "models": {
+        "legacy-model": { "name": "legacy-model" }
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("write opencode config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"restore", "--agent", "opencode", "--opencode-dir", opencodeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("opencode restore returned error: %v", err)
+	}
+
+	restoredBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read restored config: %v", err)
+	}
+	var restored map[string]any
+	if err := json.Unmarshal(restoredBytes, &restored); err != nil {
+		t.Fatalf("parse restored config: %v", err)
+	}
+	providers := restored["provider"].(map[string]any)
+	if _, ok := providers["deepseek"]; ok {
+		t.Fatalf("restore kept managed provider:\n%s", string(restoredBytes))
+	}
+	if _, ok := providers["legacy"]; !ok {
+		t.Fatalf("restore lost unmanaged provider:\n%s", string(restoredBytes))
+	}
+	if _, ok := restored["model"]; ok {
+		t.Fatalf("restore kept managed model:\n%s", string(restoredBytes))
 	}
 }
 
