@@ -29,12 +29,8 @@ func switchOpencodeProvider(provider string, cfg *AppConfig, apiKey, modelOverri
 	}
 	configPath := opencodeConfigPath(opencodeDir)
 
-	authEnv := strings.TrimSpace(preset.AuthEnv)
-	if authEnv == "" {
-		authEnv = "ANTHROPIC_API_KEY"
-	}
-
 	if dryRun {
+		authEnv := deriveAuthEnvForProvider(provider)
 		fmt.Fprintf(out, "[dry-run] would switch OpenCode to %s\n", preset.Name)
 		fmt.Fprintf(out, "[dry-run] config: %s\n", configPath)
 		fmt.Fprintf(out, "[dry-run] base_url: %s\n", preset.BaseURL)
@@ -53,7 +49,7 @@ func switchOpencodeProvider(provider string, cfg *AppConfig, apiKey, modelOverri
 		return err
 	}
 
-	updated := applyOpencodePresetJSON(existing, preset, authEnv)
+	updated := applyOpencodePresetJSON(existing, preset, provider, apiKey)
 	if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
 		return err
 	}
@@ -69,11 +65,17 @@ func switchOpencodeProvider(provider string, cfg *AppConfig, apiKey, modelOverri
 	fmt.Fprintf(out, "%s\n", formatLabel("config", configPath))
 	fmt.Fprintf(out, "%s\n", formatLabel("base_url", preset.BaseURL))
 	fmt.Fprintf(out, "%s\n", formatLabel("model", preset.Model))
-	fmt.Fprintf(out, "%s\n", formatLabel("api_key_env", authEnv))
 	return nil
 }
 
-func applyOpencodePresetJSON(existing string, preset ProviderPreset, authEnv string) string {
+func opencodeNPMForProvider(providerKey string) string {
+	if providerKey == "ollama" || providerKey == "ollama-cloud" {
+		return "@ai-sdk/openai-compatible"
+	}
+	return "@ai-sdk/anthropic"
+}
+
+func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey string, apiKey string) string {
 	root := map[string]any{}
 	if strings.TrimSpace(existing) != "" {
 		_ = json.Unmarshal([]byte(existing), &root)
@@ -82,21 +84,25 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, authEnv str
 	root["$schema"] = "https://opencode.ai/config.json"
 	root["model"] = preset.Model
 
-	provider := map[string]any{}
-	if raw, ok := root["provider"]; ok {
-		if m, ok := raw.(map[string]any); ok {
-			provider = m
-		}
+	npmPkg := opencodeNPMForProvider(providerKey)
+
+	models := map[string]any{}
+	models[preset.Model] = map[string]any{"name": preset.Model}
+
+	providerEntry := map[string]any{
+		"npm":     npmPkg,
+		"name":    preset.Name,
+		"options": map[string]any{
+			"baseURL": preset.BaseURL,
+			"apiKey":  apiKey,
+		},
+		"models": models,
 	}
 
-	anthropic := map[string]any{}
-	options := map[string]any{
-		"baseURL": preset.BaseURL,
-		"apiKey":  fmt.Sprintf("{env:%s}", authEnv),
+	// Replace entire provider object with single entry for the selected provider
+	root["provider"] = map[string]any{
+		providerKey: providerEntry,
 	}
-	anthropic["options"] = options
-	provider["anthropic"] = anthropic
-	root["provider"] = provider
 
 	data, _ := json.MarshalIndent(root, "", "  ")
 	return string(data) + "\n"
@@ -151,14 +157,12 @@ func removeOpencodeManagedJSON(existing string) string {
 	}
 
 	delete(root, "model")
-	if raw, ok := root["provider"]; ok {
-		if provider, ok := raw.(map[string]any); ok {
-			delete(provider, "anthropic")
-			if len(provider) == 0 {
-				delete(root, "provider")
-			} else {
-				root["provider"] = provider
-			}
+	delete(root, "provider")
+
+	// If only $schema remains, return empty to trigger file deletion
+	if len(root) == 1 {
+		if _, hasSchema := root["$schema"]; hasSchema {
+			return ""
 		}
 	}
 
@@ -169,42 +173,49 @@ func removeOpencodeManagedJSON(existing string) string {
 	return string(data) + "\n"
 }
 
-func currentOpencodeProvider(opencodeDir string) (string, string, string, string, error) {
+func currentOpencodeProvider(opencodeDir string) (string, string, string, string, string, error) {
 	configPath := opencodeConfigPath(opencodeDir)
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return configPath, "", "", "", nil
+			return configPath, "", "", "", "", nil
 		}
-		return configPath, "", "", "", err
+		return configPath, "", "", "", "", err
 	}
 	root := map[string]any{}
 	if err := json.Unmarshal(content, &root); err != nil {
-		return configPath, "", "", "", err
+		return configPath, "", "", "", "", err
 	}
 
 	model, _ := root["model"].(string)
 	baseURL := ""
 	authEnv := ""
+	providerName := ""
 	if raw, ok := root["provider"].(map[string]any); ok {
-		if anthropic, ok := raw["anthropic"].(map[string]any); ok {
-			if opts, ok := anthropic["options"].(map[string]any); ok {
-				baseURL, _ = opts["baseURL"].(string)
-				if apiKey, ok := opts["apiKey"].(string); ok {
-					authEnv = opencodeAuthEnvFromAPIKeyRef(apiKey)
+		// Find the first provider entry that has options.baseURL
+		for key, val := range raw {
+			if entry, ok := val.(map[string]any); ok {
+				if opts, ok := entry["options"].(map[string]any); ok {
+					if b, ok := opts["baseURL"].(string); ok {
+						baseURL = b
+						providerName = key
+						authEnv = deriveAuthEnvForProvider(key)
+						break
+					}
 				}
 			}
 		}
 	}
-	return configPath, model, baseURL, authEnv, nil
+	return configPath, model, baseURL, authEnv, providerName, nil
 }
 
-func opencodeAuthEnvFromAPIKeyRef(apiKey string) string {
-	apiKey = strings.TrimSpace(apiKey)
-	const prefix = "{env:"
-	const suffix = "}"
-	if strings.HasPrefix(apiKey, prefix) && strings.HasSuffix(apiKey, suffix) {
-		return strings.TrimSuffix(strings.TrimPrefix(apiKey, prefix), suffix)
+func deriveAuthEnvForProvider(provider string) string {
+	if preset, ok := providerPresets[provider]; ok {
+		authEnv := strings.TrimSpace(preset.AuthEnv)
+		if authEnv == "" {
+			return "ANTHROPIC_API_KEY"
+		}
+		return authEnv
 	}
-	return ""
+	return "ANTHROPIC_API_KEY"
 }

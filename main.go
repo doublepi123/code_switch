@@ -218,7 +218,7 @@ func cmdCurrent(args []string, out io.Writer) error {
 	}
 
 	if showBoth || agent == agentOpencode {
-		configPath, model, baseURL, authEnv, err := currentOpencodeProvider(*opencodeDir)
+		configPath, model, baseURL, authEnv, providerName, err := currentOpencodeProvider(*opencodeDir)
 		if err != nil {
 			return err
 		}
@@ -227,7 +227,11 @@ func cmdCurrent(args []string, out io.Writer) error {
 		if baseURL == "" {
 			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
 		} else {
-			fmt.Fprintf(out, "  %s\n", formatLabel("provider", detectProvider(baseURL, model)))
+			displayProvider := providerName
+			if displayProvider == "" {
+				displayProvider = detectProvider(baseURL, model)
+			}
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", displayProvider))
 			if baseURL != "" {
 				fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
 			}

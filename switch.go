@@ -161,16 +161,17 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun)
 	}
 	if agent == agentOpencode {
+		// Call switchOpencodeProvider FIRST so it resolves the model and updates cfg in memory,
+		// then write the app config with the resolved model.
+		if err := switchOpencodeProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *opencodeDir, out, *dryRun); err != nil {
+			return err
+		}
 		if !*dryRun {
-			stored := opencodeProviderConfig(cfg, pa.Provider)
-			stored.APIKey = pa.APIKey
-			stored.Model = pa.Model
-			setAgentProviderConfig(cfg, agentOpencode, pa.Provider, stored)
 			if err := writeJSONAtomic(configPath, cfg); err != nil {
 				return err
 			}
 		}
-		return switchOpencodeProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *opencodeDir, out, *dryRun)
+		return nil
 	}
 	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent})
 }

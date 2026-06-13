@@ -44,7 +44,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		currentProvider = codexTOMLProviderKey(cp)
 		currentModel = cm
 	case agentOpencode:
-		_, cm, _, _, _ := currentOpencodeProvider(*opencodeDir)
+		_, cm, _, _, _, _ := currentOpencodeProvider(*opencodeDir)
 		currentModel = cm
 		if cm != "" {
 			for name, stored := range cfg.Providers {
@@ -851,7 +851,7 @@ func (ts *tuiState) refreshCurrentConfig() {
 		ts.currentProvider = codexTOMLProviderKey(cp)
 		ts.currentModel = cm
 	case agentOpencode:
-		_, cm, _, _, _ := currentOpencodeProvider(ts.opencodeDir)
+		_, cm, _, _, _, _ := currentOpencodeProvider(ts.opencodeDir)
 		ts.currentModel = cm
 		ts.currentProvider = ""
 		if cm != "" {

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestOpencodeSwitchWritesJSONWithEnvBasedAPIKey(t *testing.T) {
+func TestOpencodeSwitchWritesJSONWithProviderBlock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	opencodeDir := filepath.Join(home, ".config", "opencode")
@@ -31,16 +31,32 @@ func TestOpencodeSwitchWritesJSONWithEnvBasedAPIKey(t *testing.T) {
 	if got := cfg["model"]; got != "deepseek-v4-pro" {
 		t.Fatalf("model = %v, want deepseek-v4-pro", got)
 	}
-	provider := cfg["provider"].(map[string]any)["anthropic"].(map[string]any)
-	options := provider["options"].(map[string]any)
+	providers := cfg["provider"].(map[string]any)
+	// Provider key should be "deepseek" not "anthropic"
+	providerEntry, ok := providers["deepseek"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider entry key should be 'deepseek', got keys: %v", keysOf(providers))
+	}
+	if got := providerEntry["npm"]; got != "@ai-sdk/anthropic" {
+		t.Fatalf("npm = %v, want @ai-sdk/anthropic", got)
+	}
+	if got := providerEntry["name"]; got != "DeepSeek" {
+		t.Fatalf("name = %v, want DeepSeek", got)
+	}
+	options := providerEntry["options"].(map[string]any)
 	if got := options["baseURL"]; got != "https://api.deepseek.com/anthropic" {
 		t.Fatalf("baseURL = %v, want https://api.deepseek.com/anthropic", got)
 	}
-	if got := options["apiKey"]; got != "{env:ANTHROPIC_AUTH_TOKEN}" {
-		t.Fatalf("apiKey = %v, want {env:ANTHROPIC_AUTH_TOKEN}", got)
+	if got := options["apiKey"]; got != "sk-ds-test" {
+		t.Fatalf("apiKey = %v, want sk-ds-test (plaintext)", got)
 	}
-	if strings.Contains(string(configBytes), "sk-ds-test") {
-		t.Fatalf("opencode config must not contain plaintext api key")
+	models := providerEntry["models"].(map[string]any)
+	if _, ok := models["deepseek-v4-pro"]; !ok {
+		t.Fatalf("models missing deepseek-v4-pro key")
+	}
+	modelEntry := models["deepseek-v4-pro"].(map[string]any)
+	if got := modelEntry["name"]; got != "deepseek-v4-pro" {
+		t.Fatalf("model name = %v, want deepseek-v4-pro", got)
 	}
 
 	appBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
@@ -59,7 +75,15 @@ func TestOpencodeSwitchWritesJSONWithEnvBasedAPIKey(t *testing.T) {
 	}
 }
 
-func TestOpencodeSwitchWithDefaultAuthEnv(t *testing.T) {
+func keysOf(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func TestOpencodeSwitchWithPlaintextAPIKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	opencodeDir := filepath.Join(home, ".config", "opencode")
@@ -77,12 +101,19 @@ func TestOpencodeSwitchWithDefaultAuthEnv(t *testing.T) {
 	if err := json.Unmarshal(configBytes, &cfg); err != nil {
 		t.Fatalf("parse opencode config: %v", err)
 	}
-	provider := cfg["provider"].(map[string]any)["anthropic"].(map[string]any)
-	options := provider["options"].(map[string]any)
-	// OpenRouter preset does not set AuthEnv, so default ANTHROPIC_API_KEY is used
-	if got := options["apiKey"]; got != "{env:ANTHROPIC_API_KEY}" {
-		t.Fatalf("apiKey = %v, want {env:ANTHROPIC_API_KEY}", got)
+	providerEntry := cfg["provider"].(map[string]any)["openrouter"].(map[string]any)
+	if got := providerEntry["npm"]; got != "@ai-sdk/anthropic" {
+		t.Fatalf("npm = %v, want @ai-sdk/anthropic", got)
 	}
+	if got := providerEntry["name"]; got != "OpenRouter" {
+		t.Fatalf("name = %v, want OpenRouter", got)
+	}
+	options := providerEntry["options"].(map[string]any)
+	if got := options["apiKey"]; got != "sk-or-test" {
+		t.Fatalf("apiKey = %v, want sk-or-test (plaintext)", got)
+	}
+	// OpenRouter preset does not set AuthEnv, so it would default to ANTHROPIC_API_KEY
+	// but the config should store the key in plaintext, not as {env:...}
 }
 
 func TestOpencodeRestoreRemovesManagedSettings(t *testing.T) {
@@ -97,10 +128,15 @@ func TestOpencodeRestoreRemovesManagedSettings(t *testing.T) {
   "$schema": "https://opencode.ai/config.json",
   "model": "deepseek-v4-pro",
   "provider": {
-    "anthropic": {
+    "deepseek": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "DeepSeek",
       "options": {
         "baseURL": "https://api.deepseek.com/anthropic",
-        "apiKey": "{env:ANTHROPIC_AUTH_TOKEN}"
+        "apiKey": "sk-ds-test"
+      },
+      "models": {
+        "deepseek-v4-pro": { "name": "deepseek-v4-pro" }
       }
     }
   },
@@ -122,13 +158,54 @@ func TestOpencodeRestoreRemovesManagedSettings(t *testing.T) {
 		t.Fatalf("read restored config: %v", err)
 	}
 	restored := string(restoredBytes)
-	for _, unwanted := range []string{`"model"`, `"anthropic"`, `"baseURL"`, `"apiKey"`} {
+	for _, unwanted := range []string{`"model"`, `"provider"`, `"baseURL"`, `"apiKey"`} {
 		if strings.Contains(restored, unwanted) {
 			t.Fatalf("restored config still contains %q:\n%s", unwanted, restored)
 		}
 	}
 	if !strings.Contains(restored, `"tools"`) {
 		t.Fatalf("restored config lost user tools section:\n%s", restored)
+	}
+	// $schema should be preserved since tools section is present
+	if !strings.Contains(restored, `"$schema"`) {
+		t.Fatalf("restored config lost $schema:\n%s", restored)
+	}
+}
+
+func TestOpencodeRestoreRemovesFileWhenOnlySchemaRemains(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	configPath := filepath.Join(opencodeDir, "opencode.json")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir opencode dir: %v", err)
+	}
+	existing := `{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "deepseek-v4-pro",
+  "provider": {
+    "deepseek": {
+      "npm": "@ai-sdk/anthropic",
+      "options": {
+        "baseURL": "https://api.deepseek.com/anthropic",
+        "apiKey": "sk-ds-test"
+      },
+      "models": { "deepseek-v4-pro": { "name": "deepseek-v4-pro" } }
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("write opencode config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"restore", "--agent", "opencode", "--opencode-dir", opencodeDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("opencode restore returned error: %v", err)
+	}
+
+	// File should be deleted since only $schema would remain
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("opencode config should be deleted after restore when only $schema remains")
 	}
 }
 
@@ -158,10 +235,15 @@ func TestOpencodeCurrentReadsConfig(t *testing.T) {
   "$schema": "https://opencode.ai/config.json",
   "model": "deepseek-v4-pro",
   "provider": {
-    "anthropic": {
+    "deepseek": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "DeepSeek",
       "options": {
         "baseURL": "https://api.deepseek.com/anthropic",
-        "apiKey": "{env:ANTHROPIC_AUTH_TOKEN}"
+        "apiKey": "sk-ds-test"
+      },
+      "models": {
+        "deepseek-v4-pro": { "name": "deepseek-v4-pro" }
       }
     }
   }
@@ -347,9 +429,16 @@ func TestOpencodeCustomProviderSwitch(t *testing.T) {
 	if got := cfg["model"]; got != "deepseek-v4-flash" {
 		t.Fatalf("model = %v, want deepseek-v4-flash", got)
 	}
-	provider := cfg["provider"].(map[string]any)["anthropic"].(map[string]any)
-	options := provider["options"].(map[string]any)
+	providerEntry := cfg["provider"].(map[string]any)["deepseek"].(map[string]any)
+	options := providerEntry["options"].(map[string]any)
 	if got := options["baseURL"]; got != "https://api.deepseek.com/anthropic" {
 		t.Fatalf("baseURL = %v", got)
+	}
+	if got := providerEntry["npm"]; got != "@ai-sdk/anthropic" {
+		t.Fatalf("npm = %v, want @ai-sdk/anthropic", got)
+	}
+	models := providerEntry["models"].(map[string]any)
+	if _, ok := models["deepseek-v4-flash"]; !ok {
+		t.Fatalf("models missing deepseek-v4-flash key")
 	}
 }
