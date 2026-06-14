@@ -144,10 +144,10 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	if lockErr != nil {
 		return lockErr
 	}
-	defer unlock()
 
 	cfg, err = loadAppConfigFrom(configPath)
 	if err != nil {
+		unlock()
 		return err
 	}
 
@@ -162,8 +162,10 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	upsertProviderConfig(cfg, selection, apiKey)
 
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		unlock()
 		return err
 	}
+	unlock()
 	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
 
 	switch agent {

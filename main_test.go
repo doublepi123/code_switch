@@ -31,6 +31,15 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
 }
 
+type channelWriter struct {
+	ch chan string
+}
+
+func (w channelWriter) Write(p []byte) (int, error) {
+	w.ch <- string(p)
+	return len(p), nil
+}
+
 func testHTTPResponse(req *http.Request, statusCode int, body []byte) *http.Response {
 	return &http.Response{
 		StatusCode: statusCode,
@@ -1115,6 +1124,79 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 
 	if !strings.Contains(output.String(), "saved provider config for openrouter") {
 		t.Fatalf("expected save message in output, got %q", output.String())
+	}
+}
+
+func TestCmdConfigureReleasesAppConfigLockBeforeSwitchingClaude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	claudeDir := filepath.Join(home, "custom-claude")
+	appConfigPath := filepath.Join(home, ".code-switch", "config.json")
+	if err := writeJSONAtomic(appConfigPath, AppConfig{Providers: map[string]StoredProvider{
+		"minimax-cn": {APIKey: "sk-minimax"},
+	}}); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	settingsPath := claudeSettingsPath(claudeDir)
+	settingsUnlock, err := newConfigFile(settingsPath).lock()
+	if err != nil {
+		t.Fatalf("lock settings: %v", err)
+	}
+	settingsLocked := true
+	defer func() {
+		if settingsLocked {
+			settingsUnlock()
+		}
+	}()
+
+	outputCh := make(chan string, 32)
+	done := make(chan error, 1)
+	go func() {
+		done <- cmdConfigure([]string{"--claude-dir", claudeDir}, strings.NewReader("minimax-cn\n\n"), channelWriter{ch: outputCh})
+	}()
+
+	var output string
+	deadline := time.After(2 * time.Second)
+	for !strings.Contains(output, "saved provider config for minimax-cn") {
+		select {
+		case chunk := <-outputCh:
+			output += chunk
+		case err := <-done:
+			t.Fatalf("cmdConfigure returned before switching Claude: %v\noutput:\n%s", err, output)
+		case <-deadline:
+			t.Fatalf("timed out waiting for configure to save app config; output:\n%s", output)
+		}
+	}
+
+	lockResult := make(chan error, 1)
+	go func() {
+		unlock, err := newConfigFile(appConfigPath).lock()
+		if err == nil {
+			unlock()
+		}
+		lockResult <- err
+	}()
+
+	select {
+	case err := <-lockResult:
+		if err != nil {
+			t.Fatalf("app config lock should be released before switching Claude: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("app config lock was still held while configure waited on Claude settings lock")
+	}
+
+	settingsUnlock()
+	settingsLocked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cmdConfigure returned error after releasing settings lock: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cmdConfigure did not finish after settings lock was released")
 	}
 }
 
