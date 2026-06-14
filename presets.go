@@ -126,21 +126,21 @@ type ModelTiers struct {
 }
 
 type ProviderPreset struct {
-	Name               string
-	BaseURL            string
-	Model              string
-	Models             []string
-	Haiku              string
-	Sonnet             string
-	Opus               string
-	Subagent           string
-	ForceModelTiers    bool
-	ModelTierOverrides map[string]ModelTiers
-	AuthEnv            string
-	ExtraEnv           map[string]any
-	Website            string
-	APIKeyURL          string
-	NoAPIKey           bool
+	Name                 string
+	BaseURL              string
+	Model                string
+	Models               []string
+	Haiku                string
+	Sonnet               string
+	Opus                 string
+	Subagent             string
+	ForceModelTiers      bool
+	ModelTierOverrides   map[string]ModelTiers
+	AuthEnv              string
+	ExtraEnv             map[string]any
+	Website              string
+	APIKeyURL            string
+	NoAPIKey             bool
 	ReasoningEffort      string
 	ModelReasoningEffort map[string]string
 }
@@ -198,6 +198,7 @@ var providerPresets = map[string]ProviderPreset{
 		Haiku:     "MiniMax-M3",
 		Sonnet:    "MiniMax-M3",
 		Opus:      "MiniMax-M3",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://platform.minimaxi.com",
 		APIKeyURL: "https://platform.minimaxi.com/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
@@ -213,6 +214,7 @@ var providerPresets = map[string]ProviderPreset{
 		Haiku:     "MiniMax-M3",
 		Sonnet:    "MiniMax-M3",
 		Opus:      "MiniMax-M3",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://platform.minimax.io",
 		APIKeyURL: "https://platform.minimax.io/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
@@ -343,27 +345,27 @@ var providerPresets = map[string]ProviderPreset{
 			"deepseek-v4-pro":   "xhigh",
 			"deepseek-v4-flash": "xhigh",
 		},
-		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
-		Website:         "https://ollama.com/cloud",
-		APIKeyURL:       "https://ollama.com/settings/keys",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://ollama.com/cloud",
+		APIKeyURL: "https://ollama.com/settings/keys",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "600000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
 	"volcengine": {
-		Name:      "Volcengine Ark Coding Plan",
-		BaseURL:   "https://ark.cn-beijing.volces.com/api/coding",
-		Model:     "ark-code-latest",
-		Models:    []string{"ark-code-latest", "doubao-seed-2.0-code", "doubao-seed-2.0-pro", "doubao-seed-2.0-lite", "doubao-seed-code", "minimax-latest", "glm-5.1", "deepseek-v3.2", "kimi-k2.6"},
-		Haiku:     "ark-code-latest",
-		Sonnet:    "ark-code-latest",
-		Opus:      "ark-code-latest",
-		Subagent:  "ark-code-latest",
+		Name:            "Volcengine Ark Coding Plan",
+		BaseURL:         "https://ark.cn-beijing.volces.com/api/coding",
+		Model:           "ark-code-latest",
+		Models:          []string{"ark-code-latest", "doubao-seed-2.0-code", "doubao-seed-2.0-pro", "doubao-seed-2.0-lite", "doubao-seed-code", "minimax-latest", "glm-5.1", "deepseek-v3.2", "kimi-k2.6"},
+		Haiku:           "ark-code-latest",
+		Sonnet:          "ark-code-latest",
+		Opus:            "ark-code-latest",
+		Subagent:        "ark-code-latest",
 		ForceModelTiers: true,
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://www.volcengine.com/activity/codingplan",
-		APIKeyURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://www.volcengine.com/activity/codingplan",
+		APIKeyURL:       "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -389,42 +391,42 @@ var providerPresets = map[string]ProviderPreset{
 }
 
 var unsupportedOpenCodeGoAnthropicModels = map[string]string{
-	"glm-5":                 "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"glm-5.1":               "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"glm-5":                "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"glm-5.1":              "GLM is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"kimi-k2.5":            "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"kimi-k2.6":            "Kimi is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2-pro":          "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2-omni":         "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2.5-pro":        "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"mimo-v2.5":            "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
-	"mimo-v2-flash":         "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
+	"mimo-v2-flash":        "MiMo is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"qwen3.6-plus":         "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"qwen3.5-plus":         "Qwen is exposed by OpenCode Go on chat/completions, not Anthropic messages",
 	"doubao-seed-code":     "Doubao is available via Volcengine Ark, not OpenCode Go",
 	"doubao-seed-2.0-code": "Doubao is available via Volcengine Ark, not OpenCode Go",
 	"doubao-seed-2.0-pro":  "Doubao is available via Volcengine Ark, not OpenCode Go",
 	"doubao-seed-2.0-lite": "Doubao is available via Volcengine Ark, not OpenCode Go",
-	"ark-code-latest":     "ark-code-latest is available via Volcengine Ark, not OpenCode Go",
+	"ark-code-latest":      "ark-code-latest is available via Volcengine Ark, not OpenCode Go",
 }
 
 var providerAliases = map[string]string{
-	"minimax":              "minimax-cn",
-	"minimax-cn-token":     "minimax-cn",
-	"minimax-global-token": "minimax-global",
-	"xiaomimimo":           "xiaomimimo-cn",
-	"xiaomimio":            "xiaomimimo-cn",
-	"mimo":                 "xiaomimimo-cn",
-	"ollamacloud":          "ollama-cloud",
-	"ollama.com":           "ollama-cloud",
-	"z.ai":                 "zai",
-	"glm":                  "zai",
-	"ark":                  "volcengine",
-	"volcengine-ark":       "volcengine",
-	"volcengine.com":       "volcengine",
+	"minimax":                   "minimax-cn",
+	"minimax-cn-token":          "minimax-cn",
+	"minimax-global-token":      "minimax-global",
+	"xiaomimimo":                "xiaomimimo-cn",
+	"xiaomimio":                 "xiaomimimo-cn",
+	"mimo":                      "xiaomimimo-cn",
+	"ollamacloud":               "ollama-cloud",
+	"ollama.com":                "ollama-cloud",
+	"z.ai":                      "zai",
+	"glm":                       "zai",
+	"ark":                       "volcengine",
+	"volcengine-ark":            "volcengine",
+	"volcengine.com":            "volcengine",
 	"ark.cn-beijing.volces.com": "volcengine",
-	"kimi":                 "kimi-coding",
-	"kimi.com":             "kimi-coding",
-	"api.kimi.com":         "kimi-coding",
+	"kimi":                      "kimi-coding",
+	"kimi.com":                  "kimi-coding",
+	"api.kimi.com":              "kimi-coding",
 }
 
 const customProviderOption = "__custom__"

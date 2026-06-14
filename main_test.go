@@ -530,6 +530,24 @@ func TestApplyPresetDeepSeekUsesAuthTokenAndExtraEnv(t *testing.T) {
 	}
 }
 
+func TestApplyPresetMiniMaxUsesAuthTokenToAvoidClaudeLoginConflict(t *testing.T) {
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_API_KEY": "stale-api-key",
+		},
+	}
+
+	applyPreset(root, providerPresets["minimax-cn"], "sk-minimax")
+
+	env := root["env"].(map[string]any)
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for minimax-cn")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-minimax" {
+		t.Fatalf("auth token = %v, want %v", got, "sk-minimax")
+	}
+}
+
 func TestApplyPresetOllamaUsesAuthToken(t *testing.T) {
 	root := map[string]any{
 		"env": map[string]any{
@@ -2341,6 +2359,12 @@ func TestCmdConfigureRespectsStoredModel(t *testing.T) {
 	env := settings["env"].(map[string]any)
 	if got := env["ANTHROPIC_MODEL"]; got != "MiniMax-M2.5" {
 		t.Fatalf("model = %v, want %v", got, "MiniMax-M2.5")
+	}
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatal("expected ANTHROPIC_API_KEY to be unset")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-existing" {
+		t.Fatalf("auth token = %v, want sk-existing", got)
 	}
 }
 
