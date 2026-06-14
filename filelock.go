@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -21,23 +20,17 @@ func (cf *configFile) lock() (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
 	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open lock file: %w", err)
-	}
 	// Total budget ~5s: 50 attempts × ~100ms, with linear backoff capped at 200ms.
 	const maxAttempts = 50
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		f, err := lockFile(lockPath)
 		if err == nil {
 			unlock := func() {
-				syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-				f.Close()
+				unlockFile(f, lockPath)
 			}
 			return unlock, nil
 		}
-		if err != syscall.EWOULDBLOCK {
-			f.Close()
+		if !isLockBusy(err) {
 			return nil, fmt.Errorf("acquire lock: %w", err)
 		}
 		// Linear backoff capped at 200ms so we don't burn CPU but still
@@ -48,6 +41,5 @@ func (cf *configFile) lock() (func(), error) {
 		}
 		time.Sleep(delay)
 	}
-	f.Close()
 	return nil, fmt.Errorf("config file is locked by another process (try again in a few seconds)")
 }
