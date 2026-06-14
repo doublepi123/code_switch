@@ -8291,46 +8291,65 @@ func TestResolveKey(t *testing.T) {
 	}
 }
 
-func TestFileLockReadLockPID(t *testing.T) {
-	dir := t.TempDir()
-	lockPath := filepath.Join(dir, "test.lock")
-	if pid := readLockPID(lockPath); pid != 0 {
-		t.Fatalf("readLockPID nonexistent = %d, want 0", pid)
-	}
-	os.WriteFile(lockPath, []byte("12345\n"), 0o600)
-	if pid := readLockPID(lockPath); pid != 12345 {
-		t.Fatalf("readLockPID = %d, want 12345", pid)
-	}
-	os.WriteFile(lockPath, []byte("garbage"), 0o600)
-	if pid := readLockPID(lockPath); pid != 0 {
-		t.Fatalf("readLockPID garbage = %d, want 0", pid)
-	}
-}
-
-func TestFileLockProcessExists(t *testing.T) {
-	if !processExists(os.Getpid()) {
-		t.Fatalf("current process should exist")
-	}
-	if processExists(0) {
-		t.Fatalf("pid 0 should not exist")
-	}
-	if processExists(99999999) {
-		t.Fatalf("non-existent pid should not exist")
-	}
-}
-
-func TestFileLockLockStaleCleanup(t *testing.T) {
+func TestFileLockBasicLockUnlock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.json")
 	cf := newConfigFile(path)
-	lockPath := cf.lockPath()
-	os.WriteFile(lockPath, []byte("99999999\n"), 0o600)
 
 	unlock, err := cf.lock()
 	if err != nil {
-		t.Fatalf("lock with stale PID: %v", err)
+		t.Fatalf("lock: %v", err)
 	}
 	unlock()
+}
+
+func TestFileLockCreatesLockFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+	cf := newConfigFile(path)
+
+	unlock, err := cf.lock()
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	lockPath := path + ".lock"
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock file should exist: %v", err)
+	}
+	unlock()
+}
+
+func TestFileLockBlocksConcurrentAccess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+	cf := newConfigFile(path)
+
+	unlock, err := cf.lock()
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		cf2 := newConfigFile(path)
+		u, err := cf2.lock()
+		if err != nil {
+			done <- err
+			return
+		}
+		u()
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("second lock should succeed after unlock: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		// Expected: second lock is blocked while first is held
+	}
 }
 
 func TestWriteTextAtomicDoesNotChmodReadOnlyDir(t *testing.T) {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -17,40 +16,29 @@ func newConfigFile(path string) *configFile {
 	return &configFile{path: path}
 }
 
-func (cf *configFile) lockPath() string {
-	return cf.path + ".lock"
-}
-
 func (cf *configFile) lock() (func(), error) {
-	lockPath := cf.lockPath()
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+	lockPath := cf.path + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
 	}
-	// Total budget ~5s: 50 attempts × 100ms, but back off on repeated failures
-	// so heavy load still has a chance to acquire without spinning.
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file: %w", err)
+	}
+	// Total budget ~5s: 50 attempts × ~100ms, with linear backoff capped at 200ms.
 	const maxAttempts = 50
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
-			if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
-				f.Close()
-				os.Remove(lockPath)
-				return nil, fmt.Errorf("write lock file: %w", err)
-			}
-			f.Close()
 			unlock := func() {
-				os.Remove(lockPath)
+				syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+				f.Close()
 			}
 			return unlock, nil
 		}
-		if !os.IsExist(err) {
-			return nil, fmt.Errorf("create lock file: %w", err)
-		}
-		if pid := readLockPID(lockPath); pid > 0 && !processExists(pid) {
-			os.Remove(lockPath)
-			// Immediately retry without sleeping so another process can't
-			// race between our Remove and the next OpenFile attempt.
-			continue
+		if err != syscall.EWOULDBLOCK {
+			f.Close()
+			return nil, fmt.Errorf("acquire lock: %w", err)
 		}
 		// Linear backoff capped at 200ms so we don't burn CPU but still
 		// recover promptly once the holder finishes.
@@ -60,30 +48,6 @@ func (cf *configFile) lock() (func(), error) {
 		}
 		time.Sleep(delay)
 	}
+	f.Close()
 	return nil, fmt.Errorf("config file is locked by another process (try again in a few seconds)")
-}
-
-func readLockPID(lockPath string) int {
-	data, err := os.ReadFile(lockPath)
-	if err != nil {
-		return 0
-	}
-	text := strings.TrimSpace(string(data))
-	if text == "" {
-		return 0
-	}
-	var pid int
-	n, err := fmt.Sscanf(text, "%d", &pid)
-	if err != nil || n != 1 || pid <= 0 {
-		return 0
-	}
-	return pid
-}
-
-func processExists(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
 }

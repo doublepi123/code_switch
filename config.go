@@ -156,7 +156,7 @@ func ensureNestedMap(root map[string]any, key string) map[string]any {
 }
 
 func writeJSONAtomic(path string, value any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(value, "", "  ")
@@ -201,7 +201,7 @@ func backupIfExists(path string) error {
 		return err
 	}
 	backupDir := filepath.Dir(path)
-	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(backupDir, filepath.Base(path)+".bak-*")

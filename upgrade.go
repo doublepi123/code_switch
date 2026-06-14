@@ -465,7 +465,9 @@ func writeExtractedBinary(src io.Reader, dest string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(file, src); err != nil {
+	// Limit extraction to 256 MiB to guard against decompression bombs.
+	limitedSrc := io.LimitReader(src, 256*1024*1024)
+	if _, err := io.Copy(file, limitedSrc); err != nil {
 		file.Close()
 		return err
 	}
@@ -514,10 +516,11 @@ func replaceExecutable(src, target string) error {
 func moveFile(src, target string) error {
 	if err := os.Rename(src, target); err == nil {
 		return nil
-	}
-	// Cross-device moves require copy+delete; other rename errors are real failures.
-	if err := copyFile(src, target); err != nil {
-		return fmt.Errorf("move %s to %s: %w", src, target, err)
+	} else {
+		// Cross-device moves require copy+delete; other rename errors are real failures.
+		if copyErr := copyFile(src, target); copyErr != nil {
+			return fmt.Errorf("move %s to %s: rename: %v; copy: %w", src, target, err, copyErr)
+		}
 	}
 	if err := os.Remove(src); err != nil {
 		fmt.Fprintf(os.Stderr, "code-switch: warning: could not remove temp file %s: %v\n", src, err)
@@ -638,12 +641,16 @@ func downloadChecksumContent(ctx context.Context, client *http.Client, urlStr st
 }
 
 func validateSHA256(filePath, expected string) error {
-	data, err := os.ReadFile(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("read file for checksum: %w", err)
 	}
-	actual := sha256.Sum256(data)
-	actualHex := hex.EncodeToString(actual[:])
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("compute checksum: %w", err)
+	}
+	actualHex := hex.EncodeToString(h.Sum(nil))
 	if actualHex != expected {
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expected, actualHex)
 	}

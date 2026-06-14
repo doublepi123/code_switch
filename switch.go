@@ -151,6 +151,9 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	}
 
 	if agent == agentCodex {
+		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun); err != nil {
+			return err
+		}
 		if !*dryRun {
 			stored := codexProviderConfig(cfg, pa.Provider)
 			stored.APIKey = pa.APIKey
@@ -160,7 +163,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 				return err
 			}
 		}
-		return switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun)
+		return nil
 	}
 	if agent == agentOpencode {
 		// Call switchOpencodeProvider FIRST so it resolves the model and updates cfg in memory,

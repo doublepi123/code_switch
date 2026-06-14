@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -39,6 +40,13 @@ func switchOpencodeProvider(provider string, cfg *AppConfig, apiKey, modelOverri
 		return nil
 	}
 
+	cf := newConfigFile(configPath)
+	unlock, err := cf.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	existingBytes, err := os.ReadFile(configPath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -53,7 +61,7 @@ func switchOpencodeProvider(provider string, cfg *AppConfig, apiKey, modelOverri
 	if err != nil {
 		return err
 	}
-	if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
+	if err := writeTextAtomic(configPath, updated, 0o600); err != nil {
 		return err
 	}
 
@@ -115,29 +123,40 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 	providers[providerKey] = providerEntry
 	root["provider"] = providers
 
-	data, _ := json.MarshalIndent(root, "", "  ")
+	data, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal OpenCode config: %w", err)
+	}
 	return string(data) + "\n", nil
 }
 
 func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dryRun bool) error {
 	configPath := opencodeConfigPath(opencodeDir)
-	existingBytes, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(out, "%s\n", successPrefix("restored OpenCode official config"))
-			fmt.Fprintf(out, "%s\n", formatLabel("config", configPath))
-			return nil
-		}
-		return err
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		fmt.Fprintf(out, "%s\n", successPrefix("restored OpenCode official config"))
+		fmt.Fprintf(out, "%s\n", formatLabel("config", configPath))
+		return nil
 	}
-	existing := string(existingBytes)
-	updated := removeOpencodeManagedJSON(existing, cfg)
 
 	if dryRun {
 		fmt.Fprintf(out, "[dry-run] would restore OpenCode official config\n")
 		fmt.Fprintf(out, "[dry-run] config: %s\n", configPath)
 		return nil
 	}
+
+	cf := newConfigFile(configPath)
+	unlock, err := cf.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	existingBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	existing := string(existingBytes)
+	updated := removeOpencodeManagedJSON(existing, cfg)
 
 	if err := backupIfExists(configPath); err != nil {
 		return err
@@ -148,7 +167,7 @@ func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dr
 			return err
 		}
 	} else {
-		if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
+		if err := writeTextAtomic(configPath, updated, 0o600); err != nil {
 			return err
 		}
 	}
@@ -195,7 +214,10 @@ func removeOpencodeManagedJSON(existing string, cfg *AppConfig) string {
 	if len(root) == 0 {
 		return ""
 	}
-	data, _ := json.MarshalIndent(root, "", "  ")
+	data, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return ""
+	}
 	return string(data) + "\n"
 }
 
@@ -231,8 +253,15 @@ func currentOpencodeProvider(opencodeDir string) (string, string, string, string
 	authEnv := ""
 	providerName := ""
 	if raw, ok := root["provider"].(map[string]any); ok {
+		// Sort keys for deterministic iteration
+		keys := make([]string, 0, len(raw))
+		for key := range raw {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
 		// Find the first provider entry that has options.baseURL
-		for key, val := range raw {
+		for _, key := range keys {
+			val := raw[key]
 			if entry, ok := val.(map[string]any); ok {
 				if opts, ok := entry["options"].(map[string]any); ok {
 					if b, ok := opts["baseURL"].(string); ok {

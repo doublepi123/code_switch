@@ -510,7 +510,7 @@ func readTextFileIfExists(path string) (string, error) {
 }
 
 func writeTextAtomic(path, content string, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")

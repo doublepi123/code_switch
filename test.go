@@ -46,7 +46,7 @@ func cmdTest(args []string, out io.Writer) error {
 		return testCodexProvider(out, preset, pa.APIKey)
 	}
 	if agent == agentOpencode {
-		return testProvider(out, preset, pa.APIKey, "/v1/messages")
+		return testProvider(out, preset, pa.APIKey, strings.TrimSpace(*testPath))
 	}
 
 	return testProvider(out, preset, pa.APIKey, strings.TrimSpace(*testPath))

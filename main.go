@@ -559,10 +559,9 @@ func makeCustomProviderKey(name string) string {
 
 func replaceNonAlphaNum(s string, replacement byte) string {
 	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
+	for _, c := range s {
 		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
-			b.WriteByte(c)
+			b.WriteRune(c)
 		} else {
 			b.WriteByte(replacement)
 		}
