@@ -1,27 +1,26 @@
 package main
 
 import (
-	"slices"
 	"testing"
 )
 
-func TestKimiCodingDefaultModel(t *testing.T) {
+func TestKimiCodingNoModelThinking(t *testing.T) {
 	preset, ok := providerPresets["kimi-coding"]
 	if !ok {
 		t.Fatal("kimi-coding preset not found")
 	}
 
-	if preset.Model != "kimi-k2.7-code" {
-		t.Errorf("default model = %q, want %q", preset.Model, "kimi-k2.7-code")
+	// Per https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html:
+	// Kimi ignores the model name and routes by thinking mode, so no model is pinned.
+	if !preset.NoModel {
+		t.Errorf("NoModel = false, want true (model name should be left empty)")
 	}
-
-	wantModels := []string{"kimi-k2.7-code", "kimi-for-coding"}
-	for _, want := range wantModels {
-		if !slices.Contains(preset.Models, want) {
-			t.Errorf("models %v does not contain %q", preset.Models, want)
-		}
+	if preset.Model != "" {
+		t.Errorf("Model = %q, want empty (provider-routed)", preset.Model)
 	}
-
+	if len(preset.Models) != 0 {
+		t.Errorf("Models = %v, want empty", preset.Models)
+	}
 	for _, field := range []struct {
 		name string
 		got  string
@@ -31,8 +30,23 @@ func TestKimiCodingDefaultModel(t *testing.T) {
 		{"Opus", preset.Opus},
 		{"Subagent", preset.Subagent},
 	} {
-		if field.got != "kimi-k2.7-code" {
-			t.Errorf("%s = %q, want %q", field.name, field.got, "kimi-k2.7-code")
+		if field.got != "" {
+			t.Errorf("%s = %q, want empty (NoModel provider)", field.name, field.got)
 		}
+	}
+
+	// Thinking must be enabled so requests route to K2.7 Code instead of K2.6.
+	if preset.ReasoningEffort != "xhigh" {
+		t.Errorf("ReasoningEffort = %q, want %q (thinking on)", preset.ReasoningEffort, "xhigh")
+	}
+
+	if preset.BaseURL != "https://api.kimi.com/coding/" {
+		t.Errorf("BaseURL = %q, want %q", preset.BaseURL, "https://api.kimi.com/coding/")
+	}
+	if preset.AuthEnv != "ANTHROPIC_API_KEY" {
+		t.Errorf("AuthEnv = %q, want ANTHROPIC_API_KEY", preset.AuthEnv)
+	}
+	if got := preset.ExtraEnv["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]; got != "262144" {
+		t.Errorf("CLAUDE_CODE_AUTO_COMPACT_WINDOW = %v, want 262144", got)
 	}
 }

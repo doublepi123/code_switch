@@ -38,7 +38,9 @@ func cmdEnv(args []string, out io.Writer) error {
 	if agent == agentCodex {
 		fmt.Fprintf(out, "# Codex uses config.toml with command-based auth; these env vars are for reference or other tools:\n")
 		fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
-		fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+		if !preset.NoModel {
+			fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+		}
 		authEnv := strings.TrimSpace(preset.AuthEnv)
 		if authEnv == "" {
 			authEnv = "ANTHROPIC_API_KEY"
@@ -60,7 +62,9 @@ func cmdEnv(args []string, out io.Writer) error {
 	if agent == agentOpencode {
 		fmt.Fprintf(out, "# OpenCode uses env-based auth; export these variables:\n")
 		fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
-		fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+		if !preset.NoModel {
+			fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+		}
 		authEnv := strings.TrimSpace(preset.AuthEnv)
 		if authEnv == "" {
 			authEnv = "ANTHROPIC_API_KEY"
@@ -74,19 +78,23 @@ func cmdEnv(args []string, out io.Writer) error {
 		authEnv = "ANTHROPIC_API_KEY"
 	}
 	fmt.Fprintf(out, "export ANTHROPIC_BASE_URL=%s\n", shellSingleQuote(preset.BaseURL))
-	fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+	if !preset.NoModel {
+		fmt.Fprintf(out, "export ANTHROPIC_MODEL=%s\n", shellSingleQuote(preset.Model))
+	}
 	fmt.Fprintf(out, "export %s=%s\n", authEnv, shellSingleQuote(pa.APIKey))
-	if preset.Haiku != "" {
-		fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_HAIKU_MODEL=%s\n", shellSingleQuote(preset.Haiku))
-	}
-	if preset.Sonnet != "" {
-		fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_SONNET_MODEL=%s\n", shellSingleQuote(preset.Sonnet))
-	}
-	if preset.Opus != "" {
-		fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_OPUS_MODEL=%s\n", shellSingleQuote(preset.Opus))
-	}
-	if preset.Subagent != "" {
-		fmt.Fprintf(out, "export CLAUDE_CODE_SUBAGENT_MODEL=%s\n", shellSingleQuote(preset.Subagent))
+	if !preset.NoModel {
+		if preset.Haiku != "" {
+			fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_HAIKU_MODEL=%s\n", shellSingleQuote(preset.Haiku))
+		}
+		if preset.Sonnet != "" {
+			fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_SONNET_MODEL=%s\n", shellSingleQuote(preset.Sonnet))
+		}
+		if preset.Opus != "" {
+			fmt.Fprintf(out, "export ANTHROPIC_DEFAULT_OPUS_MODEL=%s\n", shellSingleQuote(preset.Opus))
+		}
+		if preset.Subagent != "" {
+			fmt.Fprintf(out, "export CLAUDE_CODE_SUBAGENT_MODEL=%s\n", shellSingleQuote(preset.Subagent))
+		}
 	}
 	if preset.ReasoningEffort != "" {
 		fmt.Fprintf(out, "export CLAUDE_CODE_EFFORT_LEVEL=%s\n", shellSingleQuote(preset.ReasoningEffort))

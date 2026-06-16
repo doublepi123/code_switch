@@ -141,6 +141,7 @@ type ProviderPreset struct {
 	Website              string
 	APIKeyURL            string
 	NoAPIKey             bool
+	NoModel              bool
 	ReasoningEffort      string
 	ModelReasoningEffort map[string]string
 }
@@ -388,19 +389,16 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"kimi-coding": {
-		Name:      "Kimi Coding",
-		BaseURL:   "https://api.kimi.com/coding/",
-		Model:     "kimi-k2.7-code",
-		Models:    []string{"kimi-k2.7-code", "kimi-for-coding"},
-		Haiku:     "kimi-k2.7-code",
-		Sonnet:    "kimi-k2.7-code",
-		Opus:      "kimi-k2.7-code",
-		Subagent:  "kimi-k2.7-code",
-		AuthEnv:   "ANTHROPIC_API_KEY",
-		Website:   "https://platform.kimi.com",
-		APIKeyURL: "https://platform.kimi.com",
+		Name:            "Kimi Coding",
+		BaseURL:         "https://api.kimi.com/coding/",
+		AuthEnv:         "ANTHROPIC_API_KEY",
+		NoModel:         true,
+		ReasoningEffort: "xhigh",
+		Website:         "https://platform.kimi.com",
+		APIKeyURL:       "https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html",
 		ExtraEnv: map[string]any{
-			"API_TIMEOUT_MS": "3000000",
+			"CLAUDE_CODE_AUTO_COMPACT_WINDOW":          "262144",
+			"API_TIMEOUT_MS":                           "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
@@ -465,6 +463,7 @@ var managedEnvKeys = []string{
 	"ANTHROPIC_DEFAULT_SONNET_MODEL",
 	"ANTHROPIC_DEFAULT_OPUS_MODEL",
 	"API_TIMEOUT_MS",
+	"CLAUDE_CODE_AUTO_COMPACT_WINDOW",
 	"CLAUDE_CODE_SUBAGENT_MODEL",
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
 	"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",

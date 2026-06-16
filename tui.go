@@ -317,6 +317,9 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	if preset.APIKeyURL != "" {
 		fmt.Fprintf(&b, "[::b]Get Key[::-]     %s\n", preset.APIKeyURL)
 	}
+	if preset.NoModel {
+		fmt.Fprintf(&b, "[::b]Model[::-]    [yellow]auto — provider routes by thinking mode[-]\n")
+	}
 	if !preset.NoAPIKey {
 		if ts.resetKeys[provider] {
 			fmt.Fprintf(&b, "[yellow]Pending key update on apply[-]\n")
@@ -330,9 +333,11 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	actions.ShowSecondaryText(false)
 	actions.SetBorder(true)
 	actions.SetTitle(" Actions ")
-	actions.AddItem("Choose Model", "", 'm', func() {
-		ts.showModels(provider, "detail")
-	})
+	if !preset.NoModel {
+		actions.AddItem("Choose Model", "", 'm', func() {
+			ts.showModels(provider, "detail")
+		})
+	}
 	canSwitch := preset.NoAPIKey || hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider])
 	if canSwitch {
 		actions.AddItem("Switch (default)", "", 's', func() {
@@ -346,7 +351,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			})
 		})
 	}
-	if ts.agent != agentOpencode {
+	if ts.agent != agentOpencode && !preset.NoModel {
 		actions.AddItem("Edit Tiers", "", 't', func() {
 			ts.showTierConfig(provider, backPage)
 		})
@@ -368,7 +373,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 		case canSwitch && (event.Rune() == 's' || event.Rune() == 'S'):
 			ts.finishSelection(provider, preset.Model)
 			return nil
-		case event.Rune() == 't' || event.Rune() == 'T':
+		case !preset.NoModel && (event.Rune() == 't' || event.Rune() == 'T'):
 			ts.showTierConfig(provider, backPage)
 			return nil
 		}

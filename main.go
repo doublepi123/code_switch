@@ -121,14 +121,18 @@ func cmdList(args []string, out io.Writer) error {
 		} else if storedAPIKeyForAgent(cfg, agent, name) != "" {
 			keyStatus = "✓"
 		}
+		modelLabel := preset.Model
+		if preset.NoModel {
+			modelLabel = "auto"
+		}
 		if *verbose {
 			models := providerModelsForAgent(cfg, agent, name)
 			if len(models) == 0 {
 				models = preset.Models
 			}
-			fmt.Fprintf(out, "%s\t%s\t%s\t%v\t%s\n", name, preset.BaseURL, preset.Model, models, keyStatus)
+			fmt.Fprintf(out, "%s\t%s\t%s\t%v\t%s\n", name, preset.BaseURL, modelLabel, models, keyStatus)
 		} else {
-			fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", name, preset.BaseURL, preset.Model, keyStatus)
+			fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", name, preset.BaseURL, modelLabel, keyStatus)
 		}
 	}
 	return nil

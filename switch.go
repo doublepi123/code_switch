@@ -263,18 +263,20 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 		fmt.Fprintf(out, "[dry-run] would switch Claude to %s\n", preset.Name)
 		fmt.Fprintf(out, "[dry-run] settings: %s\n", settingsPath)
 		fmt.Fprintf(out, "[dry-run] base_url: %s\n", preset.BaseURL)
-		fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
-		if preset.Haiku != "" {
-			fmt.Fprintf(out, "[dry-run] haiku: %s\n", preset.Haiku)
-		}
-		if preset.Sonnet != "" {
-			fmt.Fprintf(out, "[dry-run] sonnet: %s\n", preset.Sonnet)
-		}
-		if preset.Opus != "" {
-			fmt.Fprintf(out, "[dry-run] opus: %s\n", preset.Opus)
-		}
-		if preset.Subagent != "" {
-			fmt.Fprintf(out, "[dry-run] subagent: %s\n", preset.Subagent)
+		if !preset.NoModel {
+			fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
+			if preset.Haiku != "" {
+				fmt.Fprintf(out, "[dry-run] haiku: %s\n", preset.Haiku)
+			}
+			if preset.Sonnet != "" {
+				fmt.Fprintf(out, "[dry-run] sonnet: %s\n", preset.Sonnet)
+			}
+			if preset.Opus != "" {
+				fmt.Fprintf(out, "[dry-run] opus: %s\n", preset.Opus)
+			}
+			if preset.Subagent != "" {
+				fmt.Fprintf(out, "[dry-run] subagent: %s\n", preset.Subagent)
+			}
 		}
 		if preset.ReasoningEffort != "" {
 			fmt.Fprintf(out, "[dry-run] reasoning_effort: %s\n", preset.ReasoningEffort)
@@ -299,7 +301,9 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 	fmt.Fprintf(out, "%s\n", successPrefix(fmt.Sprintf("switched Claude to %s", preset.Name)))
 	fmt.Fprintf(out, "%s\n", formatLabel("settings", settingsPath))
 	fmt.Fprintf(out, "%s\n", formatLabel("base_url", preset.BaseURL))
-	fmt.Fprintf(out, "%s\n", formatLabel("model", preset.Model))
+	if !preset.NoModel {
+		fmt.Fprintf(out, "%s\n", formatLabel("model", preset.Model))
+	}
 	return nil
 }
 
@@ -315,12 +319,14 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey string) {
 		authEnv = "ANTHROPIC_API_KEY"
 	}
 	env[authEnv] = apiKey
-	env["ANTHROPIC_MODEL"] = preset.Model
-	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = preset.Haiku
-	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = preset.Sonnet
-	env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = preset.Opus
-	if preset.Subagent != "" {
-		env["CLAUDE_CODE_SUBAGENT_MODEL"] = preset.Subagent
+	if !preset.NoModel {
+		env["ANTHROPIC_MODEL"] = preset.Model
+		env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = preset.Haiku
+		env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = preset.Sonnet
+		env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = preset.Opus
+		if preset.Subagent != "" {
+			env["CLAUDE_CODE_SUBAGENT_MODEL"] = preset.Subagent
+		}
 	}
 
 	if preset.ReasoningEffort != "" {
