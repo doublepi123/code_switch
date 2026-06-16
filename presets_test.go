@@ -49,4 +49,7 @@ func TestKimiCodingNoModelThinking(t *testing.T) {
 	if got := preset.ExtraEnv["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]; got != "262144" {
 		t.Errorf("CLAUDE_CODE_AUTO_COMPACT_WINDOW = %v, want 262144", got)
 	}
+	if got := preset.ExtraEnv["MAX_THINKING_TOKENS"]; got != "31999" {
+		t.Errorf("MAX_THINKING_TOKENS = %v, want 31999", got)
+	}
 }

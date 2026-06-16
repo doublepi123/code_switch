@@ -723,6 +723,9 @@ func TestApplyPresetKimiCodingNoModel(t *testing.T) {
 	if got := env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]; got != "262144" {
 		t.Fatalf("CLAUDE_CODE_AUTO_COMPACT_WINDOW = %v, want 262144", got)
 	}
+	if got := env["MAX_THINKING_TOKENS"]; got != "31999" {
+		t.Fatalf("MAX_THINKING_TOKENS = %v, want 31999", got)
+	}
 	if got := env["CLAUDE_CODE_EFFORT_LEVEL"]; got != "xhigh" {
 		t.Fatalf("CLAUDE_CODE_EFFORT_LEVEL = %v, want xhigh (thinking on)", got)
 	}

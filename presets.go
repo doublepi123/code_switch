@@ -400,6 +400,7 @@ var providerPresets = map[string]ProviderPreset{
 			"CLAUDE_CODE_AUTO_COMPACT_WINDOW":          "262144",
 			"API_TIMEOUT_MS":                           "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+			"MAX_THINKING_TOKENS":                      "31999",
 		},
 	},
 }
@@ -468,6 +469,7 @@ var managedEnvKeys = []string{
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
 	"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",
 	"CLAUDE_CODE_EFFORT_LEVEL",
+	"MAX_THINKING_TOKENS",
 }
 
 func canonicalProviderName(name string) string {
