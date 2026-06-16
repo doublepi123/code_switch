@@ -319,6 +319,22 @@ var providerPresets = map[string]ProviderPreset{
 			"API_TIMEOUT_MS": "3000000",
 		},
 	},
+	"zhipu-cn": {
+		Name:      "Zhipu (智谱) GLM Coding Plan",
+		BaseURL:   "https://open.bigmodel.cn/api/anthropic",
+		Model:     "glm-5.2",
+		Models:    []string{"glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
+		Haiku:     "glm-4.5-air",
+		Sonnet:    "glm-5-turbo",
+		Opus:      "glm-5.2",
+		Subagent:  "glm-5-turbo",
+		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Website:   "https://open.bigmodel.cn",
+		APIKeyURL: "https://open.bigmodel.cn",
+		ExtraEnv: map[string]any{
+			"API_TIMEOUT_MS": "3000000",
+		},
+	},
 	"ollama-cloud": {
 		Name:    "Ollama Cloud",
 		BaseURL: "https://ollama.com",
@@ -420,6 +436,10 @@ var providerAliases = map[string]string{
 	"ollama.com":                "ollama-cloud",
 	"z.ai":                      "zai",
 	"glm":                       "zai",
+	"zhipu":                     "zhipu-cn",
+	"bigmodel":                  "zhipu-cn",
+	"bigmodel.cn":               "zhipu-cn",
+	"open.bigmodel.cn":          "zhipu-cn",
 	"ark":                       "volcengine",
 	"volcengine-ark":            "volcengine",
 	"volcengine.com":            "volcengine",
@@ -649,6 +669,8 @@ func detectProvider(baseURL, model string) string {
 		return "xiaomimimo-cn"
 	case host == "api.z.ai" || strings.HasSuffix(host, ".z.ai"):
 		return "zai"
+	case host == "open.bigmodel.cn" || strings.HasSuffix(host, ".bigmodel.cn"):
+		return "zhipu-cn"
 	case host == "ark.cn-beijing.volces.com" || strings.HasSuffix(host, ".volces.com"):
 		return "volcengine"
 	case host == "api.kimi.com" || strings.HasSuffix(host, ".kimi.com"):

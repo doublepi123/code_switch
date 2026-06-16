@@ -43,6 +43,7 @@ Claude Code 支持：
 | `openrouter` | `https://openrouter.ai/api` | `anthropic/claude-sonnet-4.6` |
 | `opencode-go` | `https://opencode.ai/zen/go` | `minimax-m2.7` |
 | `xiaomimimo-cn` | `https://token-plan-cn.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `zhipu-cn` | `https://open.bigmodel.cn/api/anthropic` | `glm-5.2` |
 | `ollama` | `http://localhost:11434` | `qwen3-coder` |
 | `ollama-cloud` | `https://ollama.com` | `qwen3-coder:480b` |
 
@@ -59,6 +60,7 @@ Claude Code 支持：
 - `minimax-global` 对应 MiniMax 国际区 Token Plan，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
 - `openrouter` 默认使用 OpenRouter 官方 Claude 映射：haiku、sonnet、opus 会分别写入对应的官方模型；如果输入自定义模型名，则三档都会使用这个自定义模型
 - `deepseek` 使用 DeepSeek Anthropic 兼容接口，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
+- `zhipu-cn` 对应智谱（BigModel）国内 GLM Coding Plan（`open.bigmodel.cn`），API Key 会写入 `ANTHROPIC_AUTH_TOKEN`；国际端点（`z.ai`）使用 `zai` 预设，可用别名 `zhipu` / `bigmodel` 切到国内端点
 - `ollama` 使用本地 Ollama Anthropic 兼容接口，不要求 API Key；如果本地已经 `ollama signin`，也可以使用 `:cloud` 后缀模型
 - `ollama-cloud` 直接连接 `https://ollama.com`，需要在 Ollama settings 里创建 API Key；Claude Code 切换会把 Key 写入 `ANTHROPIC_AUTH_TOKEN`
 - Claude Code 使用 `ollama-cloud` 时，haiku、sonnet、opus 和 subagent 模型都会写成所选主模型，不会混用其他模型

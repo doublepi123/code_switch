@@ -627,6 +627,63 @@ func TestApplyPresetVolcengineUsesBearerAuth(t *testing.T) {
 	}
 }
 
+func TestApplyPresetZhipuCN(t *testing.T) {
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_API_KEY": "stale-api-key",
+		},
+	}
+
+	applyPreset(root, providerPresets["zhipu-cn"], "bigmodel-sk-test")
+
+	env := root["env"].(map[string]any)
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for zhipu-cn")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "bigmodel-sk-test" {
+		t.Fatalf("auth token = %v, want %v", got, "bigmodel-sk-test")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://open.bigmodel.cn/api/anthropic" {
+		t.Fatalf("base url = %v, want %v", got, "https://open.bigmodel.cn/api/anthropic")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "glm-5.2" {
+		t.Fatalf("model = %v, want %v", got, "glm-5.2")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "glm-4.5-air" {
+		t.Fatalf("haiku model = %v, want %v", got, "glm-4.5-air")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "glm-5-turbo" {
+		t.Fatalf("sonnet model = %v, want %v", got, "glm-5-turbo")
+	}
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "glm-5.2" {
+		t.Fatalf("opus model = %v, want %v", got, "glm-5.2")
+	}
+	if got := env["CLAUDE_CODE_SUBAGENT_MODEL"]; got != "glm-5-turbo" {
+		t.Fatalf("subagent model = %v, want %v", got, "glm-5-turbo")
+	}
+	if got := env["API_TIMEOUT_MS"]; got != "3000000" {
+		t.Fatalf("API_TIMEOUT_MS = %v, want %v", got, "3000000")
+	}
+}
+
+func TestApplyPresetZhipuCNGLM52OneMKnownModel(t *testing.T) {
+	root := map[string]any{}
+	preset := withSelectedModel(providerPresets["zhipu-cn"], "glm-5.2[1m]")
+	applyPreset(root, preset, "bigmodel-sk-test")
+
+	env := root["env"].(map[string]any)
+	if got := env["ANTHROPIC_MODEL"]; got != "glm-5.2[1m]" {
+		t.Fatalf("model = %v, want %v", got, "glm-5.2[1m]")
+	}
+	// glm-5.2[1m] is a known model without tier overrides, so the preset tiers are preserved.
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "glm-5.2" {
+		t.Fatalf("opus model = %v, want %v", got, "glm-5.2")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "glm-5-turbo" {
+		t.Fatalf("sonnet model = %v, want %v", got, "glm-5-turbo")
+	}
+}
+
 func TestApplyPresetVolcengineCustomModelForceTiers(t *testing.T) {
 	root := map[string]any{}
 	preset := withSelectedModel(providerPresets["volcengine"], "doubao-seed-2.0-pro")
@@ -1023,6 +1080,8 @@ func TestDetectProvider(t *testing.T) {
 		{baseURL: "https://ollama.com/v1", want: "ollama-cloud"},
 		{baseURL: "https://ark.cn-beijing.volces.com/api/coding", want: "volcengine"},
 		{baseURL: "https://ark.cn-beijing.volces.com/api/coding/v3", want: "volcengine"},
+		{baseURL: "https://open.bigmodel.cn/api/anthropic", want: "zhipu-cn"},
+		{baseURL: "https://api.z.ai/api/anthropic", want: "zai"},
 	}
 
 	for _, tc := range cases {
