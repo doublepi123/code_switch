@@ -42,7 +42,7 @@ Agent config paths can be overridden with `--claude-dir` and `--codex-dir`; app 
 
 Multi-file project (~2700 loc source, ~5200 loc tests). Key sections:
 
-- **Provider definitions**: `providerPresets` map in `presets.go`. Built-in providers: `deepseek`, `minimax-cn`, `minimax-global`, `openrouter`, `opencode-go`, `xiaomimimo-cn`, `ollama`, `ollama-cloud`. Adding a provider means adding a `ProviderPreset` entry, updating `detectProvider()`, and updating the three shell completion string constants in `main.go`.
+- **Provider definitions**: `providerPresets` map in `presets.go`. Built-in providers: `deepseek`, `minimax-cn`, `minimax-global`, `openrouter`, `opencode-go`, `xiaomimimo-cn`, `ollama`, `ollama-cloud`, `zai`, `zhipu-cn`, `volcengine`, `kimi-coding`. Adding a provider means adding a `ProviderPreset` entry, updating `detectProvider()`, and updating the three shell completion string constants in `main.go`.
 - **Ollama dynamic models**: `ollamaModels()` probes `http://localhost:11434/api/tags` (3s timeout) and returns discovered model names, falling back to the static `Models` list. Do not assume the static list is the full set available.
 - **Alias resolution**: `canonicalProviderName` resolves `providerAliases` (e.g. `minimax` → `minimax-cn`, `xiaomimimo` → `xiaomimimo-cn`).
 - **Legacy migration**: `loadAppConfig` auto-migrates an old `minimax` config key to `minimax-cn` via `migrateLegacyProviders`.
