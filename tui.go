@@ -96,6 +96,9 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			return restoreClaudeConfig(*claudeDir, out, *dryRun)
 		}
 	}
+	// Pre-register custom provider in the in-memory config so that
+	// resolveAgentProviderPreset can find it. The config is reloaded
+	// from disk before persisting, so this is only for resolution.
 	if (agent == agentClaude || agent == agentOpencode) && strings.TrimSpace(selection.BaseURL) != "" {
 		existingKey := strings.TrimSpace(cfg.Providers[selection.Provider].APIKey)
 		keyToSave := strings.TrimSpace(selection.APIKey)
@@ -151,14 +154,6 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 
-	if agent == agentClaude && strings.TrimSpace(selection.BaseURL) != "" {
-		existingKey := strings.TrimSpace(cfg.Providers[selection.Provider].APIKey)
-		keyToSave := strings.TrimSpace(selection.APIKey)
-		if keyToSave == "" {
-			keyToSave = existingKey
-		}
-		upsertProviderConfig(cfg, selection, keyToSave)
-	}
 	upsertProviderConfig(cfg, selection, apiKey)
 
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
@@ -178,7 +173,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 	default:
-		if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out, false); err != nil {
+		if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out, false, withTierOverrides{}); err != nil {
 			return err
 		}
 	}

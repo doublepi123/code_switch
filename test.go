@@ -97,7 +97,11 @@ func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderP
 	}
 
 	authEnv := strings.TrimSpace(preset.AuthEnv)
-	if authEnv == "ANTHROPIC_API_KEY" || authEnv == "" {
+	// Use preset.AuthEnv to determine auth method instead of brittle name comparison.
+	// ANTHROPIC_API_KEY (or empty/default for non-OpenRouter URLs) means x-api-key header;
+	// ANTHROPIC_AUTH_TOKEN or OpenRouter base URL means Bearer token.
+	isOpenRouter := strings.Contains(preset.BaseURL, "openrouter.ai")
+	if authEnv == "ANTHROPIC_API_KEY" || (authEnv == "" && !isOpenRouter) {
 		httpReq.Header.Set("x-api-key", apiKey)
 	} else {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)

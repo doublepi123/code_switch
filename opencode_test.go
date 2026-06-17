@@ -47,8 +47,10 @@ func TestOpencodeSwitchWritesJSONWithProviderBlock(t *testing.T) {
 	if got := options["baseURL"]; got != "https://api.deepseek.com/anthropic" {
 		t.Fatalf("baseURL = %v, want https://api.deepseek.com/anthropic", got)
 	}
-	if got := options["apiKey"]; got != "sk-ds-test" {
-		t.Fatalf("apiKey = %v, want sk-ds-test (plaintext)", got)
+	// apiKey should NOT be stored in plaintext in the OpenCode config;
+	// it is stored securely in the code-switch config instead.
+	if _, hasAPIKey := options["apiKey"]; hasAPIKey {
+		t.Fatalf("apiKey should not be stored in plaintext in opencode config")
 	}
 	models := providerEntry["models"].(map[string]any)
 	if _, ok := models["deepseek-v4-pro"]; !ok {
@@ -83,7 +85,7 @@ func keysOf(m map[string]any) []string {
 	return keys
 }
 
-func TestOpencodeSwitchWithPlaintextAPIKey(t *testing.T) {
+func TestOpencodeSwitchDoesNotStorePlaintextAPIKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	opencodeDir := filepath.Join(home, ".config", "opencode")
@@ -109,11 +111,22 @@ func TestOpencodeSwitchWithPlaintextAPIKey(t *testing.T) {
 		t.Fatalf("name = %v, want OpenRouter", got)
 	}
 	options := providerEntry["options"].(map[string]any)
-	if got := options["apiKey"]; got != "sk-or-test" {
-		t.Fatalf("apiKey = %v, want sk-or-test (plaintext)", got)
+	// apiKey should NOT be stored in plaintext in the OpenCode config.
+	if _, hasAPIKey := options["apiKey"]; hasAPIKey {
+		t.Fatalf("apiKey should not be stored in plaintext in opencode config")
 	}
-	// OpenRouter preset does not set AuthEnv, so it would default to ANTHROPIC_API_KEY
-	// but the config should store the key in plaintext, not as {env:...}
+	// Verify key is stored securely in code-switch config instead.
+	appBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read app config: %v", err)
+	}
+	var appCfg AppConfig
+	if err := json.Unmarshal(appBytes, &appCfg); err != nil {
+		t.Fatalf("unmarshal app config: %v", err)
+	}
+	if got := appCfg.Agents["opencode"].Providers["openrouter"].APIKey; got != "sk-or-test" {
+		t.Fatalf("opencode stored key = %q, want %q", got, "sk-or-test")
+	}
 }
 
 func TestOpencodeSwitchPreservesExistingProviders(t *testing.T) {

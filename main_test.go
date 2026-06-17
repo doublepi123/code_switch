@@ -958,7 +958,7 @@ func TestSwitchProviderOpenRouterOfficialOverrideResetsSavedCustomTierMapping(t 
 		},
 	}
 
-	if err := switchProvider("openrouter", cfg, "sk-existing", "anthropic/claude-opus-4.7", claudeDir, io.Discard, false); err != nil {
+	if err := switchProvider("openrouter", cfg, "sk-existing", "anthropic/claude-opus-4.7", claudeDir, io.Discard, false, withTierOverrides{}); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -1998,7 +1998,7 @@ func TestSwitchProviderCustomProvider(t *testing.T) {
 			},
 		},
 	}
-	if err := switchProvider("my-custom", cfg, "sk-custom", "", claudeDir, io.Discard, false); err != nil {
+	if err := switchProvider("my-custom", cfg, "sk-custom", "", claudeDir, io.Discard, false, withTierOverrides{}); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -2034,7 +2034,7 @@ func TestSwitchProviderCustomWithModelOverride(t *testing.T) {
 			},
 		},
 	}
-	if err := switchProvider("my-custom", cfg, "sk-custom", "custom-model-v3", claudeDir, io.Discard, false); err != nil {
+	if err := switchProvider("my-custom", cfg, "sk-custom", "custom-model-v3", claudeDir, io.Discard, false, withTierOverrides{}); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -2065,7 +2065,7 @@ func TestSwitchProviderSetsSubagentModel(t *testing.T) {
 	claudeDir := t.TempDir()
 
 	// deepseek sets subagent model
-	if err := switchProvider("deepseek", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-deepseek", "", claudeDir, io.Discard, false); err != nil {
+	if err := switchProvider("deepseek", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-deepseek", "", claudeDir, io.Discard, false, withTierOverrides{}); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -2086,7 +2086,7 @@ func TestSwitchProviderSetsSubagentModel(t *testing.T) {
 func TestSwitchProviderOpenRouterDoesNotSetSubagent(t *testing.T) {
 	claudeDir := t.TempDir()
 
-	if err := switchProvider("openrouter", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-or", "", claudeDir, io.Discard, false); err != nil {
+	if err := switchProvider("openrouter", &AppConfig{Providers: map[string]StoredProvider{}}, "sk-or", "", claudeDir, io.Discard, false, withTierOverrides{}); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 
@@ -3358,7 +3358,7 @@ func TestSwitchProviderWritesToWriter(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 	output := &bytes.Buffer{}
 
-	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output, false); err != nil {
+	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output, false, withTierOverrides{}); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -4669,7 +4669,7 @@ func TestSwitchProviderWritesToWriterDryRun(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 	output := &bytes.Buffer{}
 
-	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output, true); err != nil {
+	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output, true, withTierOverrides{}); err != nil {
 		t.Fatalf("switchProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -4807,7 +4807,7 @@ func TestUpgradeAssetNameBadOS(t *testing.T) {
 
 func TestSwitchProviderBadSettingsPath(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
-	err := switchProvider("deepseek", cfg, "sk-test", "", "/proc/root/settings.json", io.Discard, false)
+	err := switchProvider("deepseek", cfg, "sk-test", "", "/proc/root/settings.json", io.Discard, false, withTierOverrides{})
 	if err != nil {
 		// Expected - can't write to /proc
 	}

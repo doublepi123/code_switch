@@ -393,14 +393,21 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 	const maxDownloadSize = 500 * 1024 * 1024
 	written, err := io.Copy(file, io.LimitReader(resp.Body, maxDownloadSize))
 	if err != nil {
+		file.Close()
+		os.Remove(dest)
 		return err
 	}
 	if written == maxDownloadSize {
+		file.Close()
+		os.Remove(dest)
 		return fmt.Errorf("download exceeded maximum size of %d bytes; file may be corrupted", maxDownloadSize)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(dest)
+		return err
 	}
 	return nil
 }

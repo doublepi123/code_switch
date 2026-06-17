@@ -158,6 +158,20 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 			stored := codexProviderConfig(cfg, pa.Provider)
 			stored.APIKey = pa.APIKey
 			stored.Model = pa.Model
+			if shouldPersistTierOverrides {
+				if pa.Haiku != "" {
+					stored.Haiku = pa.Haiku
+				}
+				if pa.Sonnet != "" {
+					stored.Sonnet = pa.Sonnet
+				}
+				if pa.Opus != "" {
+					stored.Opus = pa.Opus
+				}
+				if pa.Subagent != "" {
+					stored.Subagent = pa.Subagent
+				}
+			}
 			setAgentProviderConfig(cfg, agentCodex, pa.Provider, stored)
 			if err := writeJSONAtomic(configPath, cfg); err != nil {
 				return err
@@ -166,18 +180,34 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return nil
 	}
 	if agent == agentOpencode {
-		// Call switchOpencodeProvider FIRST so it resolves the model and updates cfg in memory,
-		// then write the app config with the resolved model.
 		if err := switchOpencodeProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *opencodeDir, out, *dryRun); err != nil {
 			return err
 		}
 		if !*dryRun {
+			if shouldPersistTierOverrides {
+				stored := opencodeProviderConfig(cfg, pa.Provider)
+				if pa.Haiku != "" {
+					stored.Haiku = pa.Haiku
+				}
+				if pa.Sonnet != "" {
+					stored.Sonnet = pa.Sonnet
+				}
+				if pa.Opus != "" {
+					stored.Opus = pa.Opus
+				}
+				if pa.Subagent != "" {
+					stored.Subagent = pa.Subagent
+				}
+				setAgentProviderConfig(cfg, agentOpencode, pa.Provider, stored)
+			}
 			if err := writeJSONAtomic(configPath, cfg); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
+	// tierOverrides are only meaningful for Claude (the default agent).
+	// They are applied to the preset for display and persisted below.
 	if err := switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent}); err != nil {
 		return err
 	}
@@ -226,14 +256,13 @@ type withTierOverrides struct {
 	Subagent string
 }
 
-func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string, out io.Writer, dryRun bool, tierOverrides ...withTierOverrides) error {
+func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string, out io.Writer, dryRun bool, tierOverrides withTierOverrides) error {
 	preset, err := resolveSwitchPreset(provider, cfg, modelOverride)
 	if err != nil {
 		return err
 	}
 
-	if len(tierOverrides) > 0 {
-		o := tierOverrides[0]
+	if o := tierOverrides; o.Haiku != "" || o.Sonnet != "" || o.Opus != "" || o.Subagent != "" {
 		if v := strings.TrimSpace(o.Haiku); v != "" {
 			preset.Haiku = v
 		}

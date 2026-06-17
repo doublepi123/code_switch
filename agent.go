@@ -150,7 +150,30 @@ func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig
 		}
 		return preset, nil
 	case agentOpencode:
-		return resolveProviderPreset(provider, cfg)
+		preset, err := resolveProviderPreset(provider, cfg)
+		if err == nil {
+			return preset, nil
+		}
+		// Fallback: check agent-specific providers for custom opencode providers.
+		agentCfg := agentConfig(cfg, agentOpencode)
+		if stored, ok := agentCfg.Providers[provider]; ok && strings.TrimSpace(stored.BaseURL) != "" {
+			model := strings.TrimSpace(stored.Model)
+			if model == "" {
+				model = "custom-model"
+			}
+			return ProviderPreset{
+				Name:     firstNonEmpty(stored.Name, provider),
+				BaseURL:  strings.TrimSpace(stored.BaseURL),
+				Model:    model,
+				Models:   []string{model},
+				AuthEnv:  strings.TrimSpace(stored.AuthEnv),
+				Haiku:    firstNonEmpty(stored.Haiku, model),
+				Sonnet:   firstNonEmpty(stored.Sonnet, model),
+				Opus:     firstNonEmpty(stored.Opus, model),
+				Subagent: firstNonEmpty(stored.Subagent, model),
+			}, nil
+		}
+		return preset, err
 	default:
 		return resolveProviderPreset(provider, cfg)
 	}
@@ -170,7 +193,33 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 		}
 		return withSelectedModel(preset, model), nil
 	case agentOpencode:
-		return resolveSwitchPreset(provider, cfg, modelOverride)
+		preset, err := resolveSwitchPreset(provider, cfg, modelOverride)
+		if err == nil {
+			return preset, nil
+		}
+		// Fallback: check agent-specific providers for custom opencode providers.
+		agentCfg := agentConfig(cfg, agentOpencode)
+		if stored, ok := agentCfg.Providers[provider]; ok && strings.TrimSpace(stored.BaseURL) != "" {
+			model := strings.TrimSpace(modelOverride)
+			if model == "" {
+				model = strings.TrimSpace(stored.Model)
+			}
+			if model == "" {
+				model = "custom-model"
+			}
+			return ProviderPreset{
+				Name:     firstNonEmpty(stored.Name, provider),
+				BaseURL:  strings.TrimSpace(stored.BaseURL),
+				Model:    model,
+				Models:   []string{model},
+				AuthEnv:  strings.TrimSpace(stored.AuthEnv),
+				Haiku:    firstNonEmpty(stored.Haiku, model),
+				Sonnet:   firstNonEmpty(stored.Sonnet, model),
+				Opus:     firstNonEmpty(stored.Opus, model),
+				Subagent: firstNonEmpty(stored.Subagent, model),
+			}, nil
+		}
+		return preset, err
 	default:
 		return resolveSwitchPreset(provider, cfg, modelOverride)
 	}

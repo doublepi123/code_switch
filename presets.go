@@ -649,6 +649,8 @@ func applyStoredTierOverrides(preset *ProviderPreset, stored StoredProvider) {
 	}
 }
 
+// detectProvider identifies a provider from a base URL and optional model prefix.
+// It is heuristic-only and should not be used for security decisions.
 func detectProvider(baseURL, model string) string {
 	host := normalizedURLHost(baseURL)
 	switch {

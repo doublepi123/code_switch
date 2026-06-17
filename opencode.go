@@ -107,7 +107,6 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 		"name": preset.Name,
 		"options": map[string]any{
 			"baseURL": preset.BaseURL,
-			"apiKey":  apiKey,
 		},
 		"models": models,
 	}

@@ -61,15 +61,6 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 	}
 	configPath := codexConfigPath(codexDir)
 
-	if !dryRun {
-		cf := newConfigFile(configPath)
-		unlock, err := cf.lock()
-		if err != nil {
-			return err
-		}
-		defer unlock()
-	}
-
 	if dryRun {
 		fmt.Fprintf(out, "[dry-run] would switch Codex to %s\n", preset.Name)
 		fmt.Fprintf(out, "[dry-run] config: %s\n", configPath)
@@ -77,6 +68,13 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 		fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
 		return nil
 	}
+
+	cf := newConfigFile(configPath)
+	unlock, err := cf.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	existing, err := readTextFileIfExists(configPath)
 	if err != nil {
@@ -135,7 +133,7 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset, provider strin
 	fmt.Fprintf(&b, "name = %q\n", preset.Name)
 	fmt.Fprintf(&b, "base_url = %q\n", preset.BaseURL)
 	b.WriteString("wire_api = \"responses\"\n")
-	b.WriteString(fmt.Sprintf("\n[model_providers.%s.auth]\n", providerName))
+	fmt.Fprintf(&b, "\n[model_providers.%s.auth]\n", providerName)
 	b.WriteString("command = \"cs\"\n")
 	fmt.Fprintf(&b, "args = [\"token\", %q, \"--agent\", \"codex\"]\n", provider)
 	return b.String()
@@ -330,8 +328,9 @@ func isManagedCodexModel(model string, cfg *AppConfig) bool {
 		}
 	}
 	if cfg != nil {
-		for _, p := range []string{"ollama-cloud", "openrouter", "deepseek", "kimi-coding"} {
-			if strings.TrimSpace(codexProviderConfig(cfg, p).Model) == model {
+		agentCfg := agentConfig(cfg, agentCodex)
+		for _, stored := range agentCfg.Providers {
+			if strings.TrimSpace(stored.Model) == model {
 				return true
 			}
 		}
