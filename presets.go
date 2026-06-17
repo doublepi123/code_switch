@@ -391,7 +391,7 @@ var providerPresets = map[string]ProviderPreset{
 	"kimi-coding": {
 		Name:            "Kimi Coding",
 		BaseURL:         "https://api.kimi.com/coding/",
-		AuthEnv:         "ANTHROPIC_API_KEY",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		NoModel:         true,
 		ReasoningEffort: "xhigh",
 		Website:         "https://platform.kimi.com",

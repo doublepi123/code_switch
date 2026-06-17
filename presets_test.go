@@ -43,8 +43,8 @@ func TestKimiCodingNoModelThinking(t *testing.T) {
 	if preset.BaseURL != "https://api.kimi.com/coding/" {
 		t.Errorf("BaseURL = %q, want %q", preset.BaseURL, "https://api.kimi.com/coding/")
 	}
-	if preset.AuthEnv != "ANTHROPIC_API_KEY" {
-		t.Errorf("AuthEnv = %q, want ANTHROPIC_API_KEY", preset.AuthEnv)
+	if preset.AuthEnv != "ANTHROPIC_AUTH_TOKEN" {
+		t.Errorf("AuthEnv = %q, want ANTHROPIC_AUTH_TOKEN", preset.AuthEnv)
 	}
 	if got := preset.ExtraEnv["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]; got != "262144" {
 		t.Errorf("CLAUDE_CODE_AUTO_COMPACT_WINDOW = %v, want 262144", got)

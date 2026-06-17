@@ -702,11 +702,11 @@ func TestApplyPresetKimiCodingNoModel(t *testing.T) {
 	if got := env["ANTHROPIC_BASE_URL"]; got != "https://api.kimi.com/coding/" {
 		t.Fatalf("base url = %v, want https://api.kimi.com/coding/", got)
 	}
-	if got := env["ANTHROPIC_API_KEY"]; got != "kimi-sk-test" {
-		t.Fatalf("api key = %v, want kimi-sk-test", got)
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "kimi-sk-test" {
+		t.Fatalf("auth token = %v, want kimi-sk-test", got)
 	}
-	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
-		t.Fatalf("expected ANTHROPIC_AUTH_TOKEN to be unset for kimi-coding")
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for kimi-coding")
 	}
 	// Model name is intentionally left empty: Kimi routes by thinking mode, not model name.
 	for _, key := range []string{

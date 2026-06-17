@@ -60,6 +60,7 @@ Claude Code 支持：
 - `minimax-global` 对应 MiniMax 国际区 Token Plan，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
 - `openrouter` 默认使用 OpenRouter 官方 Claude 映射：haiku、sonnet、opus 会分别写入对应的官方模型；如果输入自定义模型名，则三档都会使用这个自定义模型
 - `deepseek` 使用 DeepSeek Anthropic 兼容接口，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
+- `kimi-coding` 使用 Kimi Coding Anthropic 兼容接口，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
 - `zhipu-cn` 对应智谱（BigModel）国内 GLM Coding Plan（`open.bigmodel.cn`），API Key 会写入 `ANTHROPIC_AUTH_TOKEN`；国际端点（`z.ai`）使用 `zai` 预设，可用别名 `zhipu` / `bigmodel` 切到国内端点
 - `ollama` 使用本地 Ollama Anthropic 兼容接口，不要求 API Key；如果本地已经 `ollama signin`，也可以使用 `:cloud` 后缀模型
 - `ollama-cloud` 直接连接 `https://ollama.com`，需要在 Ollama settings 里创建 API Key；Claude Code 切换会把 Key 写入 `ANTHROPIC_AUTH_TOKEN`
@@ -467,7 +468,7 @@ cs switch ollama-cloud --agent codex --codex-dir /path/to/.codex
 - `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK`
 - `CLAUDE_CODE_EFFORT_LEVEL`
 
-大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`，包括 `opencode-go` 的 MiniMax 和 DeepSeek 模型。`minimax-cn`、`minimax-global`、`deepseek`、`xiaomimimo-cn`、`ollama` 和 `ollama-cloud` provider 会写入 `ANTHROPIC_AUTH_TOKEN`。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
+大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`，包括 `opencode-go` 的 MiniMax 和 DeepSeek 模型。`minimax-cn`、`minimax-global`、`deepseek`、`xiaomimimo-cn`、`ollama`、`ollama-cloud` 和 `kimi-coding` provider 会写入 `ANTHROPIC_AUTH_TOKEN`。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
 
 Codex 的 API Key 不写入 TOML；Codex 运行时通过 `[model_providers.ollama-cloud.auth]` 调用 `cs token ollama-cloud --agent codex` 获取已保存的 key。
 
