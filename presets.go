@@ -308,7 +308,7 @@ var providerPresets = map[string]ProviderPreset{
 		Name:      "Z.AI GLM Coding Plan",
 		BaseURL:   "https://api.z.ai/api/anthropic",
 		Model:     "glm-5.1",
-		Models:    []string{"glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
+		Models:    []string{"glm-5.2[1m]", "glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
 		Haiku:     "glm-4.5-air",
 		Sonnet:    "glm-5-turbo",
 		Opus:      "glm-5.1",
@@ -318,6 +318,14 @@ var providerPresets = map[string]ProviderPreset{
 		APIKeyURL: "https://open.z.ai",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
+		},
+		ModelTierOverrides: map[string]ModelTiers{
+			"glm-5.2[1m]": {
+				Haiku:    "glm-5.2[1m]",
+				Sonnet:   "glm-5.2[1m]",
+				Opus:     "glm-5.2[1m]",
+				Subagent: "glm-5.2[1m]",
+			},
 		},
 	},
 	"zhipu-cn": {
