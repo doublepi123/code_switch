@@ -343,6 +343,14 @@ var providerPresets = map[string]ProviderPreset{
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 		},
+		ModelTierOverrides: map[string]ModelTiers{
+			"glm-5.2[1m]": {
+				Haiku:    "glm-5.2[1m]",
+				Sonnet:   "glm-5.2[1m]",
+				Opus:     "glm-5.2[1m]",
+				Subagent: "glm-5.2[1m]",
+			},
+		},
 	},
 	"ollama-cloud": {
 		Name:    "Ollama Cloud",

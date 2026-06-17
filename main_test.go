@@ -675,12 +675,18 @@ func TestApplyPresetZhipuCNGLM52OneMKnownModel(t *testing.T) {
 	if got := env["ANTHROPIC_MODEL"]; got != "glm-5.2[1m]" {
 		t.Fatalf("model = %v, want %v", got, "glm-5.2[1m]")
 	}
-	// glm-5.2[1m] is a known model without tier overrides, so the preset tiers are preserved.
-	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "glm-5.2" {
-		t.Fatalf("opus model = %v, want %v", got, "glm-5.2")
+	// glm-5.2[1m] has tier overrides, so all tiers point to it.
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "glm-5.2[1m]" {
+		t.Fatalf("opus model = %v, want %v", got, "glm-5.2[1m]")
 	}
-	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "glm-5-turbo" {
-		t.Fatalf("sonnet model = %v, want %v", got, "glm-5-turbo")
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "glm-5.2[1m]" {
+		t.Fatalf("sonnet model = %v, want %v", got, "glm-5.2[1m]")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "glm-5.2[1m]" {
+		t.Fatalf("haiku model = %v, want %v", got, "glm-5.2[1m]")
+	}
+	if got := env["CLAUDE_CODE_SUBAGENT_MODEL"]; got != "glm-5.2[1m]" {
+		t.Fatalf("subagent model = %v, want %v", got, "glm-5.2[1m]")
 	}
 }
 
