@@ -117,12 +117,12 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset, provider strin
 		b.WriteString(topLevel)
 		b.WriteString("\n\n")
 	}
-	fmt.Fprintf(&b, "model = %q\n", preset.Model)
+	fmt.Fprintf(&b, "model = %s\n", tomlQuoteBasicString(preset.Model))
 	providerName := codexTOMLProviderName(provider)
-	fmt.Fprintf(&b, "model_provider = %q\n", providerName)
+	fmt.Fprintf(&b, "model_provider = %s\n", tomlQuoteBasicString(providerName))
 	b.WriteString("approvals_reviewer = \"user\"\n")
 	if preset.ReasoningEffort != "" {
-		fmt.Fprintf(&b, "reasoning_effort = %q\n", preset.ReasoningEffort)
+		fmt.Fprintf(&b, "reasoning_effort = %s\n", tomlQuoteBasicString(preset.ReasoningEffort))
 	}
 
 	sections = strings.TrimSpace(sections)
@@ -132,12 +132,49 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset, provider strin
 		b.WriteString("\n\n")
 	}
 	fmt.Fprintf(&b, "[model_providers.%s]\n", providerName)
-	fmt.Fprintf(&b, "name = %q\n", preset.Name)
-	fmt.Fprintf(&b, "base_url = %q\n", preset.BaseURL)
+	fmt.Fprintf(&b, "name = %s\n", tomlQuoteBasicString(preset.Name))
+	fmt.Fprintf(&b, "base_url = %s\n", tomlQuoteBasicString(preset.BaseURL))
 	b.WriteString("wire_api = \"responses\"\n")
 	b.WriteString(fmt.Sprintf("\n[model_providers.%s.auth]\n", providerName))
 	b.WriteString("command = \"cs\"\n")
-	fmt.Fprintf(&b, "args = [\"token\", %q, \"--agent\", \"codex\"]\n", provider)
+	fmt.Fprintf(&b, "args = [\"token\", %s, \"--agent\", \"codex\"]\n", tomlQuoteBasicString(provider))
+	return b.String()
+}
+
+// tomlQuoteBasicString returns s formatted as a TOML basic string, surrounded
+// by double quotes. Unlike Go's %q verb, it emits only TOML-supported escapes
+// (\b, \t, \n, \f, \r, \", \\, and \uXXXX / \UXXXXXXXX) so the result is
+// always parseable by a TOML reader. Control characters without a dedicated
+// escape are emitted via \uXXXX; Go's \a, \v, and \xXX escapes are invalid in
+// TOML basic strings and are avoided. For normal printable strings the output
+// is byte-for-byte identical to %q, so existing configs are unchanged.
+func tomlQuoteBasicString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"':
+			b.WriteString(`\"`)
+		case c == '\\':
+			b.WriteString(`\\`)
+		case c == '\b':
+			b.WriteString(`\b`)
+		case c == '\t':
+			b.WriteString(`\t`)
+		case c == '\n':
+			b.WriteString(`\n`)
+		case c == '\f':
+			b.WriteString(`\f`)
+		case c == '\r':
+			b.WriteString(`\r`)
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, `\u%04X`, c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
 	return b.String()
 }
 
@@ -179,7 +216,7 @@ func isMultilineStringBoundary(line string) (enter bool, exit bool) {
 }
 
 // multilineValueSide reports whether the line is a `key = """` style opener
-// where `"""` (or `'''`) appears as the start of the value side and the value
+// where `"""` (or `”'`) appears as the start of the value side and the value
 // is not closed on the same line.
 func multilineValueSide(text, quote string) bool {
 	parts := strings.SplitN(text, "=", 2)
@@ -220,22 +257,36 @@ func splitBeforeFirstTOMLSection(content string) (string, string) {
 
 func restoreCodexConfig(codexDir string, cfg *AppConfig, out io.Writer, dryRun bool) error {
 	configPath := codexConfigPath(codexDir)
-	existing, err := readTextFileIfExists(configPath)
-	if err != nil {
-		return err
-	}
-	updated := removeCodexManagedTOML(existing, true, true, cfg)
+
 	if dryRun {
+		// Dry-run reads without locking so it never blocks other writers and
+		// must not modify the file; only the read error is propagated.
+		if _, err := readTextFileIfExists(configPath); err != nil {
+			return err
+		}
 		fmt.Fprintf(out, "[dry-run] would restore Codex official config\n")
 		fmt.Fprintf(out, "[dry-run] config: %s\n", configPath)
 		return nil
 	}
+
+	// Acquire the lock BEFORE reading so another writer cannot modify
+	// config.toml between our read and write. This mirrors switchCodexProvider:
+	// without the early lock, backupIfExists would back up the new content
+	// while writeTextAtomic writes the stale pre-lock snapshot, silently
+	// losing the other process's changes.
 	cf := newConfigFile(configPath)
 	unlock, err := cf.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+
+	existing, err := readTextFileIfExists(configPath)
+	if err != nil {
+		return err
+	}
+	updated := removeCodexManagedTOML(existing, true, true, cfg)
+
 	if err := backupIfExists(configPath); err != nil {
 		return err
 	}
@@ -455,7 +506,25 @@ func tomlStringValue(value string) string {
 }
 
 func tomlUnquoteString(value string) string {
-	value = strings.TrimPrefix(value, `"`)
+	// Single-line multiline basic string: """x""". Strip the outer triple
+	// quotes and unquote the inner content without treating a lone " as a
+	// terminator (a lone " is valid inside a multiline basic string).
+	if strings.HasPrefix(value, `"""`) && strings.HasSuffix(value, `"""`) && len(value) >= 6 {
+		return tomlUnquoteBasicInner(value[3:len(value)-3], false)
+	}
+	// Single-line basic string: "x". Trim the opening quote and unquote,
+	// stopping at the closing quote.
+	return tomlUnquoteBasicInner(strings.TrimPrefix(value, `"`), true)
+}
+
+// tomlUnquoteBasicInner decodes TOML basic-string escape sequences in the
+// content between the surrounding quotes. When stopAtQuote is true a lone
+// double quote terminates the value (single-line "x" semantics); when false
+// double quotes are emitted literally (single-line """x""" semantics, where
+// the closing triple quote has already been stripped). Supported escapes are
+// \b, \t, \n, \f, \r, \", \\, and \uXXXX / \UXXXXXXXX; unknown escapes are
+// emitted literally as backslash + char, preserving prior behavior.
+func tomlUnquoteBasicInner(value string, stopAtQuote bool) string {
 	var b strings.Builder
 	escaped := false
 	for i := 0; i < len(value); i++ {
@@ -467,10 +536,32 @@ func tomlUnquoteString(value string) string {
 				b.WriteByte('\n')
 			case 't':
 				b.WriteByte('\t')
+			case 'b':
+				b.WriteByte('\b')
+			case 'r':
+				b.WriteByte('\r')
+			case 'f':
+				b.WriteByte('\f')
 			case '\\':
 				b.WriteByte('\\')
 			case '"':
 				b.WriteByte('"')
+			case 'u':
+				if r, n := decodeHexEscape(value, i+1, 4); n > 0 {
+					b.WriteRune(r)
+					i += n
+				} else {
+					b.WriteByte('\\')
+					b.WriteByte(c)
+				}
+			case 'U':
+				if r, n := decodeHexEscape(value, i+1, 8); n > 0 {
+					b.WriteRune(r)
+					i += n
+				} else {
+					b.WriteByte('\\')
+					b.WriteByte(c)
+				}
 			default:
 				b.WriteByte('\\')
 				b.WriteByte(c)
@@ -481,7 +572,7 @@ func tomlUnquoteString(value string) string {
 			escaped = true
 			continue
 		}
-		if c == '"' {
+		if c == '"' && stopAtQuote {
 			return b.String()
 		}
 		b.WriteByte(c)
@@ -489,7 +580,39 @@ func tomlUnquoteString(value string) string {
 	return b.String()
 }
 
+// decodeHexEscape reads count hex digits from value starting at index start
+// and returns the decoded rune plus the number of bytes consumed. It returns
+// 0 bytes consumed when there are too few bytes remaining or a non-hex byte,
+// in which case callers emit the escape literally.
+func decodeHexEscape(value string, start, count int) (rune, int) {
+	if start < 0 || start+count > len(value) {
+		return 0, 0
+	}
+	var r rune
+	for j := 0; j < count; j++ {
+		h := value[start+j]
+		var v rune
+		switch {
+		case h >= '0' && h <= '9':
+			v = rune(h - '0')
+		case h >= 'a' && h <= 'f':
+			v = rune(h-'a') + 10
+		case h >= 'A' && h <= 'F':
+			v = rune(h-'A') + 10
+		default:
+			return 0, 0
+		}
+		r = r*16 + v
+	}
+	return r, count
+}
+
 func tomlUnquoteLiteralString(value string) string {
+	// Single-line multiline literal string: '''x'''. Strip the outer triple
+	// quotes; literal strings have no escape processing.
+	if strings.HasPrefix(value, "'''") && strings.HasSuffix(value, "'''") && len(value) >= 6 {
+		return value[3 : len(value)-3]
+	}
 	value = strings.TrimPrefix(value, "'")
 	end := strings.Index(value, "'")
 	if end < 0 {

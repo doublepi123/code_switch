@@ -216,7 +216,9 @@ func removeOpencodeManagedJSON(existing string, cfg *AppConfig) string {
 	}
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
-		return ""
+		// Preserve the original content rather than returning "" which
+		// restoreOpencodeConfig treats as a signal to os.Remove the file.
+		return existing
 	}
 	return string(data) + "\n"
 }
@@ -252,32 +254,69 @@ func currentOpencodeProvider(opencodeDir string) (string, string, string, string
 	baseURL := ""
 	authEnv := ""
 	providerName := ""
-	if raw, ok := root["provider"].(map[string]any); ok {
-		// Sort keys for deterministic iteration
-		keys := make([]string, 0, len(raw))
-		for key := range raw {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		// Find the first provider entry that has options.baseURL
+	raw, hasProviders := root["provider"].(map[string]any)
+	if !hasProviders {
+		return configPath, model, baseURL, authEnv, providerName, nil
+	}
+	// Sort keys for deterministic iteration
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	// applyOpencodePresetJSON never removes old provider entries, so after
+	// switching from provider A to provider B the JSON contains both. The
+	// active provider is the one whose "models" map contains root["model"];
+	// picking the first sorted provider with a baseURL reports the wrong
+	// provider/baseURL after switching. Match by model first, and only fall
+	// back to the first provider with a baseURL when no model match is found.
+	if model != "" {
 		for _, key := range keys {
-			val := raw[key]
-			if entry, ok := val.(map[string]any); ok {
-				if opts, ok := entry["options"].(map[string]any); ok {
-					if b, ok := opts["baseURL"].(string); ok {
-						baseURL = b
-						providerName = key
-						authEnv = deriveAuthEnvForProvider(key)
-						break
-					}
+			entry, ok := raw[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			models, ok := entry["models"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, has := models[model]; !has {
+				continue
+			}
+			if opts, ok := entry["options"].(map[string]any); ok {
+				if b, ok := opts["baseURL"].(string); ok {
+					baseURL = b
 				}
 			}
+			providerName = key
+			authEnv = deriveAuthEnvForProvider(key)
+			return configPath, model, baseURL, authEnv, providerName, nil
 		}
+	}
+	// Fall back to the first provider entry that has options.baseURL.
+	for _, key := range keys {
+		entry, ok := raw[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		opts, ok := entry["options"].(map[string]any)
+		if !ok {
+			continue
+		}
+		b, ok := opts["baseURL"].(string)
+		if !ok {
+			continue
+		}
+		baseURL = b
+		providerName = key
+		authEnv = deriveAuthEnvForProvider(key)
+		break
 	}
 	return configPath, model, baseURL, authEnv, providerName, nil
 }
 
 func deriveAuthEnvForProvider(provider string) string {
+	provider = canonicalProviderName(provider)
 	if preset, ok := providerPresets[provider]; ok {
 		authEnv := strings.TrimSpace(preset.AuthEnv)
 		if authEnv == "" {

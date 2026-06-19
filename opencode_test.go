@@ -485,9 +485,10 @@ func TestOpencodeListIncludesClaudeProviders(t *testing.T) {
 			t.Fatalf("list output missing provider %q:\n%s", name, out)
 		}
 	}
-	// Codex-only providers should not appear
-	if strings.Contains(out, "kimi-coding") {
-		// kimi-coding is also a Claude preset now, so it should appear
+	// kimi-coding is a Claude/opencode preset now (present in providerPresets,
+	// surfaced via sortedProviderNames), so it should appear in the list.
+	if !strings.Contains(out, "kimi-coding") {
+		t.Fatalf("list output missing kimi-coding:\n%s", out)
 	}
 }
 
@@ -557,12 +558,15 @@ func TestOpencodeSetKeyAndRemoveProvider(t *testing.T) {
 	}
 }
 
-func TestOpencodeCustomProviderSwitch(t *testing.T) {
+// TestOpencodeSwitchBuiltinPresetWithCustomModel switches to a built-in preset
+// (deepseek) with a custom --model override and verifies the JSON written by
+// applyOpencodePresetJSON. It is intentionally not a custom-provider test.
+func TestOpencodeSwitchBuiltinPresetWithCustomModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	opencodeDir := filepath.Join(home, ".config", "opencode")
 
-	// First create a custom provider via switch (which creates a stored custom provider)
+	// Switch to a built-in preset with a custom model override.
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"switch", "deepseek", "--agent", "opencode", "--api-key", "sk-ds-custom", "--model", "deepseek-v4-flash", "--opencode-dir", opencodeDir}, strings.NewReader(""), output); err != nil {
 		t.Fatalf("opencode switch returned error: %v", err)
@@ -592,5 +596,56 @@ func TestOpencodeCustomProviderSwitch(t *testing.T) {
 	models := providerEntry["models"].(map[string]any)
 	if _, ok := models["deepseek-v4-flash"]; !ok {
 		t.Fatalf("models missing deepseek-v4-flash key")
+	}
+}
+
+// TestOpencodeApplyPresetJSONCustomProviderKey exercises applyOpencodePresetJSON
+// with a provider key that is NOT in providerPresets (a user-created custom
+// provider), verifying the custom provider key is used as the JSON provider
+// block key, the default npm package (@ai-sdk/anthropic) is selected, and the
+// custom baseURL/model are written.
+func TestOpencodeApplyPresetJSONCustomProviderKey(t *testing.T) {
+	preset := ProviderPreset{
+		Name:    "Acme",
+		BaseURL: "https://api.acme.example/anthropic",
+		Model:   "acme-pro",
+		Models:  []string{"acme-pro"},
+	}
+	// "acme" is not a key in providerPresets, so this exercises the
+	// custom-provider-key path of applyOpencodePresetJSON.
+	out, err := applyOpencodePresetJSON("", preset, "acme", "sk-acme-test")
+	if err != nil {
+		t.Fatalf("applyOpencodePresetJSON returned error: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(out), &cfg); err != nil {
+		t.Fatalf("parse opencode config: %v", err)
+	}
+	if got := cfg["model"]; got != "acme-pro" {
+		t.Fatalf("model = %v, want acme-pro", got)
+	}
+	providers := cfg["provider"].(map[string]any)
+	providerEntry, ok := providers["acme"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider entry key should be 'acme', got keys: %v", keysOf(providers))
+	}
+	// Non-ollama custom provider defaults to the anthropic SDK package
+	// (opencodeNPMForProvider default for keys other than ollama/ollama-cloud).
+	if got := providerEntry["npm"]; got != "@ai-sdk/anthropic" {
+		t.Fatalf("npm = %v, want @ai-sdk/anthropic", got)
+	}
+	if got := providerEntry["name"]; got != "Acme" {
+		t.Fatalf("name = %v, want Acme", got)
+	}
+	options := providerEntry["options"].(map[string]any)
+	if got := options["baseURL"]; got != "https://api.acme.example/anthropic" {
+		t.Fatalf("baseURL = %v, want https://api.acme.example/anthropic", got)
+	}
+	if got := options["apiKey"]; got != "sk-acme-test" {
+		t.Fatalf("apiKey = %v, want sk-acme-test", got)
+	}
+	models := providerEntry["models"].(map[string]any)
+	if _, ok := models["acme-pro"]; !ok {
+		t.Fatalf("models missing acme-pro key")
 	}
 }

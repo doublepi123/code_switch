@@ -38,6 +38,10 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		return cmdConfigure(nil, in, out)
 	}
+	if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		printUsage(out)
+		return nil
+	}
 	if strings.HasPrefix(args[0], "-") {
 		return cmdConfigure(args, in, out)
 	}
@@ -67,9 +71,6 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdRemove(args[1:], in, out)
 	case "completion":
 		return cmdCompletion(args[1:], out)
-	case "help", "-h", "--help":
-		printUsage(out)
-		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -269,8 +270,8 @@ func cmdSetKey(args []string, out io.Writer) error {
 	provider := canonicalProviderName(remaining[0])
 
 	if agent == agentCodex {
-		if provider != "ollama-cloud" && provider != "openrouter" && provider != "deepseek" && provider != "kimi-coding" {
-			return fmt.Errorf("unsupported provider %q for agent codex", remaining[0])
+		if _, err := codexPresetForProvider(provider); err != nil {
+			return err
 		}
 		cfg, path, unlock, err := loadAppConfigLocked()
 		if err != nil {
@@ -299,7 +300,9 @@ func cmdSetKey(args []string, out io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("unsupported provider %q for agent opencode", remaining[0])
 		}
-		_ = preset
+		if preset.NoAPIKey {
+			return fmt.Errorf("provider %q does not require an API key", provider)
+		}
 		agentCfg := agentConfig(cfg, agentOpencode)
 		stored := agentCfg.Providers[provider]
 		stored.APIKey = remaining[1]
@@ -334,7 +337,6 @@ func cmdSetKey(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "saved api key for %s in %s\n", provider, path)
 	return nil
 }
-
 
 func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
@@ -437,6 +439,9 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 }
 func cmdCompletion(args []string, out io.Writer) error {
 	if len(args) == 0 {
+		return fmt.Errorf("usage: code-switch completion bash|zsh|fish")
+	}
+	if len(args) > 1 {
 		return fmt.Errorf("usage: code-switch completion bash|zsh|fish")
 	}
 	shell := strings.ToLower(strings.TrimSpace(args[0]))

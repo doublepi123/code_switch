@@ -12,6 +12,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"golang.org/x/term"
 )
 
 func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
@@ -44,24 +45,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		currentProvider = codexTOMLProviderKey(cp)
 		currentModel = cm
 	case agentOpencode:
-		_, cm, _, _, _, _ := currentOpencodeProvider(*opencodeDir)
-		currentModel = cm
-		if cm != "" {
-			for name, stored := range cfg.Providers {
-				if stored.Model == cm {
-					currentProvider = name
-					break
-				}
-			}
-		}
-		if currentProvider == "" {
-			for name, stored := range agentConfig(cfg, agentOpencode).Providers {
-				if stored.Model == cm {
-					currentProvider = name
-					break
-				}
-			}
-		}
+		currentProvider, currentModel = detectOpencodeCurrentProvider(cfg, *opencodeDir)
 	default:
 		currentProvider, currentModel = currentConfiguredProvider(cfg, *claudeDir)
 	}
@@ -103,6 +87,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			keyToSave = existingKey
 		}
 		upsertProviderConfig(cfg, selection, keyToSave)
+		mirrorOpencodeCustomProviderToShared(cfg, selection)
 	}
 
 	preset, err := resolveAgentProviderPreset(agent, provider, cfg)
@@ -160,6 +145,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		upsertProviderConfig(cfg, selection, keyToSave)
 	}
 	upsertProviderConfig(cfg, selection, apiKey)
+	mirrorOpencodeCustomProviderToShared(cfg, selection)
 
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		unlock()
@@ -222,7 +208,18 @@ func (ts *tuiState) buildModels(provider string) []string {
 }
 
 func (ts *tuiState) finishSelection(provider, model string) {
-	ov := ts.tierOverrides[provider]
+	ov, editedTiers := ts.tierOverrides[provider]
+	if !editedTiers && ts.cfg != nil {
+		// User never opened/saved Edit Tiers this session. Fall back to the
+		// stored values so previously persisted tier overrides (from
+		// `cs switch --haiku ...` or a prior Edit Tiers session) are preserved
+		// instead of being overwritten with empty strings by upsertProviderConfig.
+		if ts.agent == agentOpencode {
+			ov = opencodeProviderConfig(ts.cfg, provider)
+		} else {
+			ov = ts.cfg.Providers[provider]
+		}
+	}
 	ts.result = ConfigureSelection{
 		Agent:    string(ts.agent),
 		Provider: provider,
@@ -251,13 +248,20 @@ func (ts *tuiState) rebuildProviderList() {
 	filteredNames := make([]string, 0, len(ts.names))
 	selectedIndex := 0
 	for _, name := range ts.names {
+		isSelected := name == ts.selectedProvider
 		if name == customProviderOption {
+			if isSelected {
+				selectedIndex = len(filteredNames)
+			}
 			filteredNames = append(filteredNames, name)
 			ts.providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
 			ts.displayNames = append(ts.displayNames, name)
 			continue
 		}
 		if name == restoreProviderOption {
+			if isSelected {
+				selectedIndex = len(filteredNames)
+			}
 			filteredNames = append(filteredNames, name)
 			ts.providerList.AddItem("Restore official config...", agentDisplayName(ts.agent), 0, nil)
 			ts.displayNames = append(ts.displayNames, name)
@@ -267,7 +271,7 @@ func (ts *tuiState) rebuildProviderList() {
 		if err != nil {
 			continue
 		}
-		if name == ts.selectedProvider {
+		if isSelected {
 			selectedIndex = len(filteredNames)
 		}
 		filteredNames = append(filteredNames, name)
@@ -717,12 +721,18 @@ func (ts *tuiState) showKeyForm(provider, backPage string, onSave func()) {
 func (ts *tuiState) showKeyFormWithCancel(provider, backPage string, onSave func(), onCancel func()) {
 	currentValue := strings.TrimSpace(ts.typedAPIKeys[provider])
 	keyValue := currentValue
+	errLabel := tview.NewTextView()
+	errLabel.SetTextColor(tcell.ColorRed)
 	form := tview.NewForm()
 	form.AddPasswordField("API Key", currentValue, 0, '*', func(text string) {
 		keyValue = text
 	})
 	form.AddButton("Save", func() {
 		keyValue = strings.TrimSpace(keyValue)
+		if keyValue == "" {
+			errLabel.SetText("API key cannot be empty")
+			return
+		}
 		ts.typedAPIKeys[provider] = keyValue
 		ts.resetKeys[provider] = true
 		onSave()
@@ -743,6 +753,7 @@ func (ts *tuiState) showKeyFormWithCancel(provider, backPage string, onSave func
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
 	page.AddItem(help, 1, 0, false)
+	page.AddItem(errLabel, 1, 0, false)
 	page.AddItem(form, 0, 1, true)
 	ts.pages.AddAndSwitchToPage("key", page, true)
 	ts.app.SetFocus(form)
@@ -878,25 +889,7 @@ func (ts *tuiState) refreshCurrentConfig() {
 		ts.currentProvider = codexTOMLProviderKey(cp)
 		ts.currentModel = cm
 	case agentOpencode:
-		_, cm, _, _, _, _ := currentOpencodeProvider(ts.opencodeDir)
-		ts.currentModel = cm
-		ts.currentProvider = ""
-		if cm != "" {
-			for name, stored := range ts.cfg.Providers {
-				if stored.Model == cm {
-					ts.currentProvider = name
-					break
-				}
-			}
-		}
-		if ts.currentProvider == "" {
-			for name, stored := range agentConfig(ts.cfg, agentOpencode).Providers {
-				if stored.Model == cm {
-					ts.currentProvider = name
-					break
-				}
-			}
-		}
+		ts.currentProvider, ts.currentModel = detectOpencodeCurrentProvider(ts.cfg, ts.opencodeDir)
 	default:
 		ts.currentProvider, ts.currentModel = currentConfiguredProvider(ts.cfg, ts.claudeDir)
 	}
@@ -1159,13 +1152,24 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 
 func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string, error) {
 	fmt.Fprintf(out, "Enter API key for %s:\n", provider)
+	useTerminalMasking := term.IsTerminal(int(os.Stdin.Fd()))
 	for {
 		fmt.Fprint(out, "API key: ")
-		text, err := readLine(reader)
-		if err != nil {
-			return "", err
+		var key string
+		if useTerminalMasking {
+			raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(out)
+			if err != nil {
+				return "", err
+			}
+			key = strings.TrimSpace(string(raw))
+		} else {
+			text, err := readLine(reader)
+			if err != nil {
+				return "", err
+			}
+			key = strings.TrimSpace(text)
 		}
-		key := strings.TrimSpace(text)
 		if key != "" {
 			return key, nil
 		}
@@ -1317,4 +1321,61 @@ func buildModelList(cfg *AppConfig, provider string, customModels map[string]str
 		}
 	}
 	return filtered
+}
+
+// mirrorOpencodeCustomProviderToShared copies a custom opencode provider's base
+// URL/name/model/authEnv into the shared cfg.Providers map. upsertProviderConfig
+// routes opencode providers to the agent-scoped cfg.Agents[opencode].Providers
+// map, but resolveProviderPreset (used by resolveAgentProviderPreset and the
+// opencode switch via resolveSwitchPreset) only consults the shared cfg.Providers
+// map. Without this mirror, a newly-created custom opencode provider is
+// unresolvable and cmdConfigure fails with "unsupported provider".
+func mirrorOpencodeCustomProviderToShared(cfg *AppConfig, selection ConfigureSelection) {
+	if selection.Agent != string(agentOpencode) {
+		return
+	}
+	if strings.TrimSpace(selection.BaseURL) == "" {
+		return
+	}
+	shared := cfg.Providers[selection.Provider]
+	shared.BaseURL = strings.TrimSpace(selection.BaseURL)
+	if strings.TrimSpace(selection.Name) != "" {
+		shared.Name = strings.TrimSpace(selection.Name)
+	}
+	if strings.TrimSpace(selection.Model) != "" {
+		shared.Model = strings.TrimSpace(selection.Model)
+	}
+	if strings.TrimSpace(selection.AuthEnv) != "" {
+		shared.AuthEnv = strings.TrimSpace(selection.AuthEnv)
+	}
+	cfg.Providers[selection.Provider] = shared
+}
+
+// detectOpencodeCurrentProvider determines the current opencode provider key and
+// model from the opencode config. It uses detectProvider(baseURL, model) for
+// deterministic preset identification (so two providers sharing the same default
+// model no longer jump randomly during Go map iteration), falling back to the
+// model-match scan over shared and agent-scoped stored providers only when
+// detection returns the custom/unknown sentinel.
+func detectOpencodeCurrentProvider(cfg *AppConfig, opencodeDir string) (string, string) {
+	_, cm, baseURL, _, _, err := currentOpencodeProvider(opencodeDir)
+	if err != nil {
+		return "", ""
+	}
+	if provider := detectProvider(baseURL, cm); provider != customDetectedProvider {
+		return provider, cm
+	}
+	if cm != "" {
+		for name, stored := range cfg.Providers {
+			if stored.Model == cm {
+				return name, cm
+			}
+		}
+		for name, stored := range agentConfig(cfg, agentOpencode).Providers {
+			if stored.Model == cm {
+				return name, cm
+			}
+		}
+	}
+	return "", cm
 }

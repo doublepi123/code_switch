@@ -180,6 +180,11 @@ func writeJSONAtomic(path string, value any) error {
 		os.Remove(tmp)
 		return err
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		return err
@@ -214,6 +219,11 @@ func backupIfExists(path string) error {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return err
+	}
+	if err := f.Sync(); err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		return err

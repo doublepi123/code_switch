@@ -18,10 +18,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
-var errNoChecksumAvailable = errors.New("no checksum available (skipping verification)")
+var errNoChecksumAvailable = errors.New("no checksum available for release asset")
 
 func cmdUpgrade(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
@@ -132,11 +133,11 @@ func performUpgrade(opts upgradeOptions) error {
 	}
 
 	if err := verifyAssetChecksum(context.Background(), opts.client, opts.baseURL, opts.repo, targetTag, asset, archivePath, canonicalAsset); err != nil {
-		if errors.Is(err, errNoChecksumAvailable) {
-			fmt.Fprintf(opts.out, "checksum: %v\n", err)
-		} else {
-			return fmt.Errorf("checksum verification failed: %w", err)
-		}
+		// Fail closed: a release without a checksum, or a transient error
+		// fetching the checksum URL, must NOT let an unverified binary replace
+		// the running executable. Legitimate releases always publish checksums
+		// via CI, so aborting is the safe default.
+		return fmt.Errorf("checksum verification failed: %w", err)
 	}
 
 	binaryName := "cs"
@@ -252,13 +253,81 @@ func compareReleaseVersions(current, target string) (int, bool) {
 		return 1, true
 	case currentVersion.preRelease != "" && targetVersion.preRelease == "":
 		return -1, true
-	case currentVersion.preRelease > targetVersion.preRelease:
-		return 1, true
-	case currentVersion.preRelease < targetVersion.preRelease:
-		return -1, true
 	default:
+		// Both pre-release strings are present (or both empty). Compare per
+		// semver: split on '.', compare identifiers with numeric < non-numeric,
+		// numeric compared as integers, non-numeric lexically, and a shorter
+		// identifier set with an all-equal prefix ranks lower.
+		if cmp := comparePreRelease(currentVersion.preRelease, targetVersion.preRelease); cmp != 0 {
+			return cmp, true
+		}
 		return 0, true
 	}
+}
+
+// comparePreRelease compares two semver pre-release strings per the semver
+// specification, returning -1, 0, or 1. Equal strings (including both empty)
+// compare equal. A shorter identifier set with an all-equal prefix ranks lower
+// (e.g. "alpha" < "alpha.1"). Numeric identifiers (all digits) are compared as
+// integers and rank below non-numeric identifiers; non-numeric identifiers are
+// compared lexically.
+func comparePreRelease(a, b string) int {
+	if a == b {
+		return 0
+	}
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+	for i := 0; i < len(aParts) && i < len(bParts); i++ {
+		aID := aParts[i]
+		bID := bParts[i]
+		aNumeric := isNumericPreReleaseIdent(aID)
+		bNumeric := isNumericPreReleaseIdent(bID)
+		switch {
+		case aNumeric && bNumeric:
+			an, _ := strconv.Atoi(aID)
+			bn, _ := strconv.Atoi(bID)
+			switch {
+			case an < bn:
+				return -1
+			case an > bn:
+				return 1
+			}
+			continue
+		case aNumeric && !bNumeric:
+			return -1
+		case !aNumeric && bNumeric:
+			return 1
+		default:
+			switch {
+			case aID < bID:
+				return -1
+			case aID > bID:
+				return 1
+			}
+		}
+	}
+	// All shared identifiers are equal; the shorter set ranks lower.
+	switch {
+	case len(aParts) < len(bParts):
+		return -1
+	case len(aParts) > len(bParts):
+		return 1
+	}
+	return 0
+}
+
+// isNumericPreReleaseIdent reports whether s is a non-empty all-digit string,
+// matching semver's definition of a numeric pre-release identifier.
+func isNumericPreReleaseIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 type releaseVersion struct {
@@ -395,11 +464,15 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 	}
 	defer file.Close()
 	const maxDownloadSize = 500 * 1024 * 1024
-	written, err := io.Copy(file, io.LimitReader(resp.Body, maxDownloadSize))
+	// Use limit+1 so a download of exactly maxDownloadSize bytes is accepted:
+	// LimitReader stops at the limit and io.Copy returns nil, so checking for
+	// equality would falsely reject a legitimately-sized file. Only a copy
+	// that exceeds the limit indicates an oversized download.
+	written, err := io.Copy(file, io.LimitReader(resp.Body, maxDownloadSize+1))
 	if err != nil {
 		return err
 	}
-	if written == maxDownloadSize {
+	if written > maxDownloadSize {
 		return fmt.Errorf("download exceeded maximum size of %d bytes; file may be corrupted", maxDownloadSize)
 	}
 	return nil
@@ -457,6 +530,11 @@ func extractZipBinary(archivePath, binaryName, dest string) error {
 	return fmt.Errorf("archive does not contain %s", binaryName)
 }
 
+// maxExtractedBinarySize caps how large an extracted binary may be, guarding
+// against decompression bombs. Extraction is limited to this many bytes; a
+// copy that reaches the limit is rejected rather than silently truncated.
+const maxExtractedBinarySize = 256 * 1024 * 1024
+
 func writeExtractedBinary(src io.Reader, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
@@ -465,11 +543,18 @@ func writeExtractedBinary(src io.Reader, dest string) error {
 	if err != nil {
 		return err
 	}
-	// Limit extraction to 256 MiB to guard against decompression bombs.
-	limitedSrc := io.LimitReader(src, 256*1024*1024)
-	if _, err := io.Copy(file, limitedSrc); err != nil {
+	// Use limit+1 so we can detect when the source reaches or exceeds the
+	// cap: io.Copy returns nil when LimitReader exhausts its budget, so
+	// without this a decompression bomb would be silently truncated to
+	// maxExtractedBinarySize and the function would report success.
+	written, err := io.Copy(file, io.LimitReader(src, maxExtractedBinarySize+1))
+	if err != nil {
 		file.Close()
 		return err
+	}
+	if written >= maxExtractedBinarySize {
+		file.Close()
+		return fmt.Errorf("extracted binary exceeds maximum size of %d bytes; possible decompression bomb", maxExtractedBinarySize)
 	}
 	return file.Close()
 }
@@ -514,13 +599,18 @@ func replaceExecutable(src, target string) error {
 }
 
 func moveFile(src, target string) error {
-	if err := os.Rename(src, target); err == nil {
+	err := os.Rename(src, target)
+	if err == nil {
 		return nil
-	} else {
-		// Cross-device moves require copy+delete; other rename errors are real failures.
-		if copyErr := copyFile(src, target); copyErr != nil {
-			return fmt.Errorf("move %s to %s: rename: %v; copy: %w", src, target, err, copyErr)
-		}
+	}
+	// Only cross-device moves (EXDEV) require a copy+delete fallback; os.Rename
+	// is otherwise atomic and any other error (permission denied, EINVAL, etc.)
+	// is a real failure that must NOT silently degrade into a non-atomic copy.
+	if !errors.Is(err, syscall.EXDEV) {
+		return fmt.Errorf("move %s to %s: rename: %w", src, target, err)
+	}
+	if copyErr := copyFile(src, target); copyErr != nil {
+		return fmt.Errorf("move %s to %s: rename: %v; copy: %w", src, target, err, copyErr)
 	}
 	if err := os.Remove(src); err != nil {
 		fmt.Fprintf(os.Stderr, "code-switch: warning: could not remove temp file %s: %v\n", src, err)

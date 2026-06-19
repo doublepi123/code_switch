@@ -119,10 +119,10 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
 
 	pa, err := resolveProviderAndKeyFromConfig(agent, cfg, providerArg, *apiKey, *model)
 	if err != nil {
+		unlock()
 		return err
 	}
 	pa.Haiku = strings.TrimSpace(*haikuFlag)
@@ -132,7 +132,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 
 	shouldPersistTierOverrides := pa.Haiku != "" || pa.Sonnet != "" || pa.Opus != "" || pa.Subagent != ""
 
-	// Persist Claude CLI tier overrides to config after a successful switch.
+	// Apply Claude CLI tier overrides to cfg in memory; they are persisted after a successful switch.
 	if shouldPersistTierOverrides && agent == agentClaude {
 		stored := cfg.Providers[pa.Provider]
 		if pa.Haiku != "" {
@@ -150,16 +150,36 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		cfg.Providers[pa.Provider] = stored
 	}
 
+	// Release the app-config lock BEFORE switching. switchProvider/switchCodexProvider/
+	// switchOpencode each acquire their own per-target file lock; holding the app-config lock
+	// across those calls would nest locks. This mirrors cmdConfigure in tui.go, which unlocks
+	// before any switch call (see AGENTS.md).
+	unlock()
+
+	// persistAppConfig re-acquires the app-config lock and writes the in-memory cfg. It is called
+	// only after a successful switch so tier overrides and codex/opencode stored config persist
+	// only on success, preserving the previous behavior.
+	persistAppConfig := func() error {
+		cf := newConfigFile(configPath)
+		relock, err := cf.lock()
+		if err != nil {
+			return err
+		}
+		defer relock()
+		return writeJSONAtomic(configPath, cfg)
+	}
+
 	if agent == agentCodex {
+		// switchCodexProvider resolves the model and updates cfg in memory (setting stored.APIKey
+		// and stored.Model via setAgentProviderConfig), so we only need to persist cfg afterwards.
+		// Do NOT re-assign stored.Model from pa.Model here: when --model is absent pa.Model is "",
+		// which would clobber the model switchCodexProvider just persisted. The opencode path
+		// below follows the same convention.
 		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun); err != nil {
 			return err
 		}
 		if !*dryRun {
-			stored := codexProviderConfig(cfg, pa.Provider)
-			stored.APIKey = pa.APIKey
-			stored.Model = pa.Model
-			setAgentProviderConfig(cfg, agentCodex, pa.Provider, stored)
-			if err := writeJSONAtomic(configPath, cfg); err != nil {
+			if err := persistAppConfig(); err != nil {
 				return err
 			}
 		}
@@ -172,7 +192,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 			return err
 		}
 		if !*dryRun {
-			if err := writeJSONAtomic(configPath, cfg); err != nil {
+			if err := persistAppConfig(); err != nil {
 				return err
 			}
 		}
@@ -182,7 +202,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return err
 	}
 	if shouldPersistTierOverrides && !*dryRun {
-		if err := writeJSONAtomic(configPath, cfg); err != nil {
+		if err := persistAppConfig(); err != nil {
 			return err
 		}
 	}

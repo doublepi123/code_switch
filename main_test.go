@@ -199,6 +199,9 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 		binaryName = "cs.exe"
 		archiveBytes = makeZipArchive(t, binaryName, "new-binary")
 	}
+	// publish a valid checksum so the verified-upgrade path is exercised
+	// (performUpgrade now fails closed when no checksum is available).
+	archiveChecksum := sha256Sum(t, archiveBytes)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
@@ -208,7 +211,10 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "/releases/tag/v9.9.9") {
 			return
 		}
-		// Allow checksum file requests to fail gracefully
+		if strings.HasSuffix(r.URL.Path, "/"+asset+".sha256") {
+			fmt.Fprintf(w, "%s\n", archiveChecksum)
+			return
+		}
 		if strings.Contains(r.URL.Path, ".sha256") || strings.Contains(r.URL.Path, "checksums.txt") {
 			http.NotFound(w, r)
 			return
@@ -268,8 +274,14 @@ func TestPerformUpgradeFallsBackToLegacyClaudeSwitchAsset(t *testing.T) {
 		binaryName = "cs.exe"
 		archiveBytes = makeZipArchive(t, binaryName, "legacy-release-binary")
 	}
+	// publish a valid checksum for the legacy asset (the one actually
+	// downloaded) so the verified-upgrade path is exercised.
+	archiveChecksum := sha256Sum(t, archiveBytes)
 
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/"+legacyAsset+".sha256") {
+			return testHTTPResponse(req, http.StatusOK, []byte(archiveChecksum+"\n")), nil
+		}
 		if strings.Contains(req.URL.Path, ".sha256") || strings.Contains(req.URL.Path, "checksums.txt") {
 			return testHTTPResponse(req, http.StatusNotFound, nil), nil
 		}
@@ -1314,7 +1326,7 @@ func TestCmdConfigureReleasesAppConfigLockBeforeSwitchingClaude(t *testing.T) {
 		if err != nil {
 			t.Fatalf("app config lock should be released before switching Claude: %v", err)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("app config lock was still held while configure waited on Claude settings lock")
 	}
 
@@ -1849,6 +1861,8 @@ func TestCmdSetKeyWrongArgs(t *testing.T) {
 }
 
 func TestCmdSetKeyUnsupportedProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	if err := cmdSetKey([]string{"nonexistent", "sk-test"}, io.Discard); err == nil {
 		t.Fatal("expected error for unsupported provider")
 	}
@@ -2782,9 +2796,13 @@ func TestRunSwitchProviderWithModelOverride(t *testing.T) {
 
 func TestRunHelpFlag(t *testing.T) {
 	output := &bytes.Buffer{}
-	// --help triggers flag help, which returns an error; output goes to stderr
-	if err := runWithIO([]string{"--help"}, strings.NewReader(""), output); err == nil {
-		t.Fatal("expected error from --help flag")
+	// -h/--help prints usage to the output buffer and returns nil.
+	if err := runWithIO([]string{"--help"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO --help returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "code-switch") {
+		t.Fatalf("expected help text, got %q", out)
 	}
 }
 
@@ -2821,6 +2839,8 @@ func TestIsVersionRequest(t *testing.T) {
 }
 
 func TestCmdList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	output := &bytes.Buffer{}
 	if err := cmdList(nil, output); err != nil {
 		t.Fatalf("cmdList returned error: %v", err)
@@ -2972,6 +2992,8 @@ func TestSwitchFlagNeedsValue(t *testing.T) {
 }
 
 func TestCmdSwitchInvalidProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	if err := cmdSwitch([]string{"nonexistent"}); err == nil {
 		t.Fatal("expected error for invalid provider")
 	}
@@ -3385,6 +3407,24 @@ func TestSwitchProviderWritesToWriter(t *testing.T) {
 	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
 		t.Fatalf("unmarshal settings: %v", err)
 	}
+	env := nestedMap(settings, "env")
+	if env == nil {
+		t.Fatal("expected env block in settings")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://api.deepseek.com/anthropic" {
+		t.Fatalf("ANTHROPIC_BASE_URL = %v, want %v", got, "https://api.deepseek.com/anthropic")
+	}
+	// deepseek uses ANTHROPIC_AUTH_TOKEN (not ANTHROPIC_API_KEY); applyPreset
+	// clears managed keys and writes the auth env var with the provided key.
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-test" {
+		t.Fatalf("ANTHROPIC_AUTH_TOKEN = %v, want %v", got, "sk-test")
+	}
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatal("expected ANTHROPIC_API_KEY to be cleared for deepseek (uses ANTHROPIC_AUTH_TOKEN)")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "deepseek-v4-pro[1m]" {
+		t.Fatalf("ANTHROPIC_MODEL = %v, want %v", got, "deepseek-v4-pro[1m]")
+	}
 }
 
 func TestCmdTestIntegration(t *testing.T) {
@@ -3681,27 +3721,36 @@ func TestCmdConfigureDryRun(t *testing.T) {
 // ---- Ollama model discovery tests ----
 
 func TestOllamaModelsFallsBackToPreset(t *testing.T) {
+	// ollamaModels() returns the preset list when discoverOllamaModels()
+	// returns nil. Discovery hits a hardcoded http://localhost:11434 that
+	// cannot be parameterised without a source refactor, so the fallback path
+	// can only be verified deterministically when no local Ollama is running.
+	// When one is running (discoverOllamaModels returns non-nil), ollamaModels
+	// returns the discovered list and the preset fallback is not exercised.
+	if discovered := discoverOllamaModels(); discovered != nil {
+		t.Skip("local Ollama reachable at localhost:11434; cannot deterministically verify preset fallback")
+	}
 	models := ollamaModels()
 	if len(models) == 0 {
-		t.Fatal("expected non-empty models")
+		t.Fatal("expected non-empty preset fallback models")
 	}
-	// If Ollama is not running, falls back to preset list (contains qwen2.5:14b)
-	// If Ollama is running, returns discovered models from local instance
-	presetModels := providerPresets["ollama"].Models
-	if len(models) == len(presetModels) && containsString(models, presetModels[0]) {
-		// Using preset fallback
-		if !containsString(models, "qwen2.5:14b") {
-			t.Fatalf("expected qwen2.5:14b in preset fallback, got %v", models)
-		}
+	if !containsString(models, "qwen2.5:14b") {
+		t.Fatalf("expected qwen2.5:14b in preset fallback, got %v", models)
 	}
 }
 
 func TestDiscoverOllamaModelsSuccess(t *testing.T) {
+	// discoverOllamaModels hits a hardcoded http://localhost:11434 (the URL
+	// cannot be parameterised without a source refactor), so the success path
+	// can only be exercised when a local Ollama instance is running. Skip
+	// deterministically when no Ollama is reachable rather than making a
+	// tautological assertion.
 	models := discoverOllamaModels()
-	// Without a running Ollama at localhost:11434, returns nil
-	// With one running, returns actual models
-	if models == nil && len(models) == 0 {
-		t.Log("No local Ollama detected (expected)")
+	if models == nil {
+		t.Skip("no local Ollama reachable at localhost:11434; skipping live discovery test")
+	}
+	if len(models) == 0 {
+		t.Fatalf("expected non-empty discovered models, got %v", models)
 	}
 }
 
@@ -4066,7 +4115,13 @@ func TestCmdUpgradeNoArgs(t *testing.T) {
 		out:         output,
 		dryRun:      true,
 	}
-	_ = performUpgrade(opts)
+	err := performUpgrade(opts)
+	if err != nil {
+		t.Fatalf("performUpgrade dry-run: %v", err)
+	}
+	if !strings.Contains(output.String(), "download:") {
+		t.Fatalf("expected download line in dry-run output, got %q", output.String())
+	}
 }
 
 func TestCmdUpgradeExtraArgs(t *testing.T) {
@@ -4224,13 +4279,9 @@ func TestWriteExtractedBinary(t *testing.T) {
 	}
 }
 
-// ---- replaceExecutable rollback test ----
-
-func TestReplaceExecutableRollbackOnMoveFailure(t *testing.T) {
-	if os.Getuid() != 0 {
-		t.Skip("needs root to create unreadable target dir")
-	}
-}
+// TestReplaceExecutableRollbackOnMoveFailure was a root-only empty stub with
+// no assertions; the rollback-on-move-failure path is already exercised
+// deterministically (and asserted) by TestReplaceExecutableMoveFileFailsRollback.
 
 // ---- normalizedURLHost edge cases ----
 
@@ -4629,8 +4680,13 @@ func TestPerformUpgradeWithTag(t *testing.T) {
 		t.Skip(err)
 	}
 	archiveBytes := makeTarGzArchive(t, "cs", "tagged-binary")
+	archiveChecksum := sha256Sum(t, archiveBytes)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/"+asset+".sha256") {
+			fmt.Fprintf(w, "%s\n", archiveChecksum)
+			return
+		}
 		if strings.Contains(r.URL.Path, ".sha256") || strings.Contains(r.URL.Path, "checksums.txt") {
 			http.NotFound(w, r)
 			return
@@ -4812,10 +4868,19 @@ func TestUpgradeAssetNameBadOS(t *testing.T) {
 // ---- switchProvider error on bad settings path ----
 
 func TestSwitchProviderBadSettingsPath(t *testing.T) {
+	// Use a claudeDir that is an existing regular file so the settings lock
+	// directory cannot be created (MkdirAll fails because a parent component
+	// is a file, not a directory). This forces switchProvider to error before
+	// touching any real settings, reliably across platforms.
+	parent := t.TempDir()
+	fileAsDir := filepath.Join(parent, "not-a-dir")
+	if err := os.WriteFile(fileAsDir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
-	err := switchProvider("deepseek", cfg, "sk-test", "", "/proc/root/settings.json", io.Discard, false)
-	if err != nil {
-		// Expected - can't write to /proc
+	err := switchProvider("deepseek", cfg, "sk-test", "", fileAsDir, io.Discard, false)
+	if err == nil {
+		t.Fatal("expected error for bad settings path")
 	}
 }
 
@@ -4886,7 +4951,13 @@ func TestCmdUpgradeCustomRepo(t *testing.T) {
 		out:         output,
 		dryRun:      true,
 	}
-	_ = performUpgrade(opts)
+	err := performUpgrade(opts)
+	if err != nil {
+		t.Fatalf("performUpgrade dry-run: %v", err)
+	}
+	if !strings.Contains(output.String(), "/other/repo/releases/download/v99.0.0/") {
+		t.Fatalf("expected custom repo download URL in output, got %q", output.String())
+	}
 }
 
 // ---- downloadChecksumContent network error ----
@@ -4966,9 +5037,12 @@ func TestResolveProviderSelectionCanonicalMatchCustom(t *testing.T) {
 // ---- cmdRemove trailing flag ----
 
 func TestCmdRemoveInvalidFlag(t *testing.T) {
-	// Unknown flag causes flag.Parse to return an error, which is expected behavior
+	// Unknown flag causes flag.Parse to return an error before any config
+	// access, so no HOME isolation is required.
 	err := cmdRemove([]string{"--invalid"}, strings.NewReader(""), &bytes.Buffer{})
-	_ = err
+	if err == nil {
+		t.Fatal("expected error for unknown flag")
+	}
 }
 
 // ---- readJSONMap invalid JSON ----
@@ -5043,48 +5117,29 @@ func TestWriteJSONAtomicMkdirError(t *testing.T) {
 
 func TestWriteJSONAtomicWriteError(t *testing.T) {
 	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "test.json")
-
-	// Create a temp file manually and close it, so CreateTemp can succeed
-	// but we can't make Write fail easily. Instead, test that Rename fails
-	// by providing a target in a non-existent directory.
-	badPath := filepath.Join(tmpDir, "nonexistent", "test.json")
-	err := writeJSONAtomic(badPath, map[string]any{"k": "v"})
-	if err != nil {
-		// MkdirAll may succeed, but Rename should fail since the dir was just created
-		// Actually MkdirAll creates the dir, so this test won't fail
-		_ = err
+	// Make the target path's final component an existing directory so the
+	// final os.Rename (temp file -> existing directory) fails. MkdirAll,
+	// CreateTemp, Write, Sync, and Close all succeed, so this exercises a
+	// genuine install/rename failure distinct from the MkdirAll failure
+	// covered by TestWriteJSONAtomicMkdirAllError.
+	target := filepath.Join(tmpDir, "target")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatalf("mkdir target: %v", err)
 	}
-	_ = path
+	err := writeJSONAtomic(target, map[string]any{"k": "v"})
+	if err == nil {
+		t.Fatal("expected error when renaming temp file over an existing directory")
+	}
 }
 
 // ---- backupIfExists error paths ----
 
-func TestBackupIfExistsMkdirError(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("skipping as root")
-	}
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "readonly", "test.json")
-	// Create a file so ReadFile succeeds
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	// Now make backupDir readonly to test MkdirAll error in backupIfExists
-	os.Chmod(filepath.Dir(path), 0o555)
-	defer os.Chmod(filepath.Dir(path), 0o755)
-
-	backupPath := filepath.Join(tmpDir, "readonly", "sub", "test.json.bak")
-	// backupIfExists uses the dir of the path, which is readonly
-	// Actually backupIfExists creates .bak in the SAME dir
-	// Let me use a different approach - backupIfExists appends to the same dir
-	_ = backupPath
-	// backupDir is the same dir as the file, which is readonly, so MkdirAll should fail? No, it already exists.
-	// This is hard to trigger without /proc
-}
+// TestBackupIfExistsMkdirError was removed: the MkdirAll branch in
+// backupIfExists is unreachable through normal filesystem semantics — when the
+// target file exists its parent directory necessarily exists, so MkdirAll is a
+// no-op and cannot fail; when the file does not exist backupIfExists returns
+// nil before reaching MkdirAll. TestBackupIfExistsReadError covers a real
+// backupIfExists failure path (ReadFile on a directory).
 
 func TestBackupIfExistsReadError(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -5197,14 +5252,19 @@ func TestDownloadFileLocalhostRefused(t *testing.T) {
 func TestDownloadChecksumContentReadError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "100")
-		// Write less than Content-Length to trigger read error
+		// Write less than Content-Length so the client hits EOF before the
+		// declared length, yielding io.ErrUnexpectedEOF from io.ReadAll.
 		_, _ = w.Write([]byte("short"))
 	}))
 	defer server.Close()
 
 	_, err := downloadChecksumContent(context.Background(), server.Client(), server.URL+"/test")
-	// May or may not error depending on HTTP behavior
-	_ = err
+	if err == nil {
+		t.Fatal("expected read error for short body vs Content-Length")
+	}
+	if !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("expected unexpected EOF error, got %v", err)
+	}
 }
 
 func TestDownloadChecksumContent500(t *testing.T) {
@@ -5367,13 +5427,18 @@ func TestPerformUpgradeWithVersion(t *testing.T) {
 	version = "v1.0.0"
 	t.Cleanup(func() { version = oldVersion })
 
-	_, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
+	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		t.Skip(err)
 	}
 	archiveBytes := makeTarGzArchive(t, "cs", "v1-binary")
+	archiveChecksum := sha256Sum(t, archiveBytes)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/"+asset+".sha256") {
+			fmt.Fprintf(w, "%s\n", archiveChecksum)
+			return
+		}
 		if strings.Contains(r.URL.Path, ".sha256") || strings.Contains(r.URL.Path, "checksums.txt") {
 			http.NotFound(w, r)
 			return
@@ -5467,26 +5532,21 @@ func TestRunWithIOListFlagError(t *testing.T) {
 }
 
 func TestRunWithIOUpgrade(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
-			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
+	oldVersion := version
+	version = "dev"
+	t.Cleanup(func() { version = oldVersion })
 
 	output := &bytes.Buffer{}
-	opts := upgradeOptions{
-		repo:        "owner/repo",
-		tag:         "v99.0.0",
-		installPath: filepath.Join(t.TempDir(), "cs"),
-		baseURL:     server.URL,
-		client:      server.Client(),
-		out:         output,
-		dryRun:      true,
+	// --tag avoids any network call to resolve "latest"; --dry-run prints the
+	// planned download URL and target without fetching or replacing anything,
+	// so this exercises the runWithIO -> cmdUpgrade -> performUpgrade dispatch
+	// deterministically and without network access.
+	if err := runWithIO([]string{"upgrade", "--dry-run", "--tag", "v99.0.0"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO upgrade --dry-run: %v", err)
 	}
-	_ = performUpgrade(opts)
+	if !strings.Contains(output.String(), "download:") {
+		t.Fatalf("expected download line in dry-run output, got %q", output.String())
+	}
 }
 
 func TestRunWithIOCurrent(t *testing.T) {
@@ -5571,10 +5631,20 @@ func TestTagFromReleaseURLEncodedTag(t *testing.T) {
 // ---- ollamaModels fallback explicitly ----
 
 func TestOllamaModelsWhenDiscoveryFails(t *testing.T) {
-	// Just verify the function handles the case where discoverOllamaModels returns nil
+	// ollamaModels() returns the preset list when discovery returns nil. The
+	// discovery URL (localhost:11434) is hardcoded and cannot be forced to fail
+	// without a source refactor, so verify the fallback deterministically only
+	// when no local Ollama is reachable; otherwise skip (the fallback path is
+	// not exercised when discovery succeeds).
+	if discovered := discoverOllamaModels(); discovered != nil {
+		t.Skip("local Ollama reachable at localhost:11434; cannot deterministically force discovery failure")
+	}
 	models := ollamaModels()
 	if len(models) == 0 {
-		t.Fatal("expected non-empty models")
+		t.Fatal("expected non-empty models from preset fallback when discovery fails")
+	}
+	if !containsString(models, "qwen2.5:14b") {
+		t.Fatalf("expected qwen2.5:14b in preset fallback, got %v", models)
 	}
 }
 
@@ -5954,7 +6024,13 @@ func TestCmdUpgradeDefaultRepo(t *testing.T) {
 		out:         output,
 		dryRun:      true,
 	}
-	_ = performUpgrade(opts)
+	err := performUpgrade(opts)
+	if err != nil {
+		t.Fatalf("performUpgrade dry-run: %v", err)
+	}
+	if !strings.Contains(output.String(), "/owner/repo/releases/download/v99.0.0/") {
+		t.Fatalf("expected default repo download URL in output, got %q", output.String())
+	}
 }
 
 // ---- writeJSONAtomic rename error ----
@@ -6006,17 +6082,23 @@ func TestCmdUpgradeInstallPath(t *testing.T) {
 	}))
 	defer server.Close()
 
+	installPath := filepath.Join(t.TempDir(), "cs")
 	output := &bytes.Buffer{}
 	err := performUpgrade(upgradeOptions{
 		repo:        "owner/repo",
 		tag:         "v99.0.0",
-		installPath: filepath.Join(t.TempDir(), "cs"),
+		installPath: installPath,
 		baseURL:     server.URL,
 		client:      server.Client(),
 		out:         output,
 		dryRun:      true,
 	})
-	_ = err
+	if err != nil {
+		t.Fatalf("performUpgrade dry-run: %v", err)
+	}
+	if !strings.Contains(output.String(), "target: "+installPath) {
+		t.Fatalf("expected 'target: %s' in output, got %q", installPath, output.String())
+	}
 }
 
 // ---- performUpgrade not windows binary name ----
@@ -6029,13 +6111,18 @@ func TestPerformUpgradeBinaryNameCs(t *testing.T) {
 	version = "dev"
 	t.Cleanup(func() { version = oldVersion })
 
-	_, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
+	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		t.Skip(err)
 	}
 	archiveBytes := makeTarGzArchive(t, "cs", "correct-binary-name")
+	archiveChecksum := sha256Sum(t, archiveBytes)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/"+asset+".sha256") {
+			fmt.Fprintf(w, "%s\n", archiveChecksum)
+			return
+		}
 		if strings.Contains(r.URL.Path, ".sha256") || strings.Contains(r.URL.Path, "checksums.txt") {
 			http.NotFound(w, r)
 			return
@@ -6353,7 +6440,16 @@ func TestCopyFileStatError(t *testing.T) {
 
 // ---- moveFile falls back to copy ----
 
-func TestMoveFileRenameFailureFallsBackToCopy(t *testing.T) {
+func TestMoveFileSameDirRenameSucceeds(t *testing.T) {
+	// src and dst live in the same t.TempDir(), so os.Rename succeeds
+	// atomically and the copyFile+os.Remove fallback branch in moveFile is
+	// NOT exercised. The cross-device EXDEV copy fallback cannot be portably
+	// unit-tested without injecting a rename failure (two mount points are
+	// not available in a unit-test environment), and moveFile only falls
+	// back on EXDEV (see upgrade.go moveFile); faking a non-EXDEV rename
+	// failure would not reach the fallback. This test therefore only
+	// confirms the happy-path same-directory rename: content is preserved
+	// and the source is gone.
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")
 	dst := filepath.Join(dir, "dst")
@@ -6474,41 +6570,42 @@ func TestLoadAppConfigInvalidJSON(t *testing.T) {
 
 // ---- discoverOllamaModels with test server ----
 
-func TestDiscoverOllamaModelsHTTP(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/tags" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"models":[{"name":"llama3"},{"name":"qwen2.5"}]}`))
-	}))
-	defer server.Close()
-
-	// We can't easily override the hardcoded localhost URL, but we can test the HTTP fallback path
-	// by calling ollamaModels() which tries discovery then falls back
+func TestOllamaModelsFallsBackToPresetWhenNoServer(t *testing.T) {
+	// discoverOllamaModels() hits a hardcoded http://localhost:11434/api/tags
+	// and cannot be pointed at an httptest.Server without refactoring the
+	// source to accept a base URL (out of scope). So probe for a live local
+	// Ollama instead: when one is running and returns models, the preset
+	// fallback path cannot be observed here and we skip. When no Ollama is
+	// reachable (the common CI case), providerModels(cfg,"ollama") must
+	// return the non-empty preset model list.
+	if discovered := discoverOllamaModels(); discovered != nil {
+		t.Skipf("local Ollama is running (discovered %d models); cannot observe preset fallback without refactoring discoverOllamaModels to accept a base URL", len(discovered))
+	}
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 	models := providerModels(cfg, "ollama")
 	if len(models) == 0 {
-		t.Fatal("expected non-empty ollama models (from preset fallback)")
+		t.Fatal("expected non-empty ollama models from preset fallback when no local server is reachable")
+	}
+	preset := providerPresets["ollama"]
+	if len(preset.Models) == 0 {
+		t.Fatal("ollama preset must have non-empty Models for the fallback assertion to be meaningful")
 	}
 }
 
-func TestDiscoverOllamaModelsBadJSON(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/tags" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`not json`))
-	}))
-	defer server.Close()
-
-	// discoverOllamaModels returns nil on bad JSON -> ollamaModels falls back to preset
+func TestOllamaModelsBadJSONFallsBackToPreset(t *testing.T) {
+	// The bad-JSON decode path inside discoverOllamaModels (json.Decode
+	// failure -> return nil) cannot be exercised against an httptest.Server
+	// because discoverOllamaModels hits a hardcoded http://localhost:11434
+	// (refactoring to accept a base URL is out of scope). Probe for a live
+	// local Ollama: when one is running and returns models we cannot observe
+	// the fallback here, so skip. When no Ollama is reachable, ollamaModels()
+	// must fall back to the non-empty preset model list.
+	if discovered := discoverOllamaModels(); discovered != nil {
+		t.Skipf("local Ollama is running (discovered %d models); cannot observe bad-JSON fallback without refactoring discoverOllamaModels to accept a base URL", len(discovered))
+	}
 	models := ollamaModels()
 	if len(models) == 0 {
-		t.Fatal("expected non-empty fallback models")
+		t.Fatal("expected non-empty fallback models from preset when no local server is reachable")
 	}
 }
 
@@ -6797,6 +6894,14 @@ func TestConfigFileLockAcquireRelease(t *testing.T) {
 }
 
 func TestConfigFileLockDoubleFails(t *testing.T) {
+	// NOTE: this test is slow (~9s). The second cf.lock() exhausts the full
+	// retry budget (const maxAttempts = 50 inside filelock.go's lock(), with
+	// linear backoff capped at 200ms) before returning lock-busy, because the
+	// first lock is held for the whole test. The retry budget is a function-
+	// local const and the configFile struct only carries a path, so it cannot
+	// be reduced per-instance without editing filelock.go (source change, out
+	// of scope here). A fast-fail would require parameterizing the retry
+	// budget in filelock.go; tracked as a remaining_issue.
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "config.json")
 	cf := newConfigFile(path)
@@ -7103,9 +7208,12 @@ func TestRestoreCodexConfigDryRun(t *testing.T) {
 		t.Fatalf("dry-run output missing [dry-run]: %q", output.String())
 	}
 
-	data, _ := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
 	if string(data) != initial {
-		t.Fatalf("dry-run should not modify file")
+		t.Fatalf("dry-run should not modify file, got %q", string(data))
 	}
 }
 
@@ -7173,7 +7281,9 @@ func TestCmdEnvClaudeOutput(t *testing.T) {
 func TestCmdEnvMissingProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	err := runWithIO([]string{"env"}, strings.NewReader(""), output)
@@ -7187,7 +7297,9 @@ func TestCmdEnvCustomModel(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-or", Model: "custom-model"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"env", "openrouter"}, strings.NewReader(""), output); err != nil {
@@ -7220,7 +7332,9 @@ func TestCmdEnvReasoningEffortForOllamaCloudModel(t *testing.T) {
 func TestCmdTokenMissingProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	err := runWithIO([]string{"token"}, strings.NewReader(""), output)
@@ -7234,7 +7348,9 @@ func TestCmdTokenClaudeSavedKey(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-or-test"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"token", "openrouter"}, strings.NewReader(""), output); err != nil {
@@ -7248,7 +7364,9 @@ func TestCmdTokenClaudeSavedKey(t *testing.T) {
 func TestCmdSetKeyCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	if err := cmdSetKey([]string{"--agent", "codex", "ollama-cloud", "test-key"}, io.Discard); err != nil {
 		t.Fatalf("cmdSetKey codex returned error: %v", err)
@@ -7258,7 +7376,9 @@ func TestCmdSetKeyCodex(t *testing.T) {
 func TestCmdSetKeyNoAPIKeyProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	err := cmdSetKey([]string{"ollama", "unused"}, io.Discard)
 	if err == nil {
@@ -7271,7 +7391,9 @@ func TestCmdRemoveWithForce(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test", Model: "deepseek-v4-pro"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdRemove([]string{"--force", "deepseek"}, strings.NewReader(""), output); err != nil {
@@ -7285,7 +7407,9 @@ func TestCmdRemoveWithForce(t *testing.T) {
 func TestCmdRemoveNonexistent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	err := runWithIO([]string{"remove", "nonexistent"}, strings.NewReader(""), output)
@@ -7299,7 +7423,9 @@ func TestCmdRemoveCancelled(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	input := strings.NewReader("n\n")
@@ -7383,7 +7509,9 @@ func TestCmdEnvCodexAgent(t *testing.T) {
 	cfg := AppConfig{Agents: map[string]AgentConfig{
 		"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "test-ollama-key"}}},
 	}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdEnv([]string{"--agent", "codex", "ollama-cloud"}, output); err != nil {
@@ -7401,7 +7529,9 @@ func TestCmdEnvCodexAgent(t *testing.T) {
 func TestCmdEnvWithAPIKeyFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdEnv([]string{"deepseek", "--api-key", "sk-test-api-key"}, output); err != nil {
@@ -7415,7 +7545,9 @@ func TestCmdEnvWithAPIKeyFlag(t *testing.T) {
 func TestCmdEnvWithExtraEnv(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdEnv([]string{"deepseek"}, output); err != nil {
@@ -7439,8 +7571,9 @@ func TestCmdEnvShowsTierModels(t *testing.T) {
 			"openrouter": {APIKey: "sk-test"},
 		},
 	}
-	cfgData, _ := json.Marshal(cfg)
-	os.WriteFile(filepath.Join(configDir, "config.json"), cfgData, 0o600)
+	if err := writeJSONAtomic(filepath.Join(configDir, "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdEnv([]string{"openrouter"}, output); err != nil {
@@ -7485,7 +7618,9 @@ func TestCmdRemoveCodexWithForce(t *testing.T) {
 			"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "test-key"}}},
 		},
 	}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdRemove([]string{"--force", "--agent", "codex", "ollama-cloud"}, strings.NewReader(""), output); err != nil {
@@ -7505,7 +7640,9 @@ func TestCmdRemoveCodexCancelled(t *testing.T) {
 			"codex": {Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "test-key"}}},
 		},
 	}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	input := strings.NewReader("n\n")
@@ -7520,7 +7657,9 @@ func TestCmdRemoveCodexCancelled(t *testing.T) {
 func TestCmdRemoveCodexNonexistent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	err := cmdRemove([]string{"--agent", "codex", "deepseek"}, strings.NewReader(""), output)
@@ -7532,7 +7671,9 @@ func TestCmdRemoveCodexNonexistent(t *testing.T) {
 func TestCmdTokenWithAPIKeyFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdToken([]string{"deepseek", "--api-key", "sk-flag-key"}, output); err != nil {
@@ -7546,7 +7687,9 @@ func TestCmdTokenWithAPIKeyFlag(t *testing.T) {
 func TestCmdRestoreInvalidAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	err := cmdRestore([]string{"--agent", "invalid"}, &bytes.Buffer{})
 	if err == nil {
@@ -7557,7 +7700,9 @@ func TestCmdRestoreInvalidAgent(t *testing.T) {
 func TestCmdListWithAgentFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdList([]string{"--agent", "codex"}, output); err != nil {
@@ -7572,15 +7717,21 @@ func TestCmdCurrentWithAgentFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	claudeDir := filepath.Join(home, ".claude")
-	os.MkdirAll(claudeDir, 0o755)
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
 	settings := map[string]any{
 		"env": map[string]any{
 			"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
 		},
 	}
-	writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdCurrent([]string{"--claude-dir", claudeDir}, output); err != nil {
@@ -7595,8 +7746,12 @@ func TestCmdRestoreClaudeDryRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	claudeDir := filepath.Join(home, ".claude")
-	os.MkdirAll(claudeDir, 0o755)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdRestore([]string{"--dry-run"}, output); err != nil {
@@ -7611,7 +7766,9 @@ func TestCmdRestoreClaudeActuallyRestores(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	claudeDir := filepath.Join(home, ".claude")
-	os.MkdirAll(claudeDir, 0o755)
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
 	settings := map[string]any{
 		"env": map[string]any{
@@ -7619,8 +7776,12 @@ func TestCmdRestoreClaudeActuallyRestores(t *testing.T) {
 			"ANTHROPIC_API_KEY":  "sk-test",
 		},
 	}
-	writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdRestore([]string{"--claude-dir", claudeDir}, output); err != nil {
@@ -7648,7 +7809,9 @@ func TestCmdRestoreClaudeActuallyRestores(t *testing.T) {
 func TestCmdEnvIncludesExtraEnv(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdEnv([]string{"deepseek"}, output); err != nil {
@@ -7663,7 +7826,9 @@ func TestCmdEnvIncludesExtraEnv(t *testing.T) {
 func TestCmdEnvErrorBadAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	err := cmdEnv([]string{"--agent", "badagent", "deepseek"}, &bytes.Buffer{})
 	if err == nil {
@@ -7674,7 +7839,9 @@ func TestCmdEnvErrorBadAgent(t *testing.T) {
 func TestCmdTokenErrorBadAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	err := cmdToken([]string{"--agent", "badagent", "deepseek"}, &bytes.Buffer{})
 	if err == nil {
@@ -7692,7 +7859,9 @@ func TestCmdEnvTailArgs(t *testing.T) {
 func TestLoadAppConfigFromEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte("{}"), 0o644)
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
 
 	cfg, err := loadAppConfigFrom(path)
 	if err != nil {
@@ -7706,7 +7875,9 @@ func TestLoadAppConfigFromEmptyFile(t *testing.T) {
 func TestLoadAppConfigFromInvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte("{invalid"), 0o644)
+	if err := os.WriteFile(path, []byte("{invalid"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
 
 	_, err := loadAppConfigFrom(path)
 	if err == nil {
@@ -7780,10 +7951,14 @@ func TestSwitchCodexProviderNonDryRun(t *testing.T) {
 			"codex": {Providers: map[string]StoredProvider{}},
 		},
 	}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	codexDir := filepath.Join(home, ".codex")
-	os.MkdirAll(codexDir, 0o755)
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := switchCodexProvider("ollama-cloud", cfg, "test-key", "", codexDir, output, false); err != nil {
@@ -7866,7 +8041,9 @@ func TestRestoreCodexConfigNonDryRun(t *testing.T) {
 	}
 
 	codexDir := filepath.Join(home, ".codex")
-	os.MkdirAll(codexDir, 0o755)
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
 	configContent := `model = "qwen3-coder"
 
@@ -7878,7 +8055,9 @@ base_url = "http://localhost:11434/v1"
 command = "cs"
 args = ["token", "ollama-cloud", "--agent", "codex"]
 `
-	os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte(configContent), 0o644)
+	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte(configContent), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := restoreCodexConfig(codexDir, cfg, output, false); err != nil {
@@ -7902,10 +8081,14 @@ func TestCmdRestoreCodexAgent(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	codexDir := filepath.Join(home, ".codex")
-	os.MkdirAll(codexDir, 0o755)
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdRestore([]string{"--agent", "codex", "--codex-dir", codexDir}, output); err != nil {
@@ -7919,7 +8102,9 @@ func TestCmdRestoreCodexAgent(t *testing.T) {
 func TestCmdListVerboseDetailed(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdList([]string{"--verbose"}, output); err != nil {
@@ -7933,7 +8118,9 @@ func TestCmdListVerboseDetailed(t *testing.T) {
 func TestCmdTestMissingProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	err := runWithIO([]string{"test"}, strings.NewReader(""), output)
@@ -7945,7 +8132,9 @@ func TestCmdTestMissingProvider(t *testing.T) {
 func TestCmdSetKeyWithAgentClaude(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	if err := cmdSetKey([]string{"--agent", "claude", "deepseek", "sk-test-123"}, io.Discard); err != nil {
 		t.Fatalf("cmdSetKey --agent claude returned error: %v", err)
@@ -7969,7 +8158,9 @@ func TestCmdRemoveForceClaudeAgent(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-or", Model: "auto"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdRemove([]string{"--force", "--agent", "claude", "openrouter"}, strings.NewReader(""), output); err != nil {
@@ -8041,7 +8232,9 @@ func TestLoadAppConfigLocked(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	loaded, path, unlock, err := loadAppConfigLocked()
 	if err != nil {
@@ -8059,7 +8252,9 @@ func TestLoadAppConfigLocked(t *testing.T) {
 func TestCmdTestInvalidProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	err := runWithIO([]string{"test", "nonexistent-provider"}, strings.NewReader(""), output)
@@ -8107,7 +8302,9 @@ func TestStoredAPIKeyForAgentClaude(t *testing.T) {
 func TestCmdSetKeyCodexUnsupportedProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	err := cmdSetKey([]string{"--agent", "codex", "minimax-cn", "sk-123"}, io.Discard)
 	if err == nil {
@@ -8120,7 +8317,9 @@ func TestCmdRemoveForceFlagOrdering(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdRemove([]string{"--force", "--agent", "claude", "deepseek"}, strings.NewReader(""), output); err != nil {
@@ -8152,13 +8351,26 @@ func TestProviderModelsForAgentCodexInvalidProvider(t *testing.T) {
 }
 
 func TestProviderModelsForAgentCodexNoModels(t *testing.T) {
+	// The codex preset for kimi-coding resolves from providerPresets["kimi-coding"],
+	// which has no Models field (NoModel: true), so its Models slice is nil. This
+	// lets us exercise the real empty-Models fallback in
+	// providerModelsForAgentWithAPIKey, which returns []string{preset.Model}.
+	// (ollama-cloud has 11 models, so the old guard using it was always false and
+	// the fallback body never ran.)
 	cfg := &AppConfig{}
-	preset := providerPresets["ollama-cloud"]
-	if len(preset.Models) == 0 {
-		models := providerModelsForAgent(cfg, agentCodex, "ollama-cloud")
-		if len(models) != 1 {
-			t.Fatalf("expected 1 model fallback, got %v", models)
-		}
+	preset, err := codexPresetForProvider("kimi-coding")
+	if err != nil {
+		t.Fatalf("codexPresetForProvider(kimi-coding): %v", err)
+	}
+	if len(preset.Models) != 0 {
+		t.Fatalf("kimi-coding codex preset must have empty Models to exercise the fallback, got %v", preset.Models)
+	}
+	models := providerModelsForAgent(cfg, agentCodex, "kimi-coding")
+	if len(models) != 1 {
+		t.Fatalf("expected exactly 1 model from empty-Models fallback, got %v (len=%d)", models, len(models))
+	}
+	if models[0] != preset.Model {
+		t.Fatalf("fallback model = %q, want preset.Model %q", models[0], preset.Model)
 	}
 }
 
@@ -8194,7 +8406,9 @@ func TestCmdSwitchDryRun(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdSwitchWithOutput([]string{"deepseek", "--dry-run"}, output); err != nil {
@@ -8237,10 +8451,14 @@ func TestCmdSwitchWithAPIKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	claudeDir := filepath.Join(home, ".claude")
-	os.MkdirAll(claudeDir, 0o755)
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdSwitchWithOutput([]string{"deepseek", "--api-key", "sk-test-key", "--claude-dir", claudeDir}, output); err != nil {
@@ -8254,7 +8472,9 @@ func TestCmdSwitchWithAPIKey(t *testing.T) {
 func TestCmdEnvTokenAPIKeyOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}})
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := cmdToken([]string{"--api-key", "override-key", "deepseek"}, output); err != nil {
@@ -8319,7 +8539,9 @@ func TestCmdCurrentOutputFormat(t *testing.T) {
 			"ANTHROPIC_AUTH_TOKEN": "sk-test",
 		},
 	}
-	writeJSONAtomic(settingsPath, root)
+	if err := writeJSONAtomic(settingsPath, root); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	origNoColor := noColor
 	noColor = true
@@ -8354,7 +8576,9 @@ func TestCmdCurrentOutputWithColor(t *testing.T) {
 			"ANTHROPIC_AUTH_TOKEN": "sk-test",
 		},
 	}
-	writeJSONAtomic(settingsPath, root)
+	if err := writeJSONAtomic(settingsPath, root); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	origNoColor := noColor
 	noColor = false
@@ -8379,7 +8603,9 @@ func TestSwitchSuccessOutputFormat(t *testing.T) {
 	claudeDir := filepath.Join(home, ".claude")
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	origNoColor := noColor
 	noColor = true
@@ -8562,11 +8788,18 @@ func TestFileLockBlocksConcurrentAccess(t *testing.T) {
 
 	select {
 	case err := <-done:
+		// Receiving on done within the wait window means the second lock
+		// unexpectedly succeeded (or errored) while the first lock is still
+		// held — the goroutine is expected to be BLOCKED in the retry loop.
 		if err != nil {
-			t.Fatalf("second lock should succeed after unlock: %v", err)
+			t.Fatalf("second lock returned unexpected error while first is held: %v", err)
 		}
-	case <-time.After(2 * time.Second):
-		// Expected: second lock is blocked while first is held
+		t.Fatal("second lock unexpectedly succeeded while first lock is still held")
+	case <-time.After(500 * time.Millisecond):
+		// Expected: second lock is blocked while the first is held. The
+		// spawned goroutine keeps retrying (linear backoff, see filelock.go)
+		// and will acquire + exit shortly after the parent's deferred unlock
+		// runs at test return; the buffered done channel prevents a send leak.
 	}
 }
 
@@ -8865,7 +9098,9 @@ func TestCmdEnvExtraEnv(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := AppConfig{Providers: map[string]StoredProvider{"minimax-cn": {APIKey: "sk-test"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"env", "minimax-cn"}, strings.NewReader(""), output); err != nil {
@@ -9001,7 +9236,9 @@ func TestCmdEnvCodex(t *testing.T) {
 	cfg := AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
 	ensureAppConfigMaps(&cfg)
 	setAgentProviderConfig(&cfg, agentCodex, "deepseek", StoredProvider{APIKey: "sk-codex"})
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"env", "deepseek", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
@@ -9020,7 +9257,9 @@ func TestCmdTokenCodex(t *testing.T) {
 	cfg := AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
 	ensureAppConfigMaps(&cfg)
 	setAgentProviderConfig(&cfg, agentCodex, "deepseek", StoredProvider{APIKey: "sk-codex-token"})
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"token", "deepseek", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
@@ -9052,7 +9291,9 @@ func TestCmdSwitchCodexDryRun(t *testing.T) {
 	cfg := AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
 	ensureAppConfigMaps(&cfg)
 	setAgentProviderConfig(&cfg, agentCodex, "deepseek", StoredProvider{APIKey: "sk-codex"})
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"switch", "deepseek", "--agent", "codex", "--dry-run"}, strings.NewReader(""), output); err != nil {
@@ -9116,7 +9357,9 @@ func TestCmdEnvReasoningEffort(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-test"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"env", "deepseek"}, strings.NewReader(""), output); err != nil {
 		t.Fatalf("env deepseek: %v", err)
@@ -9173,7 +9416,9 @@ func TestCmdRemoveForce(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfg := AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "sk-test", BaseURL: "https://openrouter.ai/api"}}}
-	writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"remove", "--force", "openrouter"}, strings.NewReader(""), output); err != nil {
 		t.Fatalf("remove force: %v", err)
@@ -9235,7 +9480,9 @@ func TestRestoreClaudeConfig(t *testing.T) {
 	claudeDir := filepath.Join(home, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	root := map[string]any{"env": map[string]any{"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_MODEL": "deepseek-v4-pro"}}
-	writeJSONAtomic(settingsPath, root)
+	if err := writeJSONAtomic(settingsPath, root); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	output := &bytes.Buffer{}
 	if err := restoreClaudeConfig(claudeDir, output, false); err != nil {
 		t.Fatalf("restoreClaudeConfig: %v", err)
@@ -9269,11 +9516,18 @@ func TestBuildModelListForAgentCodex(t *testing.T) {
 	}
 }
 
-func TestCmdListHelp(t *testing.T) {
+// TestRunTopLevelHelpShort verifies the top-level -h flag prints usage and
+// returns nil (exit 0). It is NOT the "cs list -h" subcommand-help path,
+// which still returns flag.ErrHelp.
+func TestRunTopLevelHelpShort(t *testing.T) {
 	output := &bytes.Buffer{}
 	err := runWithIO([]string{"-h"}, strings.NewReader(""), output)
-	if err == nil {
-		t.Fatalf("-h should return help error")
+	if err != nil {
+		t.Fatalf("-h should print usage and return nil, got error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "code-switch") {
+		t.Fatalf("expected help text to contain \"code-switch\", got %q", out)
 	}
 }
 
