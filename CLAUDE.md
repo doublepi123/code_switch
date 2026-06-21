@@ -43,8 +43,10 @@ Multi-file Go project (~2700 lines of source + ~5200 lines of tests).
 - `presets.go` (490 lines): provider presets, types (ProviderPreset, StoredProvider, AppConfig), model resolution, detection
 - `switch.go` (156 lines): `switch` subcommand, `applyPreset()` which writes env vars to settings.json
 - `tui.go` (730 lines): interactive TUI via tview, fallback text prompts, custom provider forms
-- `test.go` (137 lines): `test` subcommand for API connectivity checks
+- `test.go` (137 lines): `test` subcommand for API connectivity checks (incl. `--all` batch probe)
 - `upgrade.go` (583 lines): self-upgrade from GitHub releases with checksum verification
+- `env.go` / `token.go` logic in `env.go`: `env` (multi-shell `--shell`) and `token` subcommands
+- `models.go`, `default.go`, `backups.go`, `diff.go`, `doctor.go`, `export.go`, `snapshot.go`: additional subcommands and the JSON rendering helpers (`--json` output for `current`/`list`)
 
 **Provider system:**
 - `providerPresets` map in `presets.go`: built-in providers (minimax-cn, minimax-global, openrouter, opencode-go, deepseek, xiaomimimo-cn, ollama, ollama-cloud)
@@ -70,4 +72,4 @@ Multi-file Go project (~2700 lines of source + ~5200 lines of tests).
 - `writeJSONAtomic()` in `config.go`: writes via temp file then rename, chmod 0o600
 - `detectProvider()` in `presets.go`: identifies provider from base URL pattern
 
-**CLI subcommands:** `list`, `configure` (default, interactive TUI), `current`, `set-key`, `switch`, `restore`, `test`, `remove`, `upgrade`, `completion`
+**CLI subcommands:** `list`, `models`, `configure` (default, interactive TUI), `current`, `set-key`, `switch`, `default`, `env`, `token`, `restore`, `diff`, `test`, `remove`, `backups`, `doctor`, `export`, `import`, `upgrade`, `completion`. Several read commands take `--json` for machine-readable output; `env` takes `--shell bash|fish|pwsh`; `test` takes `--all`; `backups` takes `list|prune`; `switch` with no provider uses the saved default (`cs default <provider>`).

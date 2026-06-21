@@ -437,6 +437,50 @@ cs switch ollama-cloud --agent codex --codex-dir /path/to/.codex
 
 这对测试环境、多套 Claude 配置，或者首次调试很有用。
 
+### 8. 进阶命令（脚本化 / 可观测 / 迁移）
+
+```bash
+# 机器可读输出，便于脚本集成
+cs current --json                       # 当前各 agent 配置（JSON）
+cs current --json --agent claude
+cs list --json                          # 供应商列表（JSON）
+cs models [provider] [--json]           # 某供应商的模型列表（无 provider 则用当前）
+                                        #   ollama / openrouter 会动态发现模型
+
+# 多 shell 导出（默认 bash/POSIX）
+cs env deepseek --shell fish            # set -gx ...
+cs env deepseek --shell pwsh            # $env:KEY = '...'
+
+# 默认供应商 + 快捷切换
+cs default deepseek                     # 设置默认
+cs default                              # 查看默认
+cs switch                               # 不带参数 → 切换到默认供应商
+cs default --clear
+
+# 批量连通性测试
+cs test --all                           # 并发测试本 agent 全部供应商，打印汇总表
+cs test --all --agent codex
+
+# 变更预览（只读）
+cs diff deepseek                        # 预览 switch 将对 settings.json env 产生的增/改/删
+                                        #   API key 自动脱敏
+
+# 健康检查
+cs doctor                               # 检查 config 可解析、权限 0600、模型漂移、残留临时文件
+cs doctor --json
+
+# 备份管理（每次 switch 前会自动生成 settings.json.bak-*）
+cs backups list                         # 列出各 agent 目录下的备份
+cs backups prune --keep 1               # 每个源文件仅保留最新 1 份
+cs backups prune --days 30              # 删除 30 天前的备份
+cs backups prune --all                  # 删除全部（可用 --dry-run 预览）
+
+# 配置迁移（多台机器）
+cs export > my-cs.json                  # 导出完整配置（含密钥）
+cs export --redact-keys > template.json # 导出但抹除密钥，便于分享供应商配置
+cs import my-cs.json                    # 合并导入（同名供应商会被覆盖，需确认或 --force）
+```
+
 ## 配置文件行为
 
 默认情况下，工具会操作以下文件：

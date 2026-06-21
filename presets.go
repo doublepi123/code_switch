@@ -165,6 +165,7 @@ type AgentConfig struct {
 type AppConfig struct {
 	Providers map[string]StoredProvider `json:"providers"`
 	Agents    map[string]AgentConfig    `json:"agents,omitempty"`
+	Default   string                    `json:"default,omitempty"`
 }
 
 type ConfigureSelection struct {

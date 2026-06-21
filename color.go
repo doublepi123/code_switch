@@ -32,6 +32,10 @@ func red(text string) string {
 	return colorize("31", text)
 }
 
+func yellow(text string) string {
+	return colorize("33", text)
+}
+
 func dim(text string) string {
 	return colorize("2", text)
 }

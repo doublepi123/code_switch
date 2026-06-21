@@ -1969,6 +1969,81 @@ func TestCmdCurrentUnknownProvider(t *testing.T) {
 	}
 }
 
+func TestCmdCurrentJSONClaude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL":             "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_MODEL":                "deepseek-v4-pro[1m]",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "deepseek-v4-flash",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL":   "deepseek-v4-pro",
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := cmdCurrent([]string{"--json", "--agent", "claude", "--claude-dir", claudeDir}, output); err != nil {
+		t.Fatalf("cmdCurrent returned error: %v", err)
+	}
+
+	var snap currentSnapshot
+	if err := json.Unmarshal(output.Bytes(), &snap); err != nil {
+		t.Fatalf("unmarshal json output: %v\noutput=%q", err, output.String())
+	}
+	if snap.Claude == nil {
+		t.Fatalf("expected claude snapshot, got nil; output=%q", output.String())
+	}
+	if snap.Codex != nil || snap.Opencode != nil {
+		t.Fatalf("expected only claude snapshot with --agent claude, got codex=%v opencode=%v", snap.Codex, snap.Opencode)
+	}
+	if got, want := snap.Claude.Provider, "deepseek"; got != want {
+		t.Fatalf("provider = %q, want %q", got, want)
+	}
+	if got, want := snap.Claude.BaseURL, "https://api.deepseek.com/anthropic"; got != want {
+		t.Fatalf("base_url = %q, want %q", got, want)
+	}
+	if got, want := snap.Claude.Model, "deepseek-v4-pro[1m]"; got != want {
+		t.Fatalf("model = %q, want %q", got, want)
+	}
+	if got, want := snap.Claude.Haiku, "deepseek-v4-flash"; got != want {
+		t.Fatalf("haiku = %q, want %q", got, want)
+	}
+	if !strings.HasSuffix(snap.Claude.ConfigFile, "settings.json") {
+		t.Fatalf("config_file = %q, want path ending in settings.json", snap.Claude.ConfigFile)
+	}
+}
+
+func TestCmdCurrentJSONNotConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	output := &bytes.Buffer{}
+	if err := cmdCurrent([]string{"--json", "--agent", "claude", "--claude-dir", claudeDir}, output); err != nil {
+		t.Fatalf("cmdCurrent returned error: %v", err)
+	}
+
+	var snap currentSnapshot
+	if err := json.Unmarshal(output.Bytes(), &snap); err != nil {
+		t.Fatalf("unmarshal json output: %v\noutput=%q", err, output.String())
+	}
+	if snap.Claude == nil {
+		t.Fatalf("expected claude snapshot, got nil")
+	}
+	if got, want := snap.Claude.Provider, "unknown"; got != want {
+		t.Fatalf("provider = %q, want %q", got, want)
+	}
+	if snap.Claude.BaseURL != "" {
+		t.Fatalf("expected empty base_url when not configured, got %q", snap.Claude.BaseURL)
+	}
+}
+
 func TestSortedProviderNamesIncludesCustom(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
@@ -2853,6 +2928,138 @@ func TestCmdList(t *testing.T) {
 	}
 }
 
+func TestCmdListJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Save a key for deepseek so its key_status is "set"; minimax-cn stays "missing";
+	// ollama is NoAPIKey so its key_status is "none".
+	cfg := AppConfig{Providers: map[string]StoredProvider{
+		"deepseek": {APIKey: "sk-deepseek"},
+	}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--json"}, output); err != nil {
+		t.Fatalf("cmdList returned error: %v", err)
+	}
+
+	var items []providerListItem
+	if err := json.Unmarshal(output.Bytes(), &items); err != nil {
+		t.Fatalf("unmarshal json output: %v\noutput=%q", err, output.String())
+	}
+	byName := map[string]providerListItem{}
+	for _, it := range items {
+		byName[it.Name] = it
+	}
+	deepseek, ok := byName["deepseek"]
+	if !ok {
+		t.Fatalf("expected deepseek in list, got %v", names(items))
+	}
+	if deepseek.KeyStatus != "set" {
+		t.Fatalf("deepseek key_status = %q, want %q", deepseek.KeyStatus, "set")
+	}
+	if !strings.Contains(deepseek.BaseURL, "deepseek.com") {
+		t.Fatalf("deepseek base_url = %q", deepseek.BaseURL)
+	}
+	if mm, ok := byName["minimax-cn"]; !ok {
+		t.Fatalf("expected minimax-cn in list")
+	} else if mm.KeyStatus != "missing" {
+		t.Fatalf("minimax-cn key_status = %q, want %q", mm.KeyStatus, "missing")
+	}
+	if ol, ok := byName["ollama"]; !ok {
+		t.Fatalf("expected ollama in list")
+	} else if ol.KeyStatus != "none" {
+		t.Fatalf("ollama key_status = %q, want %q", ol.KeyStatus, "none")
+	}
+}
+
+func names(items []providerListItem) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.Name
+	}
+	return out
+}
+
+func TestCmdModelsExplicitProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	if err := cmdModels([]string{"deepseek"}, output); err != nil {
+		t.Fatalf("cmdModels returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "deepseek-v4-pro[1m]") {
+		t.Fatalf("expected default model in output, got %q", out)
+	}
+	if !strings.Contains(out, "(default)") {
+		t.Fatalf("expected default marker in output, got %q", out)
+	}
+}
+
+func TestCmdModelsJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	output := &bytes.Buffer{}
+	if err := cmdModels([]string{"deepseek", "--json"}, output); err != nil {
+		t.Fatalf("cmdModels returned error: %v", err)
+	}
+	var res modelsResult
+	if err := json.Unmarshal(output.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal json output: %v\noutput=%q", err, output.String())
+	}
+	if res.Provider != "deepseek" {
+		t.Fatalf("provider = %q, want deepseek", res.Provider)
+	}
+	if res.Current != "deepseek-v4-pro[1m]" {
+		t.Fatalf("current = %q, want deepseek-v4-pro[1m]", res.Current)
+	}
+	found := false
+	for _, m := range res.Models {
+		if m == "deepseek-v4-flash" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected deepseek-v4-flash in models, got %v", res.Models)
+	}
+}
+
+func TestCmdModelsNoProviderNoCurrent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	output := &bytes.Buffer{}
+	err := cmdModels([]string{"--claude-dir", claudeDir}, output)
+	if err == nil {
+		t.Fatalf("expected error when no provider and no current, got output %q", output.String())
+	}
+}
+
+func TestCmdModelsFallsBackToCurrent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_MODEL":    "deepseek-v4-pro[1m]",
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	output := &bytes.Buffer{}
+	if err := cmdModels([]string{"--claude-dir", claudeDir}, output); err != nil {
+		t.Fatalf("cmdModels returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "deepseek-v4-pro[1m]") {
+		t.Fatalf("expected models for current provider, got %q", output.String())
+	}
+}
+
 func TestReplaceExecutableIdempotent(t *testing.T) {
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "bin", "target")
@@ -3334,6 +3541,69 @@ func TestCmdTestMissingKeyError(t *testing.T) {
 	t.Setenv("HOME", home)
 	if err := cmdTest([]string{"openrouter"}, &bytes.Buffer{}); err == nil {
 		t.Fatal("expected error for missing api key")
+	}
+}
+
+func TestProbeOneForAllOK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"custom-svc": {Name: "Custom", BaseURL: server.URL, Model: "m1", APIKey: "sk-test"},
+	}}
+	row := probeOneForAll(agentClaude, cfg, "custom-svc", "", "", server.Client())
+	if row.Status != "ok" {
+		t.Fatalf("status = %q, want ok (detail=%q http=%d)", row.Status, row.Detail, row.HTTP)
+	}
+	if row.HTTP != http.StatusOK {
+		t.Fatalf("http = %d, want 200", row.HTTP)
+	}
+}
+
+func TestProbeOneForAllSkippedNoKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	row := probeOneForAll(agentClaude, cfg, "minimax-cn", "", "", &http.Client{})
+	if row.Status != "skipped" {
+		t.Fatalf("status = %q, want skipped", row.Status)
+	}
+	if row.Detail != "no api key" {
+		t.Fatalf("detail = %q, want %q", row.Detail, "no api key")
+	}
+}
+
+func TestPrintAllTestSummary(t *testing.T) {
+	output := &bytes.Buffer{}
+	rows := []allTestRow{
+		{Name: "alpha", Status: "ok", HTTP: 200},
+		{Name: "beta", Status: "fail", HTTP: 500, Detail: "internal error"},
+		{Name: "gamma", Status: "skipped", Detail: "no api key"},
+	}
+	err := printAllTestSummary(output, agentClaude, rows)
+	if err == nil {
+		t.Fatal("expected error when a row failed")
+	}
+	out := output.String()
+	for _, want := range []string{"alpha", "beta", "gamma", "summary:", "1 ok, 1 failed, 1 skipped"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q, got %q", want, out)
+		}
+	}
+}
+
+func TestPrintAllTestSummaryAllOK(t *testing.T) {
+	output := &bytes.Buffer{}
+	rows := []allTestRow{
+		{Name: "alpha", Status: "ok", HTTP: 200},
+		{Name: "gamma", Status: "skipped", Detail: "no api key"},
+	}
+	if err := printAllTestSummary(output, agentClaude, rows); err != nil {
+		t.Fatalf("expected no error when no failures: %v", err)
 	}
 }
 
@@ -7606,6 +7876,537 @@ func TestShellSingleQuote(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("shellSingleQuote(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestCmdEnvShellFormats(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	t.Run("fish", func(t *testing.T) {
+		out := &bytes.Buffer{}
+		if err := cmdEnv([]string{"deepseek", "--shell", "fish"}, out); err != nil {
+			t.Fatalf("cmdEnv: %v", err)
+		}
+		s := out.String()
+		if !strings.Contains(s, "set -gx ANTHROPIC_BASE_URL 'https://api.deepseek.com/anthropic'") {
+			t.Fatalf("fish output missing set -gx base url: %q", s)
+		}
+		if !strings.Contains(s, "set -gx ANTHROPIC_AUTH_TOKEN 'sk-deepseek'") {
+			t.Fatalf("fish output missing auth token: %q", s)
+		}
+		if strings.Contains(s, "export ") {
+			t.Fatalf("fish output should not contain POSIX export: %q", s)
+		}
+	})
+
+	t.Run("pwsh", func(t *testing.T) {
+		out := &bytes.Buffer{}
+		if err := cmdEnv([]string{"deepseek", "--shell", "pwsh"}, out); err != nil {
+			t.Fatalf("cmdEnv: %v", err)
+		}
+		s := out.String()
+		if !strings.Contains(s, "$env:ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic'") {
+			t.Fatalf("pwsh output missing $env: base url: %q", s)
+		}
+		if !strings.Contains(s, "$env:ANTHROPIC_AUTH_TOKEN = 'sk-deepseek'") {
+			t.Fatalf("pwsh output missing $env: auth token: %q", s)
+		}
+	})
+
+	t.Run("bash_default_identical", func(t *testing.T) {
+		out := &bytes.Buffer{}
+		if err := cmdEnv([]string{"deepseek"}, out); err != nil {
+			t.Fatalf("cmdEnv: %v", err)
+		}
+		if !strings.Contains(out.String(), "export ANTHROPIC_BASE_URL='https://api.deepseek.com/anthropic'") {
+			t.Fatalf("bash default output changed: %q", out.String())
+		}
+	})
+}
+
+func TestCmdEnvUnsupportedShell(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := cmdEnv([]string{"deepseek", "--shell", "tcsh"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for unsupported shell")
+	}
+}
+
+func TestCmdDefaultSetGetClear(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// initially none
+	out := &bytes.Buffer{}
+	if err := cmdDefault(nil, out); err != nil {
+		t.Fatalf("cmdDefault get: %v", err)
+	}
+	if !strings.Contains(out.String(), "no default provider set") {
+		t.Fatalf("expected no default, got %q", out.String())
+	}
+
+	// set
+	out = &bytes.Buffer{}
+	if err := cmdDefault([]string{"deepseek"}, out); err != nil {
+		t.Fatalf("cmdDefault set: %v", err)
+	}
+	// verify persisted
+	cfg2, _, err := loadAppConfig()
+	if err != nil {
+		t.Fatalf("loadAppConfig: %v", err)
+	}
+	if cfg2.Default != "deepseek" {
+		t.Fatalf("expected default deepseek, got %q", cfg2.Default)
+	}
+
+	// get
+	out = &bytes.Buffer{}
+	if err := cmdDefault(nil, out); err != nil {
+		t.Fatalf("cmdDefault get: %v", err)
+	}
+	if !strings.Contains(out.String(), "default provider: deepseek") {
+		t.Fatalf("expected default provider line, got %q", out.String())
+	}
+
+	// clear
+	out = &bytes.Buffer{}
+	if err := cmdDefault([]string{"--clear"}, out); err != nil {
+		t.Fatalf("cmdDefault clear: %v", err)
+	}
+	cfg3, _, _ := loadAppConfig()
+	if cfg3.Default != "" {
+		t.Fatalf("expected default cleared, got %q", cfg3.Default)
+	}
+}
+
+func TestCmdDefaultRejectsUnknownProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := cmdDefault([]string{"nonexistent-provider"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error setting default to unknown provider")
+	}
+}
+
+func TestCmdSwitchUsesDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}},
+		Default:   "deepseek",
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	out := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "--claude-dir", claudeDir}, strings.NewReader(""), out); err != nil {
+		t.Fatalf("switch with default returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "using default provider deepseek") {
+		t.Fatalf("expected default-provider notice, got %q", out.String())
+	}
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	env := settings["env"].(map[string]any)
+	if env["ANTHROPIC_BASE_URL"] != "https://api.deepseek.com/anthropic" {
+		t.Fatalf("base url = %v, want deepseek", env["ANTHROPIC_BASE_URL"])
+	}
+}
+
+func TestCmdSwitchNoProviderNoDefaultError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	err := runWithIO([]string{"switch"}, strings.NewReader(""), &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error when no provider and no default")
+	}
+}
+
+func TestSelectDeletableKeep(t *testing.T) {
+	now := time.Now()
+	entries := []backupEntry{
+		{Path: "/d/settings.json.bak-newest", Base: "settings.json", Mtime: now.Add(-1 * time.Hour)},
+		{Path: "/d/settings.json.bak-mid", Base: "settings.json", Mtime: now.Add(-2 * time.Hour)},
+		{Path: "/d/settings.json.bak-old", Base: "settings.json", Mtime: now.Add(-3 * time.Hour)},
+	}
+	del := selectDeletable(entries, false, 1, 0)
+	if len(del) != 2 {
+		t.Fatalf("expected 2 deletable, got %d", len(del))
+	}
+	for _, d := range del {
+		if strings.HasSuffix(d.Path, ".bak-newest") {
+			t.Fatalf("newest backup should be kept, but was marked deletable: %s", d.Path)
+		}
+	}
+}
+
+func TestSelectDeletableAll(t *testing.T) {
+	now := time.Now()
+	entries := []backupEntry{
+		{Path: "/d/a.bak-1", Base: "a", Mtime: now},
+		{Path: "/d/a.bak-2", Base: "a", Mtime: now.Add(-time.Hour)},
+	}
+	del := selectDeletable(entries, true, -1, 0)
+	if len(del) != 2 {
+		t.Fatalf("expected all 2 deletable, got %d", len(del))
+	}
+}
+
+func TestListBackupsAndPrune(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	baks := []struct {
+		name string
+		age  time.Duration
+	}{
+		{"settings.json.bak-aaa", 1 * time.Hour},
+		{"settings.json.bak-bbb", 2 * time.Hour},
+		{"settings.json.bak-ccc", 3 * time.Hour},
+	}
+	for _, b := range baks {
+		path := filepath.Join(dir, b.name)
+		if err := os.WriteFile(path, []byte("backup"), 0o600); err != nil {
+			t.Fatalf("write bak: %v", err)
+		}
+		if err := os.Chtimes(path, now.Add(-b.age), now.Add(-b.age)); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+	}
+
+	// list
+	out := &bytes.Buffer{}
+	if err := listBackups([]string{"--claude-dir", dir}, out); err != nil {
+		t.Fatalf("listBackups: %v", err)
+	}
+	if !strings.Contains(out.String(), "settings.json.bak-aaa") {
+		t.Fatalf("list output missing backup, got %q", out.String())
+	}
+
+	// prune dry-run keeps files
+	out = &bytes.Buffer{}
+	if err := pruneBackups([]string{"--keep", "1", "--dry-run", "--claude-dir", dir}, out); err != nil {
+		t.Fatalf("pruneBackups dry-run: %v", err)
+	}
+	if !strings.Contains(out.String(), "would delete") {
+		t.Fatalf("dry-run output missing 'would delete', got %q", out.String())
+	}
+	if got := countBackups(t, dir); got != 3 {
+		t.Fatalf("dry-run should not remove files, got %d backups", got)
+	}
+
+	// prune real: keep newest only
+	out = &bytes.Buffer{}
+	if err := pruneBackups([]string{"--keep", "1", "--claude-dir", dir}, out); err != nil {
+		t.Fatalf("pruneBackups: %v", err)
+	}
+	if got := countBackups(t, dir); got != 1 {
+		t.Fatalf("expected 1 backup remaining after prune, got %d", got)
+	}
+}
+
+func TestPruneBackupsRequiresFlag(t *testing.T) {
+	dir := t.TempDir()
+	if err := pruneBackups([]string{"--claude-dir", dir}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error when no prune policy specified")
+	}
+}
+
+func countBackups(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if isBackupFile(e.Name()) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestComputeEnvDiff(t *testing.T) {
+	current := map[string]string{
+		"ANTHROPIC_BASE_URL":       "https://old.example.com",
+		"ANTHROPIC_MODEL":          "old-model",
+		"CLAUDE_CODE_EFFORT_LEVEL": "medium",
+		"UNRELATED_KEY":            "stays",
+	}
+	desired := map[string]string{
+		"ANTHROPIC_BASE_URL":   "https://new.example.com",
+		"ANTHROPIC_MODEL":      "old-model", // unchanged
+		"ANTHROPIC_AUTH_TOKEN": "sk-new",
+	}
+	changes := computeEnvDiff(current, desired)
+	byKey := map[string]envChange{}
+	for _, c := range changes {
+		byKey[c.Key] = c
+	}
+	if c := byKey["ANTHROPIC_BASE_URL"]; c.Status != "changed" {
+		t.Fatalf("base_url status = %q, want changed", c.Status)
+	}
+	if c := byKey["ANTHROPIC_MODEL"]; c.Status != "unchanged" {
+		t.Fatalf("model status = %q, want unchanged", c.Status)
+	}
+	if c := byKey["ANTHROPIC_AUTH_TOKEN"]; c.Status != "added" {
+		t.Fatalf("auth_token status = %q, want added", c.Status)
+	}
+	if c := byKey["CLAUDE_CODE_EFFORT_LEVEL"]; c.Status != "removed" {
+		t.Fatalf("effort status = %q, want removed (managed key not in desired)", c.Status)
+	}
+	if _, ok := byKey["UNRELATED_KEY"]; ok {
+		t.Fatalf("unrelated (non-managed) key should not appear in diff")
+	}
+}
+
+func TestCmdDiffEndToEnd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	// current settings point at minimax
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://api.minimaxi.com/anthropic",
+			"ANTHROPIC_MODEL":    "MiniMax-M3",
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	cfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	out := &bytes.Buffer{}
+	if err := cmdDiff([]string{"deepseek", "--claude-dir", claudeDir}, out); err != nil {
+		t.Fatalf("cmdDiff: %v", err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "Diff for switching Claude to DeepSeek") {
+		t.Fatalf("missing diff header: %q", s)
+	}
+	if !strings.Contains(s, "https://api.deepseek.com/anthropic") {
+		t.Fatalf("missing new base url: %q", s)
+	}
+	// auth token should be masked (not the raw key)
+	if strings.Contains(s, "sk-deepseek") {
+		t.Fatalf("auth token should be masked in diff output: %q", s)
+	}
+	if !strings.Contains(s, "added") || !strings.Contains(s, "changed") {
+		t.Fatalf("missing summary counts: %q", s)
+	}
+}
+
+func TestDoctorClaudeDrift(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	// settings show deepseek but with a different model than stored
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_MODEL":    "deepseek-v4-flash",
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"deepseek": {APIKey: "sk-deepseek", Model: "deepseek-v4-pro[1m]"},
+	}}
+	r := checkClaudeDrift(claudeDir, cfg)
+	if r.Status != "warn" {
+		t.Fatalf("expected drift warning, got %q (%s)", r.Status, r.Detail)
+	}
+
+	// matching model → ok
+	settings2 := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_MODEL":    "deepseek-v4-pro[1m]",
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings2); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	r = checkClaudeDrift(claudeDir, cfg)
+	if r.Status != "ok" {
+		t.Fatalf("expected ok when models match, got %q (%s)", r.Status, r.Detail)
+	}
+}
+
+func TestDoctorPrintAndJSON(t *testing.T) {
+	results := []checkResult{
+		okResult("app config", "fine"),
+		warnResult("claude settings permissions", "mode 0644"),
+	}
+	out := &bytes.Buffer{}
+	printDoctor(out, results)
+	s := out.String()
+	if !strings.Contains(s, "1 ok, 1 warning(s), 0 failed") {
+		t.Fatalf("summary line wrong: %q", s)
+	}
+
+	// JSON path via runDoctor on a clean temp home
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	out = &bytes.Buffer{}
+	if err := cmdDoctor([]string{"--json", "--claude-dir", filepath.Join(home, ".claude")}, out); err != nil {
+		t.Fatalf("cmdDoctor json: %v", err)
+	}
+	var rs []checkResult
+	if err := json.Unmarshal(out.Bytes(), &rs); err != nil {
+		t.Fatalf("unmarshal doctor json: %v\noutput=%q", err, out.String())
+	}
+	if len(rs) == 0 {
+		t.Fatalf("expected doctor results, got none")
+	}
+}
+
+func TestDoctorDetectsLoosePerms(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// write a settings.json with loose perms
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic","ANTHROPIC_MODEL":"deepseek-v4-pro[1m]"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := checkClaudeFile(settingsPath)
+	if r.Status != "warn" {
+		t.Fatalf("expected warn for 0644 perms, got %q (%s)", r.Status, r.Detail)
+	}
+}
+
+func TestCmdExportAndRedact(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{
+		"deepseek": {APIKey: "sk-secret", Model: "deepseek-v4-pro[1m]"},
+	}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// full export includes key
+	out := &bytes.Buffer{}
+	if err := cmdExport(nil, out); err != nil {
+		t.Fatalf("cmdExport: %v", err)
+	}
+	var full AppConfig
+	if err := json.Unmarshal(out.Bytes(), &full); err != nil {
+		t.Fatalf("unmarshal export: %v", err)
+	}
+	if full.Providers["deepseek"].APIKey != "sk-secret" {
+		t.Fatalf("export should include key, got %q", full.Providers["deepseek"].APIKey)
+	}
+
+	// redacted export blanks key
+	out = &bytes.Buffer{}
+	if err := cmdExport([]string{"--redact-keys"}, out); err != nil {
+		t.Fatalf("cmdExport redact: %v", err)
+	}
+	var redacted AppConfig
+	if err := json.Unmarshal(out.Bytes(), &redacted); err != nil {
+		t.Fatalf("unmarshal redacted: %v", err)
+	}
+	if redacted.Providers["deepseek"].APIKey != "" {
+		t.Fatalf("redacted export should blank key, got %q", redacted.Providers["deepseek"].APIKey)
+	}
+	if strings.Contains(out.String(), "sk-secret") {
+		t.Fatalf("redacted export must not contain the key: %q", out.String())
+	}
+}
+
+func TestCmdImportMerge(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// existing config with openrouter key
+	existing := AppConfig{Providers: map[string]StoredProvider{
+		"openrouter": {APIKey: "sk-or"},
+	}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), existing); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// import file with deepseek (and different openrouter)
+	importCfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"deepseek":   {APIKey: "sk-ds"},
+			"openrouter": {APIKey: "sk-or-new"},
+		},
+		Default: "deepseek",
+	}
+	importFile := filepath.Join(home, "import.json")
+	if err := writeJSONAtomic(importFile, importCfg); err != nil {
+		t.Fatalf("write import file: %v", err)
+	}
+
+	out := &bytes.Buffer{}
+	if err := cmdImport([]string{importFile, "--force"}, strings.NewReader(""), out); err != nil {
+		t.Fatalf("cmdImport: %v", err)
+	}
+
+	cfg, _, _ := loadAppConfig()
+	if cfg.Providers["deepseek"].APIKey != "sk-ds" {
+		t.Fatalf("deepseek not merged: %v", cfg.Providers["deepseek"])
+	}
+	if cfg.Providers["openrouter"].APIKey != "sk-or-new" {
+		t.Fatalf("openrouter not overwritten: %v", cfg.Providers["openrouter"])
+	}
+	if cfg.Default != "deepseek" {
+		t.Fatalf("default not merged: %q", cfg.Default)
+	}
+}
+
+func TestCmdImportDeclined(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), AppConfig{Providers: map[string]StoredProvider{}}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	importCfg := AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-ds"}}}
+	importFile := filepath.Join(home, "import.json")
+	if err := writeJSONAtomic(importFile, importCfg); err != nil {
+		t.Fatalf("write import file: %v", err)
+	}
+	out := &bytes.Buffer{}
+	if err := cmdImport([]string{importFile}, strings.NewReader("n\n"), out); err != nil {
+		t.Fatalf("cmdImport: %v", err)
+	}
+	cfg, _, _ := loadAppConfig()
+	if _, ok := cfg.Providers["deepseek"]; ok {
+		t.Fatalf("declined import should not merge providers")
 	}
 }
 

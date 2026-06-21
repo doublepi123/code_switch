@@ -107,7 +107,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
-	if providerArg == "" || fs.NArg() != 0 {
+	if fs.NArg() != 0 {
 		return errors.New("usage: code-switch switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]")
 	}
 	agent, err := parseAgentName(*agentFlag)
@@ -118,6 +118,15 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	cfg, configPath, unlock, err := loadAppConfigLocked()
 	if err != nil {
 		return err
+	}
+
+	if providerArg == "" {
+		if cfg.Default == "" {
+			unlock()
+			return errors.New("no provider specified and no default set; run `cs default <provider>` or pass a provider")
+		}
+		providerArg = cfg.Default
+		fmt.Fprintf(out, "using default provider %s\n", providerArg)
 	}
 
 	pa, err := resolveProviderAndKeyFromConfig(agent, cfg, providerArg, *apiKey, *model)
@@ -232,7 +241,7 @@ func switchFlagNeedsValue(arg string) bool {
 		return false
 	}
 	switch arg {
-	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-opencode-dir", "--opencode-dir", "-agent", "--agent", "-haiku", "--haiku", "-sonnet", "--sonnet", "-opus", "--opus", "-subagent", "--subagent":
+	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-opencode-dir", "--opencode-dir", "-agent", "--agent", "-haiku", "--haiku", "-sonnet", "--sonnet", "-opus", "--opus", "-subagent", "--subagent", "-shell", "--shell":
 		return true
 	default:
 		return false
