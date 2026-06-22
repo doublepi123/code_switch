@@ -203,6 +203,7 @@ var providerPresets = map[string]ProviderPreset{
 		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://platform.minimaxi.com",
 		APIKeyURL: "https://platform.minimaxi.com/docs/token-plan/claude-code",
+		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -219,6 +220,7 @@ var providerPresets = map[string]ProviderPreset{
 		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://platform.minimax.io",
 		APIKeyURL: "https://platform.minimax.io/docs/token-plan/claude-code",
+		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -232,6 +234,7 @@ var providerPresets = map[string]ProviderPreset{
 		Haiku:     "anthropic/claude-haiku-4.5",
 		Sonnet:    "anthropic/claude-sonnet-4.6",
 		Opus:      "anthropic/claude-opus-4.7",
+		ReasoningEffort: "xhigh",
 		Website:   "https://openrouter.ai",
 		APIKeyURL: "https://openrouter.ai/keys",
 	},
@@ -280,6 +283,7 @@ var providerPresets = map[string]ProviderPreset{
 		Sonnet:    "mimo-v2.5-pro",
 		Opus:      "mimo-v2.5-pro",
 		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		ReasoningEffort: "xhigh",
 		Website:   "https://platform.xiaomimimo.com",
 		APIKeyURL: "https://platform.xiaomimimo.com/#/console/plan-manage",
 	},
@@ -300,6 +304,7 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://ollama.com",
 		APIKeyURL: "https://ollama.com",
 		NoAPIKey:  true,
+		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "600000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -317,6 +322,7 @@ var providerPresets = map[string]ProviderPreset{
 		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://open.z.ai",
 		APIKeyURL: "https://open.z.ai",
+		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 		},
@@ -341,6 +347,7 @@ var providerPresets = map[string]ProviderPreset{
 		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://open.bigmodel.cn",
 		APIKeyURL: "https://open.bigmodel.cn",
+		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 		},
@@ -382,6 +389,7 @@ var providerPresets = map[string]ProviderPreset{
 		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
 		Website:   "https://ollama.com/cloud",
 		APIKeyURL: "https://ollama.com/settings/keys",
+		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "600000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -400,6 +408,7 @@ var providerPresets = map[string]ProviderPreset{
 		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		Website:         "https://www.volcengine.com/activity/codingplan",
 		APIKeyURL:       "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

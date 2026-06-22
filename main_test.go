@@ -892,12 +892,23 @@ func TestApplyPresetReasoningEffortFromPreset(t *testing.T) {
 
 func TestApplyPresetNoReasoningEffortWhenEmpty(t *testing.T) {
 	root := map[string]any{}
-	preset := providerPresets["minimax-cn"]
-	applyPreset(root, preset, "sk-minimax")
+	// Synthetic preset with ReasoningEffort explicitly empty — decouples from any real provider's state.
+	preset := ProviderPreset{
+		Name:     "test-no-effort",
+		BaseURL:  "https://example.com",
+		Model:    "m",
+		Haiku:    "m",
+		Sonnet:   "m",
+		Opus:     "m",
+		Subagent: "m",
+		AuthEnv:  "ANTHROPIC_AUTH_TOKEN",
+		// ReasoningEffort intentionally unset ("")
+	}
+	applyPreset(root, preset, "sk-test")
 
 	env := root["env"].(map[string]any)
 	if _, ok := env["CLAUDE_CODE_EFFORT_LEVEL"]; ok {
-		t.Fatalf("expected CLAUDE_CODE_EFFORT_LEVEL to be unset for minimax-cn, got %v", env["CLAUDE_CODE_EFFORT_LEVEL"])
+		t.Fatalf("expected CLAUDE_CODE_EFFORT_LEVEL unset when ReasoningEffort is empty, got %v", env["CLAUDE_CODE_EFFORT_LEVEL"])
 	}
 }
 
