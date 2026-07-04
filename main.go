@@ -51,6 +51,12 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdList(args[1:], out)
 	case "models":
 		return cmdModels(args[1:], out)
+	case "model":
+		return cmdModel(args[1:], out)
+	case "model-map":
+		return cmdModelMap(args[1:], out)
+	case "use-model":
+		return cmdUseModel(args[1:], out)
 	case "configure":
 		return cmdConfigure(args[1:], in, out)
 	case "current":
@@ -85,6 +91,8 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdImport(args[1:], in, out)
 	case "completion":
 		return cmdCompletion(args[1:], out)
+	case "run":
+		return cmdRun(args[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -100,7 +108,7 @@ func isVersionRequest(args []string) bool {
 	}
 	if len(args) == 2 && args[1] == "--version" {
 		switch args[0] {
-		case "list", "models", "configure", "current", "set-key", "switch", "default", "env", "token", "restore", "diff", "upgrade", "help", "test", "remove", "backups", "doctor", "export", "import", "completion":
+		case "list", "models", "model", "model-map", "use-model", "configure", "current", "set-key", "switch", "default", "env", "token", "restore", "diff", "upgrade", "help", "test", "remove", "backups", "doctor", "export", "import", "completion", "run":
 			return true
 		}
 	}
@@ -490,12 +498,18 @@ _cs() {
 
 	case $cword in
 	1)
-		COMPREPLY=($(compgen -W "list models configure current set-key switch default env token restore diff test remove backups doctor export import upgrade completion help --version --help" -- "$cur"))
+		COMPREPLY=($(compgen -W "list models model model-map use-model configure current set-key switch default env token restore diff test remove backups doctor export import upgrade run completion help --version --help" -- "$cur"))
 		;;
 	2)
 		case ${words[1]} in
-		switch|set-key|env|token|test|remove|models|default)
+		switch|set-key|env|token|test|remove|models|default|use-model|diff)
 			COMPREPLY=($(compgen -W "%s" -- "$cur"))
+			;;
+		model)
+			COMPREPLY=($(compgen -W "get set list" -- "$cur"))
+			;;
+		model-map)
+			COMPREPLY=($(compgen -W "set get list remove" -- "$cur"))
 			;;
 		completion)
 			COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
@@ -510,7 +524,7 @@ complete -F _cs cs
 
 func zshCompletionString() string {
 	var b strings.Builder
-	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'models:list models for a provider'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'default:get/set the default provider'\n\t\t'env:print shell exports for a provider'\n\t\t'token:print raw API token for command-backed auth'\n\t\t'restore:restore official agent config'\n\t\t'diff:preview env changes for a switch'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'backups:list or prune config backups'\n\t\t'doctor:health-check configs and permissions'\n\t\t'export:dump app config to stdout'\n\t\t'import:merge an exported config'\n\t\t'completion:generate shell completion'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
+	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'models:list models for a provider'\n\t\t'model:get/set/list the default model for a provider'\n\t\t'model-map:map client model names to upstream provider models'\n\t\t'use-model:set a provider default model and the proxy default mapping in one step'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'default:get/set the default provider'\n\t\t'env:print shell exports for a provider'\n\t\t'token:print raw API token for command-backed auth'\n\t\t'restore:restore official agent config'\n\t\t'diff:preview env changes for a switch'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'backups:list or prune config backups'\n\t\t'doctor:health-check configs and permissions'\n\t\t'export:dump app config to stdout'\n\t\t'import:merge an exported config'\n\t\t'completion:generate shell completion'\n\t\t'run:launch an agent through the local code-switch proxy (MVP: --dry-run only)'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(&b, "\t\t'%s'\n", name)
 	}
@@ -524,6 +538,9 @@ complete -c cs -f
 
 complete -c cs -n '__fish_use_subcommand' -a 'list' -d 'List available providers'
 complete -c cs -n '__fish_use_subcommand' -a 'models' -d 'List models for a provider'
+complete -c cs -n '__fish_use_subcommand' -a 'model' -d 'Get/set/list the default model for a provider'
+complete -c cs -n '__fish_use_subcommand' -a 'model-map' -d 'Map client model names to upstream provider models'
+complete -c cs -n '__fish_use_subcommand' -a 'use-model' -d 'Set a provider default model and the proxy default mapping in one step'
 complete -c cs -n '__fish_use_subcommand' -a 'configure' -d 'Interactive TUI configuration'
 complete -c cs -n '__fish_use_subcommand' -a 'current' -d 'Show current provider'
 complete -c cs -n '__fish_use_subcommand' -a 'set-key' -d 'Save API key for a provider'
@@ -541,9 +558,12 @@ complete -c cs -n '__fish_use_subcommand' -a 'doctor' -d 'Health-check configs a
 complete -c cs -n '__fish_use_subcommand' -a 'export' -d 'Dump app config to stdout'
 complete -c cs -n '__fish_use_subcommand' -a 'import' -d 'Merge an exported config'
 complete -c cs -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion'
+complete -c cs -n '__fish_use_subcommand' -a 'run' -d 'Launch an agent through the local code-switch proxy (MVP: --dry-run only)'
 complete -c cs -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 
-complete -c cs -n '__fish_seen_subcommand_from switch set-key env token test remove models default diff' -a '%s'
+complete -c cs -n '__fish_seen_subcommand_from switch set-key env token test remove models default model model-map use-model diff' -a '%s'
+complete -c cs -n '__fish_seen_subcommand_from model' -a 'get set list'
+complete -c cs -n '__fish_seen_subcommand_from model-map' -a 'set get list remove'
 complete -c cs -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 
 complete -c cs -l version -d 'Show version'
@@ -577,7 +597,7 @@ func sortedPresetNames() []string {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs version\n  cs list [--agent claude|codex|opencode] [--verbose] [--json]\n  cs models [provider] [--agent claude|codex|opencode] [--api-key sk-xxx] [--json]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex|opencode] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex|opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]\n  cs set-key <provider> <api-key> [--agent claude|codex|opencode]\n  cs switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR] [--dry-run]\n  cs default [provider] [--clear]            # get/set the default provider used by bare `cs switch`\n  cs env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--shell bash|fish|pwsh]\n  cs token <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]\n  cs restore [--agent claude|codex|opencode] [--dry-run]\n  cs diff <provider> [--model model-id] [--api-key sk-xxx] [--claude-dir DIR]   # preview env-var changes vs current settings\n  cs test <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path] [--all]\n  cs remove <provider> [--agent claude|codex|opencode] [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs backups list|prune [--keep N] [--days N] [--all] [--dry-run] [--json]\n  cs doctor [--json]                        # health-check configs, permissions, drift\n  cs export [--redact-keys]                 # dump app config to stdout (for another machine)\n  cs import <file> [--force]                # merge an exported config into your app config\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
+	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs version\n  cs list [--agent claude|codex|opencode] [--verbose] [--json]\n  cs models [provider] [--agent claude|codex|opencode] [--api-key sk-xxx] [--json]\n  cs model get <provider>                      # show the provider's default model\n  cs model set <provider> <model>              # persist the provider's default model (key untouched)\n  cs model list <provider>                     # list the provider's available models\n  cs model-map set <provider> <client-model> <upstream-model>\n  cs model-map get <provider> [client-model]\n  cs model-map list <provider>\n  cs model-map remove <provider> <client-model>\n  cs use-model <provider> <model>              # = model set + model-map default set\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex|opencode] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex|opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]\n  cs set-key <provider> <api-key> [--agent claude|codex|opencode]\n  cs switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR] [--dry-run]\n  cs default [provider] [--clear]            # get/set the default provider used by bare `cs switch`\n  cs env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--shell bash|fish|pwsh]\n  cs token <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]\n  cs restore [--agent claude|codex|opencode] [--dry-run]\n  cs diff <provider> [--model model-id] [--api-key sk-xxx] [--claude-dir DIR]   # preview env-var changes vs current settings\n  cs test <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path] [--all]\n  cs remove <provider> [--agent claude|codex|opencode] [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs backups list|prune [--keep N] [--days N] [--all] [--dry-run] [--json]\n  cs doctor [--json]                        # health-check configs, permissions, drift\n  cs export [--redact-keys]                 # dump app config to stdout (for another machine)\n  cs import <file> [--force]                # merge an exported config into your app config\n  cs completion bash|zsh|fish\n  cs run <agent> --provider <provider> [--model model-id] [--dry-run]   # MVP: codex --dry-run only\n\nClaude providers:\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}

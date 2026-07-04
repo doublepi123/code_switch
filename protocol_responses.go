@@ -1,0 +1,551 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// responsesInputTextType is the content-block type used by OpenAI's
+// Responses API for plain user-supplied text.
+const responsesInputTextType = "input_text"
+
+// responsesOutputTextType is the content-block type used by OpenAI's
+// Responses API for assistant output text in the response payload.
+const responsesOutputTextType = "output_text"
+
+// responsesStatusCompleted is the Responses API status for a finished,
+// fully-formed response.
+const responsesStatusCompleted = "completed"
+
+// responsesStatusIncomplete is the Responses API status for a response
+// that stopped because of a limit (e.g. max_output_tokens) before
+// reaching a natural end.
+const responsesStatusIncomplete = "incomplete"
+
+// responsesStopReasonMaxTokens is the IR stop reason that maps to the
+// incomplete Responses status.
+const responsesStopReasonMaxTokens = "max_tokens"
+
+// responsesRawRequest models the subset of the OpenAI Responses API
+// request schema that this adapter understands for the MVP. The Input
+// field is decoded lazily because the wire shape is a union: either a
+// plain string or an array of message objects.
+//
+// Honoured fields: model/input/stream/max_output_tokens/instructions.
+// Instructions is a top-level system-prompt string mapped onto a leading
+// IR system message.
+//
+// Accepted-and-ignored fields (non-semantic for a simple text response):
+//   - prompt_cache_key — Codex cache hint.
+//   - client_metadata — Codex client telemetry.
+//   - store — Responses-API server-side history toggle; the proxy never
+//     persists server-side, so this is a no-op.
+//   - include — extra payload sections the client wants echoed back
+//     (e.g. file_search_call.results); none are honoured, so ignored.
+//   - tools / tool_choice / parallel_tool_calls — Codex always sends a
+//     tool definition array. The MVP does NOT convert tool definitions
+//     or execute tool calls; accepting and ignoring these fields ONLY
+//     lets simple-text requests that carry an unused tools array run
+//     end-to-end. Tool-call round-trips are not supported.
+//   - reasoning — Codex sends reasoning:null when reasoning is disabled.
+//     A JSON null is accepted and ignored; any non-null reasoning value
+//     (e.g. {"effort":"high"}) is still rejected because the MVP does
+//     not honour reasoning effort.
+//
+// Every other top-level key (temperature, top_p, previous_response_id,
+// metadata, user, text, ...) is rejected by
+// responsesRejectUnsupportedTopLevelFields so that unsupported features
+// surface as 400s rather than being silently dropped (which would change
+// request semantics).
+type responsesRawRequest struct {
+	Model           string          `json:"model"`
+	Input           json.RawMessage `json:"input"`
+	Instructions    json.RawMessage `json:"instructions"`
+	Reasoning       json.RawMessage `json:"reasoning"`
+	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
+	Stream          bool            `json:"stream,omitempty"`
+}
+
+type responsesOutboundRequest struct {
+	Model           string                `json:"model"`
+	Instructions    string                `json:"instructions,omitempty"`
+	Input           []responsesRawMessage `json:"input"`
+	MaxOutputTokens int                   `json:"max_output_tokens,omitempty"`
+	Stream          bool                  `json:"stream,omitempty"`
+}
+
+// responsesAllowedTopLevelFields is the set of top-level OpenAI Responses
+// request fields the MVP either honours or explicitly accepts-and-ignores.
+// Any other key surfaces as a 400.
+var responsesAllowedTopLevelFields = map[string]bool{
+	"model":               true,
+	"input":               true,
+	"stream":              true,
+	"max_output_tokens":   true,
+	"instructions":        true,
+	"prompt_cache_key":    true,
+	"client_metadata":     true,
+	"store":               true,
+	"include":             true,
+	"tools":               true,
+	"tool_choice":         true,
+	"parallel_tool_calls": true,
+	"reasoning":           true,
+}
+
+// responsesRawMessage models a single element of the Input array form.
+// RolePtr is a pointer so we can distinguish an absent role key from an
+// explicitly empty one; the MVP requires role to be present and equal to
+// "user", "assistant", or "developer". Developer messages are mapped to
+// IR system messages. Content is left as RawMessage because each part may carry a
+// type that this adapter does not support; we decode and validate
+// explicitly.
+type responsesRawMessage struct {
+	RolePtr *string         `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// responsesRawContentPart models a content part inside a message.
+type responsesRawContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// responsesRejectUnsupportedTopLevelFields returns an error if any
+// top-level field of the request JSON object is not accepted by the MVP.
+// Every rejected field is named explicitly so callers can fix the
+// request rather than hitting a silent behaviour change.
+//
+// The accepted set is responsesAllowedTopLevelFields, which includes
+// both honoured fields and a set of explicitly accepted-and-ignored
+// fields that real Codex sends but that have no semantic effect on a
+// simple text response (prompt_cache_key, client_metadata, store,
+// include, tools, tool_choice, parallel_tool_calls, reasoning). All
+// other keys (temperature, top_p, previous_response_id, metadata,
+// user, text, ...) are rejected with a message that includes the
+// offending field name. The reasoning field is given a second,
+// value-sensitive check in responsesRequestToIR (null is allowed,
+// any non-null value is rejected).
+func responsesRejectUnsupportedTopLevelFields(body []byte) error {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(body, &probe); err != nil {
+		// A malformed object surfaces a parse error earlier in the
+		// pipeline; here we cannot inspect keys so we return nil and
+		// let the strict decode below report the failure.
+		return nil
+	}
+	for name := range probe {
+		if !responsesAllowedTopLevelFields[name] {
+			return fmt.Errorf("responses request: %q is not supported in the MVP", name)
+		}
+	}
+	return nil
+}
+
+// responsesRequestToIR translates an OpenAI Responses API request body
+// into the provider-agnostic IRRequest. Only text content is supported
+// in the MVP; any tool/image/audio part surfaces as an error. A
+// stream:true request sets IRRequest.Stream=true (the proxy wraps the
+// completed response as an SSE event stream client-side; it does not
+// implement Anthropic SSE upstream). Any top-level field outside the
+// accepted set is rejected rather than silently dropped. The accepted
+// non-semantic fields (prompt_cache_key, client_metadata, store,
+// include, tools, tool_choice, parallel_tool_calls) are ignored.
+// reasoning:null is ignored; a non-null reasoning value is rejected
+// because the MVP does not honour reasoning effort. instructions (when
+// a non-empty string) is mapped onto a leading IR system message. A
+// negative max_output_tokens is rejected rather than silently clamped
+// to the default.
+//
+// An absent or empty "model" field is NOT rejected here: the proxy's
+// model-resolution layer (route.ModelMappings["default"] then
+// route.Model) supplies the upstream model, so an empty incoming model
+// must be allowed to reach that layer. The model-empty check is
+// enforced by the proxy after resolution.
+func responsesRequestToIR(body []byte) (IRRequest, error) {
+	if err := responsesRejectUnsupportedTopLevelFields(body); err != nil {
+		return IRRequest{}, err
+	}
+	var raw responsesRawRequest
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return IRRequest{}, fmt.Errorf("responses request: parse body: %w", err)
+	}
+	// reasoning value-sensitive check: null is allowed (Codex sends it
+	// when reasoning is disabled), any non-null value is rejected.
+	if raw.Reasoning != nil && string(raw.Reasoning) != "null" {
+		return IRRequest{}, fmt.Errorf("responses request: %q is not supported in the MVP (only null is accepted)", "reasoning")
+	}
+	if raw.MaxOutputTokens < 0 {
+		return IRRequest{}, fmt.Errorf("responses request: max_output_tokens must be >= 0 (got %d)", raw.MaxOutputTokens)
+	}
+
+	messages, err := responsesInputToMessages(raw.Input)
+	if err != nil {
+		return IRRequest{}, err
+	}
+
+	// instructions is a top-level system prompt. The MVP maps it onto a
+	// leading IR system message so downstream adapters (e.g. the
+	// Anthropic adapter) can hoist it into the provider's system field.
+	// An absent instructions is a no-op; an explicitly empty string is
+	// an error rather than a silent empty system message, and a
+	// non-string value is rejected because the MVP only supports the
+	// documented string form.
+	var instructions string
+	if len(raw.Instructions) > 0 {
+		if err := json.Unmarshal(raw.Instructions, &instructions); err != nil {
+			return IRRequest{}, fmt.Errorf("responses request: instructions must be a string")
+		}
+		if instructions == "" {
+			return IRRequest{}, fmt.Errorf("responses request: instructions must not be empty")
+		}
+		sysMsg := IRMessage{
+			Role:  "system",
+			Parts: []IRPart{{Type: irPartText, Text: instructions}},
+		}
+		messages = append([]IRMessage{sysMsg}, messages...)
+	}
+
+	req := IRRequest{
+		Model:     raw.Model,
+		Messages:  messages,
+		Stream:    raw.Stream,
+		MaxTokens: raw.MaxOutputTokens,
+	}
+	if err := req.validateTextOnlySkipModel(); err != nil {
+		return IRRequest{}, fmt.Errorf("responses request: %w", err)
+	}
+	return req, nil
+}
+
+func irToResponsesRequest(req IRRequest) ([]byte, error) {
+	if err := req.ValidateTextOnly(); err != nil {
+		return nil, fmt.Errorf("responses request: %w", err)
+	}
+	var instructions []string
+	input := make([]responsesRawMessage, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		var b strings.Builder
+		for _, part := range msg.Parts {
+			b.WriteString(part.Text)
+		}
+		if msg.Role == "system" {
+			instructions = append(instructions, b.String())
+			continue
+		}
+		content, err := json.Marshal([]responsesRawContentPart{{Type: responsesInputTextType, Text: b.String()}})
+		if err != nil {
+			return nil, fmt.Errorf("responses request: marshal content: %w", err)
+		}
+		role := msg.Role
+		input = append(input, responsesRawMessage{RolePtr: &role, Content: content})
+	}
+	out := responsesOutboundRequest{Model: req.Model, Instructions: strings.Join(instructions, "\n"), Input: input, MaxOutputTokens: req.MaxTokens, Stream: req.Stream}
+	return json.Marshal(out)
+}
+
+// responsesInputToMessages normalises the Input field (string or array)
+// into IRMessage values carrying only text parts.
+func responsesInputToMessages(input json.RawMessage) ([]IRMessage, error) {
+	if len(input) == 0 {
+		return nil, fmt.Errorf("input must not be empty")
+	}
+
+	// String form: a single user turn whose content is the whole string.
+	var asString string
+	if err := json.Unmarshal(input, &asString); err == nil {
+		if asString == "" {
+			return nil, fmt.Errorf("input string must not be empty")
+		}
+		return []IRMessage{{
+			Role:  "user",
+			Parts: []IRPart{{Type: irPartText, Text: asString}},
+		}}, nil
+	}
+
+	// Array form: a sequence of message objects. To support Codex CLI's
+	// normal conversation payload, the proxy accepts text-only user and
+	// assistant messages, plus developer messages which map to IR system
+	// instructions. Any absent or different role is rejected rather than
+	// silently coerced.
+	var rawMessages []responsesRawMessage
+	if err := json.Unmarshal(input, &rawMessages); err != nil {
+		return nil, fmt.Errorf("input must be a string or an array of messages: %w", err)
+	}
+	if len(rawMessages) == 0 {
+		return nil, fmt.Errorf("input array must not be empty")
+	}
+
+	messages := make([]IRMessage, 0, len(rawMessages))
+	for i, rm := range rawMessages {
+		if rm.RolePtr == nil || *rm.RolePtr == "" {
+			return nil, fmt.Errorf("input[%d]: role is required (MVP supports only \"developer\", \"user\", and \"assistant\")", i)
+		}
+		role := *rm.RolePtr
+		if role != "developer" && role != "user" && role != "assistant" {
+			return nil, fmt.Errorf("input[%d]: role %q is not supported in the MVP (only \"developer\", \"user\", and \"assistant\")", i, role)
+		}
+		if role == "developer" {
+			role = "system"
+		}
+		parts, err := responsesContentToParts(i, rm.Content)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, IRMessage{Role: role, Parts: parts})
+	}
+	return messages, nil
+}
+
+// responsesContentToParts decodes a message's Content field into text
+// IRParts. Content may be either a plain string or an array of typed
+// parts; non-text part types and empty text are rejected.
+func responsesContentToParts(msgIndex int, content json.RawMessage) ([]IRPart, error) {
+	if len(content) == 0 {
+		return nil, fmt.Errorf("message %d has no content", msgIndex)
+	}
+
+	// String content.
+	var asString string
+	if err := json.Unmarshal(content, &asString); err == nil {
+		if asString == "" {
+			return nil, fmt.Errorf("message %d content string must not be empty", msgIndex)
+		}
+		return []IRPart{{Type: irPartText, Text: asString}}, nil
+	}
+
+	// Array of typed parts.
+	var parts []responsesRawContentPart
+	if err := json.Unmarshal(content, &parts); err != nil {
+		return nil, fmt.Errorf("message %d content must be a string or an array of parts: %w", msgIndex, err)
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("message %d content array must not be empty", msgIndex)
+	}
+
+	out := make([]IRPart, 0, len(parts))
+	for j, p := range parts {
+		if p.Type != responsesInputTextType {
+			return nil, fmt.Errorf("message %d part %d has unsupported content type %q (only %q is supported)", msgIndex, j, p.Type, responsesInputTextType)
+		}
+		if p.Text == "" {
+			return nil, fmt.Errorf("message %d part %d has empty text (input_text.text is required and must be non-empty)", msgIndex, j)
+		}
+		out = append(out, IRPart{Type: irPartText, Text: p.Text})
+	}
+	return out, nil
+}
+
+// responsesMessageOutput is the wire shape of a single entry in the
+// Response object's output array. The MVP only ever emits a single
+// message part carrying the assistant text.
+type responsesMessageOutput struct {
+	Type    string                    `json:"type"` // always "message"
+	Role    string                    `json:"role"` // always "assistant"
+	Status  string                    `json:"status"`
+	ID      string                    `json:"id"`
+	Content []responsesMessageContent `json:"content"`
+}
+
+// responsesMessageContent is a single content part inside the message
+// output array.
+type responsesMessageContent struct {
+	Type string `json:"type"` // always "output_text"
+	Text string `json:"text"`
+}
+
+// responsesUsage is the usage object in the response payload.
+type responsesUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+// responsesRawResponse is the wire shape of a completed (non-streaming)
+// Responses API payload. Usage is a pointer so it can be omitted from the
+// JSON output when the upstream provider did not report token accounting.
+type responsesRawResponse struct {
+	ID         string                   `json:"id"`
+	Object     string                   `json:"object"` // always "response"
+	Status     string                   `json:"status"` // "completed" or "incomplete"
+	Model      string                   `json:"model"`
+	Output     []responsesMessageOutput `json:"output"`
+	OutputText string                   `json:"output_text"`
+	Usage      *responsesUsage          `json:"usage,omitempty"`
+}
+
+// irToResponsesResponse renders an IRResponse as an OpenAI Responses
+// API completion payload. The MVP only supports non-streaming responses.
+// The top-level response id is normalised to the "resp_" namespace and
+// the emitted message id to the "msg_" namespace; when resp.Usage is nil
+// the usage field is omitted entirely.
+func irToResponsesResponse(resp IRResponse) ([]byte, error) {
+	out := responsesRawResponse{
+		ID:     responsesResponseID(resp.ID),
+		Object: "response",
+		Status: responsesStatusFor(resp.StopReason),
+		Model:  resp.Model,
+		Output: []responsesMessageOutput{{
+			Type:   "message",
+			Role:   "assistant",
+			Status: "completed",
+			ID:     responsesMessageID(resp.ID),
+			Content: []responsesMessageContent{{
+				Type: responsesOutputTextType,
+				Text: resp.Text,
+			}},
+		}},
+		OutputText: resp.Text,
+	}
+	if resp.Usage != nil {
+		out.Usage = &responsesUsage{
+			InputTokens:  resp.Usage.InputTokens,
+			OutputTokens: resp.Usage.OutputTokens,
+			TotalTokens:  resp.Usage.TotalTokens,
+		}
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("responses response: marshal: %w", err)
+	}
+	return data, nil
+}
+
+func responsesResponseToIR(body []byte) (IRResponse, error) {
+	var raw responsesRawResponse
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return IRResponse{}, fmt.Errorf("responses response: parse body: %w", err)
+	}
+	text := raw.OutputText
+	if text == "" {
+		var b strings.Builder
+		for _, item := range raw.Output {
+			for _, part := range item.Content {
+				if part.Type != responsesOutputTextType {
+					return IRResponse{}, fmt.Errorf("responses response: unsupported output content type %q", part.Type)
+				}
+				b.WriteString(part.Text)
+			}
+		}
+		text = b.String()
+	}
+	resp := IRResponse{ID: raw.ID, Model: raw.Model, Text: text, StopReason: responsesStatusToIRStopReason(raw.Status)}
+	if raw.Usage != nil {
+		resp.Usage = &IRUsage{InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens, TotalTokens: raw.Usage.TotalTokens}
+	}
+	return resp, nil
+}
+
+func responsesStatusToIRStopReason(status string) string {
+	if status == responsesStatusIncomplete {
+		return responsesStopReasonMaxTokens
+	}
+	return "end_turn"
+}
+
+func responsesStreamToIR(body []byte) (IRResponse, error) {
+	// Normalise CRLF to LF so the SSE frame/line splitters below work
+	// regardless of which line ending the upstream emits. Some upstreams
+	// (and intermediary proxies) emit "\r\n\r\n" frame delimiters and
+	// "\r\n" line terminators; without this normalisation the "\n\n"
+	// split would not recognise the delimiter and the whole stream would
+	// collapse into a single unparseable frame.
+	normalised := strings.ReplaceAll(string(body), "\r\n", "\n")
+	frames := strings.Split(normalised, "\n\n")
+	var text strings.Builder
+	var completed *IRResponse
+	for _, frame := range frames {
+		frame = strings.TrimSpace(frame)
+		if frame == "" {
+			continue
+		}
+		var dataLines []string
+		for _, line := range strings.Split(frame, "\n") {
+			if strings.HasPrefix(line, "data:") {
+				dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			}
+		}
+		if len(dataLines) == 0 {
+			continue
+		}
+		data := strings.Join(dataLines, "\n")
+		if data == "[DONE]" {
+			continue
+		}
+		var event struct {
+			Type     string          `json:"type"`
+			Delta    string          `json:"delta"`
+			Response json.RawMessage `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return IRResponse{}, fmt.Errorf("responses stream: parse event: %w", err)
+		}
+		switch event.Type {
+		case "response.output_text.delta":
+			text.WriteString(event.Delta)
+		case "response.completed":
+			if len(event.Response) > 0 {
+				resp, err := responsesResponseToIR(event.Response)
+				if err != nil {
+					return IRResponse{}, err
+				}
+				completed = &resp
+			}
+		}
+	}
+	if completed != nil {
+		if completed.Text == "" {
+			completed.Text = text.String()
+		}
+		return *completed, nil
+	}
+	if text.Len() == 0 {
+		return IRResponse{}, fmt.Errorf("responses stream: no completed response or text delta")
+	}
+	return IRResponse{Text: text.String(), StopReason: "end_turn"}, nil
+}
+
+// responsesResponseID normalises the top-level response identifier so it
+// always carries the "resp_" prefix used by the Responses API. An ID that
+// already begins with "resp_" is preserved verbatim; any other non-empty
+// value is prefixed; an empty input falls back to a stable placeholder.
+func responsesResponseID(id string) string {
+	if id == "" {
+		return "resp_code_switch"
+	}
+	if strings.HasPrefix(id, "resp_") {
+		return id
+	}
+	return "resp_" + id
+}
+
+// responsesStatusFor maps an IR stop reason onto a Responses API status
+// string. A max_tokens stop reason indicates the response was truncated
+// by an output limit and maps to "incomplete"; everything else (end_turn,
+// stop, unknown, etc.) maps to "completed".
+func responsesStatusFor(stopReason string) string {
+	if stopReason == responsesStopReasonMaxTokens {
+		return responsesStatusIncomplete
+	}
+	return responsesStatusCompleted
+}
+
+// responsesMessageID derives a stable identifier for the emitted message
+// object from the response id. The Responses API uses a separate id
+// namespace for message objects ("msg_..."); when the input is already a
+// "msg_" id it is preserved verbatim, when it is a "resp_" id the prefix
+// is swapped, any other non-empty value is prefixed, and an empty input
+// falls back to a deterministic placeholder.
+func responsesMessageID(respID string) string {
+	if respID == "" {
+		return "msg_code_switch"
+	}
+	if strings.HasPrefix(respID, "msg_") {
+		return respID
+	}
+	if strings.HasPrefix(respID, "resp_") {
+		return "msg_" + respID[len("resp_"):]
+	}
+	return "msg_" + respID
+}
