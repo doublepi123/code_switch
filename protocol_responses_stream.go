@@ -108,15 +108,18 @@ func (openAIResponsesStreamDecoder) DecodeStream(r io.Reader, emit func(StreamEv
 }
 
 type openAIResponsesStreamEncoder struct {
-	started  bool
-	stopped  bool
-	id       string
-	model    string
-	text     string
-	toolID   string
-	toolName string
-	toolArgs string
-	usage    *IRUsage
+	started         bool
+	stopped         bool
+	textItemStarted bool
+	textItemDone    bool
+	id              string
+	messageID       string
+	model           string
+	text            string
+	toolID          string
+	toolName        string
+	toolArgs        string
+	usage           *IRUsage
 }
 
 func (e *openAIResponsesStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEvent) error {
@@ -124,6 +127,7 @@ func (e *openAIResponsesStreamEncoder) EncodeStreamEvent(w io.Writer, event Stre
 	case streamEventStart:
 		e.started = true
 		e.id = responsesResponseID(event.ID)
+		e.messageID = responsesMessageID(event.ID)
 		e.model = event.Model
 		if event.Usage != nil {
 			e.usage = event.Usage
@@ -132,6 +136,18 @@ func (e *openAIResponsesStreamEncoder) EncodeStreamEvent(w io.Writer, event Stre
 	case streamEventTextDelta:
 		if !e.started {
 			if err := e.EncodeStreamEvent(w, StreamEvent{Type: streamEventStart}); err != nil {
+				return err
+			}
+		}
+		if !e.textItemStarted {
+			e.textItemStarted = true
+			if e.messageID == "" {
+				e.messageID = responsesMessageID(e.id)
+			}
+			if err := writeRawSSE(w, "response.output_item.added", mustMarshalJSON(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"type": "message", "role": "assistant", "status": "in_progress", "id": e.messageID, "content": []any{}}})); err != nil {
+				return err
+			}
+			if err := writeRawSSE(w, "response.content_part.added", mustMarshalJSON(map[string]any{"type": "response.content_part.added", "output_index": 0, "content_index": 0, "part": map[string]any{"type": responsesOutputTextType, "text": ""}})); err != nil {
 				return err
 			}
 		}
@@ -170,10 +186,26 @@ func (e *openAIResponsesStreamEncoder) EncodeStreamEvent(w io.Writer, event Stre
 			return nil
 		}
 		e.stopped = true
+		if e.textItemStarted && !e.textItemDone {
+			e.textItemDone = true
+			if err := writeRawSSE(w, "response.output_text.done", mustMarshalJSON(map[string]any{"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": e.text})); err != nil {
+				return err
+			}
+			if err := writeRawSSE(w, "response.output_item.done", mustMarshalJSON(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]any{"type": "message", "role": "assistant", "status": "completed", "id": e.messageID, "content": []map[string]string{{"type": responsesOutputTextType, "text": e.text}}}})); err != nil {
+				return err
+			}
+		}
 		status := responsesStatusFor(event.StopReason)
-		resp := map[string]any{"id": e.id, "object": "response", "status": status, "model": e.model, "output_text": e.text}
+		output := make([]any, 0, 2)
+		if e.textItemStarted || e.toolID == "" {
+			output = append(output, map[string]any{"type": "message", "role": "assistant", "status": "completed", "id": e.messageID, "content": []map[string]string{{"type": responsesOutputTextType, "text": e.text}}})
+		}
 		if e.toolID != "" {
-			resp["output"] = []any{map[string]any{"type": "function_call", "status": "completed", "call_id": e.toolID, "name": e.toolName, "arguments": e.toolArgs}}
+			output = append(output, map[string]any{"type": "function_call", "status": "completed", "call_id": e.toolID, "name": e.toolName, "arguments": e.toolArgs})
+		}
+		resp := map[string]any{"id": e.id, "object": "response", "status": status, "model": e.model, "output": output, "output_text": e.text}
+		if e.messageID == "" {
+			e.messageID = responsesMessageID(e.id)
 		}
 		if e.usage != nil {
 			resp["usage"] = map[string]int{"input_tokens": e.usage.InputTokens, "output_tokens": e.usage.OutputTokens, "total_tokens": e.usage.TotalTokens}

@@ -77,6 +77,15 @@ func TestAnthropicSSEToResponsesSSE(t *testing.T) {
 	if !strings.Contains(out, "event: response.created") || !strings.Contains(out, "event: response.completed") {
 		t.Fatalf("responses stream missing lifecycle events:\n%s", out)
 	}
+	assertInOrder(t, out,
+		"event: response.created",
+		"event: response.output_item.added",
+		"event: response.content_part.added",
+		"event: response.output_text.delta",
+		"event: response.output_text.done",
+		"event: response.output_item.done",
+		"event: response.completed",
+	)
 	assertStreamText(t, decodeStreamFixture(t, protocolOpenAIResponses, out), "Hello")
 }
 
@@ -386,6 +395,18 @@ func assertStreamText(t *testing.T, events []StreamEvent, want string) {
 	}
 	if got.String() != want {
 		t.Fatalf("stream text = %q, want %q; events=%#v", got.String(), want, events)
+	}
+}
+
+func assertInOrder(t *testing.T, haystack string, needles ...string) {
+	t.Helper()
+	start := 0
+	for _, needle := range needles {
+		idx := strings.Index(haystack[start:], needle)
+		if idx < 0 {
+			t.Fatalf("missing %q after byte %d:\n%s", needle, start, haystack)
+		}
+		start += idx + len(needle)
 	}
 }
 
