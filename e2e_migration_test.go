@@ -915,6 +915,32 @@ func TestLegacy_OldCodexPresetBehaviorEquivalent(t *testing.T) {
 	})
 }
 
+func TestE2EMigration_CodexDirectOpenAIChatWritesChatWireAPI(t *testing.T) {
+	home := e2eMigrationHome(t)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	e2eWriteAppConfig(t, home, AppConfig{Providers: map[string]StoredProvider{
+		"deepseek": {APIKey: "sk-deepseek"},
+	}})
+
+	out := e2eMustRun(t, []string{"switch", "deepseek", "--agent", "codex", "--via", "direct", "--codex-dir", codexDir})
+	if !strings.Contains(out, "direct") {
+		t.Fatalf("switch output missing direct mode:\n%s", out)
+	}
+	config, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	if !strings.Contains(string(config), `base_url = "https://api.deepseek.com/v1"`) {
+		t.Fatalf("codex config missing chat endpoint base_url:\n%s", config)
+	}
+	if !strings.Contains(string(config), `wire_api = "chat"`) {
+		t.Fatalf("codex config wire_api should be chat for direct openai-chat endpoint:\n%s", config)
+	}
+}
+
 // TestLegacy_OldProxyRoutesConfigCompatible 验证：一个手写的旧式
 // proxy.routes 配置（缺少 token、缺少 UpstreamProtocol、host 为空）
 // 经过 loadAppConfigFrom -> normalizeAppConfig -> prepareProxyServe

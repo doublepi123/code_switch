@@ -197,7 +197,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		// Do NOT re-assign stored.Model from pa.Model here: when --model is absent pa.Model is "",
 		// which would clobber the model switchCodexProvider just persisted. The opencode path
 		// below follows the same convention.
-		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun); err != nil {
+		if err := switchCodexProviderWithProtocol(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun, plan.UpstreamProtocol); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "%s\n", formatLabel("mode", string(connectionModeDirect)))

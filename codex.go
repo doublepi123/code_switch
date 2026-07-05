@@ -54,6 +54,10 @@ func codexTOMLProviderKey(providerName string) string {
 }
 
 func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride, codexDir string, out io.Writer, dryRun bool) error {
+	return switchCodexProviderWithProtocol(provider, cfg, apiKey, modelOverride, codexDir, out, dryRun, protocolOpenAIResponses)
+}
+
+func switchCodexProviderWithProtocol(provider string, cfg *AppConfig, apiKey, modelOverride, codexDir string, out io.Writer, dryRun bool, protocol ProviderProtocol) error {
 	provider = canonicalProviderName(provider)
 	preset, err := resolveAgentSwitchPreset(agentCodex, provider, cfg, modelOverride)
 	if err != nil {
@@ -86,7 +90,7 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 		return err
 	}
 
-	updated := applyCodexPresetTOML(existing, preset, provider)
+	updated := applyCodexPresetTOMLWithProtocol(existing, preset, provider, protocol)
 	if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
 		return err
 	}
@@ -107,6 +111,10 @@ func switchCodexProvider(provider string, cfg *AppConfig, apiKey, modelOverride,
 }
 
 func applyCodexPresetTOML(existing string, preset ProviderPreset, provider string) string {
+	return applyCodexPresetTOMLWithProtocol(existing, preset, provider, protocolOpenAIResponses)
+}
+
+func applyCodexPresetTOMLWithProtocol(existing string, preset ProviderPreset, provider string, protocol ProviderProtocol) string {
 	provider = canonicalProviderName(provider)
 	cleaned := removeCodexManagedTOML(existing, true, true, nil)
 	topLevel, sections := splitBeforeFirstTOMLSection(cleaned)
@@ -134,11 +142,18 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset, provider strin
 	fmt.Fprintf(&b, "[model_providers.%s]\n", providerName)
 	fmt.Fprintf(&b, "name = %s\n", tomlQuoteBasicString(preset.Name))
 	fmt.Fprintf(&b, "base_url = %s\n", tomlQuoteBasicString(preset.BaseURL))
-	b.WriteString("wire_api = \"responses\"\n")
+	fmt.Fprintf(&b, "wire_api = %s\n", tomlQuoteBasicString(codexWireAPIForProtocol(protocol)))
 	b.WriteString(fmt.Sprintf("\n[model_providers.%s.auth]\n", providerName))
 	b.WriteString("command = \"cs\"\n")
 	fmt.Fprintf(&b, "args = [\"token\", %s, \"--agent\", \"codex\"]\n", tomlQuoteBasicString(provider))
 	return b.String()
+}
+
+func codexWireAPIForProtocol(protocol ProviderProtocol) string {
+	if protocol == protocolOpenAIChat {
+		return "chat"
+	}
+	return "responses"
 }
 
 // tomlQuoteBasicString returns s formatted as a TOML basic string, surrounded
