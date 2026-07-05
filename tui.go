@@ -337,30 +337,47 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	actions.ShowSecondaryText(false)
 	actions.SetBorder(true)
 	actions.SetTitle(" Actions ")
+	// Action labels come from the named constants shared with
+	// providerDetailActionLabels so the spelling/wording cannot drift
+	// between the superset advertised by the helper and what showDetail
+	// actually renders. The visibility rules (NoModel, NoAPIKey,
+	// canSwitch, agent != opencode) refine the superset at render time.
 	if !preset.NoModel {
-		actions.AddItem("Choose Model", "", 'm', func() {
+		actions.AddItem(actionLabelChooseModel, "", 'm', func() {
 			ts.showModels(provider, "detail")
 		})
+		actions.AddItem(actionLabelUseModel, "", 'u', func() {
+			ts.showUseModelForm(provider)
+		})
 	}
+	// Manage Model Mappings and Proxy Manager are reachable for every
+	// provider (including NoModel presets) so the operator can inspect and
+	// clear mappings and configure proxy routes regardless of preset flags.
+	actions.AddItem(actionLabelManageMappings, "", 'g', func() {
+		ts.showModelMappings(provider)
+	})
+	actions.AddItem(actionLabelProxyManager, "", 'p', func() {
+		ts.showProxyManager(provider)
+	})
 	canSwitch := preset.NoAPIKey || hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider])
 	if canSwitch {
-		actions.AddItem("Switch (default)", "", 's', func() {
+		actions.AddItem(actionLabelSwitchDefault, "", 's', func() {
 			ts.finishSelection(provider, preset.Model)
 		})
 	}
 	if !preset.NoAPIKey {
-		actions.AddItem("Edit API Key", "", 'k', func() {
+		actions.AddItem(actionLabelEditAPIKey, "", 'k', func() {
 			ts.showKeyForm(provider, backPage, func() {
 				ts.showDetail(provider, backPage)
 			})
 		})
 	}
 	if ts.agent != agentOpencode && !preset.NoModel {
-		actions.AddItem("Edit Tiers", "", 't', func() {
+		actions.AddItem(actionLabelEditTiers, "", 't', func() {
 			ts.showTierConfig(provider, backPage)
 		})
 	}
-	actions.AddItem("Back", "", 'b', ts.showProviders)
+	actions.AddItem(actionLabelBack, "", 'b', ts.showProviders)
 	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
 		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
@@ -380,6 +397,12 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 		case !preset.NoModel && (event.Rune() == 't' || event.Rune() == 'T'):
 			ts.showTierConfig(provider, backPage)
 			return nil
+		case !preset.NoModel && (event.Rune() == 'u' || event.Rune() == 'U'):
+			ts.showUseModelForm(provider)
+			return nil
+		case event.Rune() == 'g' || event.Rune() == 'G':
+			ts.showModelMappings(provider)
+			return nil
 		}
 		return event
 	})
@@ -387,7 +410,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
 	page.AddItem(ts.detailText, 0, 1, false)
-	page.AddItem(actions, 9, 0, true)
+	page.AddItem(actions, 12, 0, true)
 	ts.pages.AddAndSwitchToPage("detail", page, true)
 	ts.app.SetFocus(actions)
 }

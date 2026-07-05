@@ -44,8 +44,15 @@ func TestRunCodexDryRun(t *testing.T) {
 	if strings.Contains(got, "sk-secret") {
 		t.Fatalf("dry-run output must not leak the upstream API key\noutput:\n%s", got)
 	}
-	if !strings.HasPrefix(getProxyToken(t, got), "csproxy-") {
-		t.Fatalf("proxy token should start with %q\noutput:\n%s", "csproxy-", got)
+	// The dry-run preview must NOT print the real generated proxy token.
+	// It is a shareable security artifact, so the token is masked with the
+	// literal placeholder "<token>".
+	tokLine := getProxyToken(t, got)
+	if tokLine != "<token>" {
+		t.Fatalf("proxy token should be masked as <token>, got %q\noutput:\n%s", tokLine, got)
+	}
+	if strings.Contains(got, "csproxy-") {
+		t.Fatalf("dry-run output must not leak a real csproxy- token:\n%s", got)
 	}
 }
 

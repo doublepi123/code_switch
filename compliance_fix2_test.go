@@ -128,7 +128,7 @@ func TestBuildProxyRouteInjectsModelMappings(t *testing.T) {
 		},
 	}
 	preset := providerPresets["zhipu-cn"]
-	route := buildProxyRoute("zhipu-cn", preset, cfg, protocolAnthropicMessages, "local-token")
+	route := buildProxyRoute("zhipu-cn", preset, protocolAnthropicMessages, "local-token", cfg.ModelMappings["zhipu-cn"])
 	if route.Provider != "zhipu-cn" {
 		t.Fatalf("route.Provider = %q, want zhipu-cn", route.Provider)
 	}
@@ -165,7 +165,7 @@ func TestBuildProxyRouteNilModelMappingsWhenAbsent(t *testing.T) {
 		},
 	}
 	preset := providerPresets["zhipu-cn"]
-	route := buildProxyRoute("zhipu-cn", preset, cfg, protocolAnthropicMessages, "tok")
+	route := buildProxyRoute("zhipu-cn", preset, protocolAnthropicMessages, "tok", cfg.ModelMappings["zhipu-cn"])
 	if len(route.ModelMappings) != 0 {
 		t.Fatalf("ModelMappings len = %d, want 0 when none stored", len(route.ModelMappings))
 	}
@@ -183,7 +183,7 @@ func TestBuildProxyRouteDefensiveCopy(t *testing.T) {
 		},
 	}
 	preset := providerPresets["zhipu-cn"]
-	route := buildProxyRoute("zhipu-cn", preset, cfg, protocolAnthropicMessages, "tok")
+	route := buildProxyRoute("zhipu-cn", preset, protocolAnthropicMessages, "tok", cfg.ModelMappings["zhipu-cn"])
 	if route.ModelMappings == nil {
 		t.Fatal("ModelMappings is nil; buildProxyRoute must return a populated map")
 	}

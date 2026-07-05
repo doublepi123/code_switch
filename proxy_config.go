@@ -1,0 +1,474 @@
+package main
+
+import (
+	"fmt"
+	"net"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+// ProxyConfig is the persistent proxy configuration stored inside
+// AppConfig. Host/Port describe where the local proxy listens (Port == 0
+// means "auto-allocate at serve time"), and Routes maps an agent name to
+// its proxy route.
+type ProxyConfig struct {
+	Host   string                      `json:"host,omitempty"`
+	Port   int                         `json:"port,omitempty"`
+	Routes map[string]ProxyRouteConfig `json:"routes,omitempty"`
+}
+
+// ProxyRouteConfig is the persisted per-agent proxy route. It is a snapshot
+// and does not itself resolve provider preset defaults; the route builder
+// (buildProxyRouteFromConfig) turns it into a runtime ProxyRoute by
+// resolving provider/model/mappings/protocol precedence.
+type ProxyRouteConfig struct {
+	Agent            string            `json:"agent"`
+	Provider         string            `json:"provider"`
+	Model            string            `json:"model,omitempty"`
+	UpstreamProtocol string            `json:"upstreamProtocol,omitempty"`
+	ModelMappings    map[string]string `json:"modelMappings,omitempty"`
+}
+
+// defaultProxyConfig returns the zero state used when no proxy block has
+// been configured yet: listen on loopback with an OS-assigned port and no
+// routes.
+func defaultProxyConfig() ProxyConfig {
+	return ProxyConfig{Host: "127.0.0.1", Port: 0}
+}
+
+// normalizeProxyConfig fills missing/invalid Host and Port values with the
+// documented defaults. It is idempotent and side-effect free.
+func normalizeProxyConfig(cfg ProxyConfig) ProxyConfig {
+	if strings.TrimSpace(cfg.Host) == "" {
+		cfg.Host = "127.0.0.1"
+	}
+	if cfg.Port < 0 {
+		cfg.Port = 0
+	}
+	return cfg
+}
+
+// normalizeAppConfig applies all per-section normalizations (currently just
+// ProxyConfig host/port defaults) to an in-memory AppConfig. It is the single
+// entry point used by loadAppConfigFrom so every reader sees a consistent,
+// normalized config without each caller having to remember to call the
+// per-section normalizers.
+//
+// To preserve JSON omitempty semantics, normalization only runs when a Proxy
+// block is already present (non-nil pointer). An empty config (no proxy
+// block) is left untouched so re-serializing it does not materialize a proxy
+// object. Because AppConfig.Proxy is a *ProxyConfig, a truly absent proxy
+// block stays absent through JSON round-trips.
+//
+// IMPORTANT: a host that is empty or whitespace-only is replaced with the
+// default ("127.0.0.1"), but a non-empty host is NOT TrimSpace'd. Trimming
+// here would silently clean control characters (e.g. a leading "\n" on
+// "\n127.0.0.1") out of a hand-edited config, defeating the
+// rejectControlChars guard that buildProxyRouteFromConfig runs on the raw
+// value. Only the empty/whitespace-only case is normalized; any other value
+// is preserved verbatim so the downstream control-char screen can reject it.
+func normalizeAppConfig(cfg *AppConfig) {
+	if cfg == nil || cfg.Proxy == nil {
+		return
+	}
+	if strings.TrimSpace(cfg.Proxy.Host) == "" {
+		cfg.Proxy.Host = "127.0.0.1"
+	}
+	if cfg.Proxy.Port < 0 {
+		cfg.Proxy.Port = 0
+	}
+}
+
+// copyStringMap returns a defensive copy of in. Returns nil when in is nil
+// or empty so the resulting route/map can be cheaply tested with len()==0
+// and does not allocate a pointless zero-length map. Callers that need to
+// distinguish "no mapping configured" from "configured but empty" must do so
+// before calling this helper (e.g. by checking the source map directly).
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// buildProxyRouteFromConfig resolves a persisted per-agent route config into
+// a runtime ProxyRoute. Resolution precedence:
+//
+//   - route provider is canonicalized via providerAliases.
+//   - model: route.Model > stored provider model > preset default (through
+//     resolveSwitchPreset, which also validates opencode-go models).
+//   - model mappings: whole-source fallback. If the route declares any
+//     non-empty ModelMappings, ONLY a defensive copy of the route-level
+//     table is used and the provider-level cfg.ModelMappings[provider]
+//     table is NOT merged in. Otherwise (route declares no mappings) a
+//     defensive copy of cfg.ModelMappings[provider] is used as the whole
+//     source. Provider-level mappings never mix with route-level mappings:
+//     a route opts into one table or the other, it does not merge them.
+//   - protocol: route.UpstreamProtocol. An empty/whitespace value resolves
+//     to the agent-specific default via defaultProxyProtocolForAgent (so a
+//     hand-edited config that omits the field produces the same route as a
+//     fresh configure); a non-empty but unrecognized value returns an
+//     error (no silent downgrade).
+//
+// Model mappings are defensively copied so callers cannot mutate the
+// persisted config through the returned route. The function returns an
+// error for nil cfg, missing route, unknown provider, invalid model, or
+// unknown protocol.
+func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) (ProxyRoute, error) {
+	if cfg == nil {
+		return ProxyRoute{}, fmt.Errorf("app config is nil")
+	}
+	if cfg.Proxy == nil || cfg.Proxy.Routes == nil {
+		return ProxyRoute{}, fmt.Errorf("proxy route for agent %q is not configured", agent)
+	}
+	agent = strings.TrimSpace(agent)
+	rc, ok := cfg.Proxy.Routes[agent]
+	if !ok {
+		return ProxyRoute{}, fmt.Errorf("proxy route for agent %q is not configured", agent)
+	}
+	// Defensively screen every persisted string field (and the configured
+	// listen host) for Unicode control characters. A hand-edited or
+	// migrated config could carry an embedded line break that would
+	// otherwise silently flow into rendered TOML/JSON/log lines and enable
+	// header/config injection at preview or serve time. The raw stored
+	// values are validated (not the trimmed ones) so a trailing newline
+	// cannot be trimmed away before this guard runs.
+	//
+	// Note: rc.Agent (the persisted route field) is screened SEPARATELY
+	// from the route key `agent`. They are allowed to differ in non-
+	// control-char ways (e.g. a casing mismatch), but a control character
+	// in rc.Agent is always illegal even when the route key is clean — a
+	// hand-edit could poison the Agent field while leaving the map key
+	// intact, and that poisoned value would later be rendered into logs
+	// or status output.
+	for label, value := range map[string]string{
+		"agent":    agent,
+		"provider": rc.Provider,
+		"model":    rc.Model,
+		"protocol": rc.UpstreamProtocol,
+		"host":     cfg.Proxy.Host,
+	} {
+		if err := rejectControlChars(label, value); err != nil {
+			return ProxyRoute{}, err
+		}
+	}
+	if err := rejectControlChars("route agent", rc.Agent); err != nil {
+		return ProxyRoute{}, err
+	}
+	provider := canonicalProviderName(strings.TrimSpace(rc.Provider))
+	if provider == "" {
+		return ProxyRoute{}, fmt.Errorf("proxy route for agent %q has no provider", agent)
+	}
+	preset, err := resolveSwitchPreset(provider, cfg, strings.TrimSpace(rc.Model))
+	if err != nil {
+		return ProxyRoute{}, err
+	}
+	// Mappings precedence is whole-source fallback, NOT a per-key merge.
+	// A route with any non-empty ModelMappings of its own uses ONLY its own
+	// table (defensively copied), and the provider-level table does NOT leak
+	// in. A route with no mappings of its own falls back to the provider-level
+	// table (defensively copied). Whitespace-only keys are dropped.
+	var mappings map[string]string
+	for k, v := range rc.ModelMappings {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		if mappings == nil {
+			mappings = map[string]string{}
+		}
+		mappings[k] = v
+	}
+	if mappings == nil {
+		mappings = copyStringMap(cfg.ModelMappings[provider])
+	}
+	// Protocol resolution precedence:
+	//   - empty/whitespace UpstreamProtocol -> agent-specific default via
+	//     defaultProxyProtocolForAgent(agent). This MUST be the
+	//     agent-specific default (not a global constant) so a hand-edited
+	//     config that omits the field produces the SAME route as a fresh
+	//     `configure`. In particular, claude + anthropic-messages is an
+	//     illegal combination that validateProxyAgentProtocol would reject;
+	//     resolving to defaultProxyProtocolForAgent("claude") =
+	//     openai-responses keeps hand-edited and configured routes identical.
+	//   - non-empty but unrecognized value -> error (no silent downgrade),
+	//     via resolveProxyProtocol.
+	protocol := defaultProxyProtocolForAgent(agent)
+	if strings.TrimSpace(rc.UpstreamProtocol) != "" {
+		resolved, err := resolveProxyProtocol(rc.UpstreamProtocol)
+		if err != nil {
+			return ProxyRoute{}, err
+		}
+		protocol = resolved
+	}
+	// Enforce the agent/protocol compatibility matrix at route-build time
+	// too, so a stale/hand-edited config (or a configure that pre-dated this
+	// check) surfaces loudly at preview rather than silently producing a
+	// route the proxy would reject at request time.
+	if err := validateProxyAgentProtocol(agent, protocol); err != nil {
+		return ProxyRoute{}, err
+	}
+	return buildProxyRoute(provider, preset, protocol, localToken, mappings), nil
+}
+
+// resolveProxyProtocol normalizes a stored protocol string into a
+// ProviderProtocol. An empty/whitespace value resolves to
+// protocolAnthropicMessages (the MVP default). A non-empty but unrecognized
+// value returns an error so a stale or hand-edited config surfaces a loud,
+// descriptive failure rather than silently producing a route with the wrong
+// protocol.
+func resolveProxyProtocol(raw string) (ProviderProtocol, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return protocolAnthropicMessages, nil
+	}
+	switch ProviderProtocol(trimmed) {
+	case protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses:
+		return ProviderProtocol(trimmed), nil
+	default:
+		return "", fmt.Errorf("unknown upstream protocol %q (supported: %q, %q, %q)",
+			raw, protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses)
+	}
+}
+
+// supportedProxyAgents is the allow-list of agents the proxy MVP supports.
+// Only codex (a Responses API client) and claude (an Anthropic Messages
+// client) are wired in; opencode is intentionally excluded for the MVP.
+var supportedProxyAgents = map[string]struct{}{
+	"codex":  {},
+	"claude": {},
+}
+
+// supportedProxyAgentList is the ordered, human-readable companion to
+// supportedProxyAgents used for error messages and the configure-time agent
+// check. It is kept as a slice (not derived from the map at call time) so
+// the ordering in error messages is deterministic.
+var supportedProxyAgentList = []string{"codex", "claude"}
+
+// validateProxyAgentProtocol enforces the agent/upstream-protocol
+// compatibility matrix for the proxy MVP. The inbound client shape depends
+// on the agent (codex speaks the OpenAI Responses API, claude speaks the
+// Anthropic Messages API), and not every upstream protocol is legal for
+// every client shape.
+//
+// Matrix (see proxy_server.go dispatch):
+//   - codex (Responses client): allows anthropic-messages and openai-chat;
+//     rejects openai-responses (a Responses client cannot usefully talk to
+//     a Responses upstream — that path is not implemented in the MVP).
+//   - claude (Anthropic Messages client): allows openai-responses and
+//     openai-chat; rejects anthropic-messages passthrough, which the proxy
+//     server explicitly does not implement for /v1/messages clients.
+//   - unknown agents are rejected; the MVP only supports codex/claude.
+//
+// The function returns a descriptive error for any disallowed combination
+// so configure/preview failures surface loudly rather than silently
+// producing a route the proxy would reject at request time anyway.
+func validateProxyAgentProtocol(agent string, protocol ProviderProtocol) error {
+	agent = strings.TrimSpace(strings.ToLower(agent))
+	if _, ok := supportedProxyAgents[agent]; !ok {
+		return fmt.Errorf("unsupported agent %q for proxy (MVP supports: %s)", agent, strings.Join(supportedProxyAgentList, ", "))
+	}
+	switch agent {
+	case "codex":
+		switch protocol {
+		case protocolAnthropicMessages, protocolOpenAIChat:
+			return nil
+		case protocolOpenAIResponses:
+			return fmt.Errorf("upstream protocol %q is not supported for agent %q (use %q or %q)",
+				protocol, agent, protocolAnthropicMessages, protocolOpenAIChat)
+		default:
+			return fmt.Errorf("unknown upstream protocol %q for agent %q", protocol, agent)
+		}
+	case "claude":
+		switch protocol {
+		case protocolOpenAIResponses, protocolOpenAIChat:
+			return nil
+		case protocolAnthropicMessages:
+			return fmt.Errorf("upstream protocol %q passthrough is not supported for agent %q (use %q or %q)",
+				protocol, agent, protocolOpenAIResponses, protocolOpenAIChat)
+		default:
+			return fmt.Errorf("unknown upstream protocol %q for agent %q", protocol, agent)
+		}
+	}
+	return fmt.Errorf("unsupported agent %q for proxy", agent)
+}
+
+// defaultProxyProtocolForAgent returns the upstream protocol the proxy
+// should use for an agent when the caller did not explicitly pass
+// --protocol. The default must be a combination validateProxyAgentProtocol
+// accepts, so the persisted route is valid by construction and a later
+// `preview`/`serve` never surfaces a stale-route error caused purely by
+// the omission of --protocol.
+//
+// Defaults:
+//   - codex (OpenAI Responses client): protocolAnthropicMessages. Codex
+//     is a Responses client; an Anthropic Messages upstream is the
+//     well-tested MVP path and is explicitly allowed by the matrix.
+//   - claude (Anthropic Messages client): protocolOpenAIResponses. A
+//     Responses upstream is the natural target for a Messages client
+//     through the proxy and is explicitly allowed by the matrix.
+//   - unknown agents fall back to protocolAnthropicMessages; the caller
+//     is expected to have already validated the agent name, and the
+//     subsequent validateProxyAgentProtocol call will reject it anyway.
+func defaultProxyProtocolForAgent(agent string) ProviderProtocol {
+	agent = strings.TrimSpace(strings.ToLower(agent))
+	switch agent {
+	case "codex":
+		return protocolAnthropicMessages
+	case "claude":
+		return protocolOpenAIResponses
+	default:
+		// A sensible, conservative default; validateProxyAgentProtocol
+		// will reject unknown agents, so returning a real protocol here
+		// is safe and keeps the function total.
+		return protocolAnthropicMessages
+	}
+}
+
+// rejectControlChars validates that value does not contain Unicode
+// control characters that could enable header/log/config injection when
+// the value is later embedded in TOML, JSON, log lines, or URLs. label is
+// used only for the error message so the caller can identify which field
+// was rejected.
+//
+// The check covers the full set of Unicode control characters:
+//   - C0 controls (U+0000..U+001F) EXCEPT U+0009 (horizontal tab), which is
+//     explicitly allowed because some legitimate identifiers carry it and
+//     a tab is never a record/line separator.
+//   - DEL (U+007F).
+//   - C1 controls (U+0080..U+009F).
+//   - Format characters (Unicode general category Cf): BOM/U+FEFF, the
+//     direction marks (U+200B..U+200F, U+202A..U+202E, U+2060..U+2064,
+//     U+206A..U+206F, U+061C, U+E0001, U+E0020..U+E007F). These can be used
+//     to hide payload inside identifiers and logs, so they are rejected.
+//
+// Non-breaking space (U+00A0) is NOT a control character and is allowed;
+// callers that want to trim it should do so explicitly. Visible,
+// printable characters of any script (Latin, CJK, emoji, etc.) are
+// allowed because host/model/agent values can legitimately contain them.
+//
+// The function operates on the raw rune stream of value — callers MUST
+// pass the raw (pre-TrimSpace/pre-canonicalize) value so a trailing or
+// leading newline is not silently trimmed into a valid-looking token
+// before this guard runs.
+func rejectControlChars(label, value string) error {
+	for _, r := range value {
+		if r == '\t' {
+			// Tab is explicitly allowed: it is not a record/line
+			// separator and some legitimate identifiers use it.
+			continue
+		}
+		if isControlRune(r) {
+			return fmt.Errorf("%s must not contain control characters (got U+%04X)", label, r)
+		}
+	}
+	return nil
+}
+
+// validateProxyHost validates that a listen host is a safe, well-formed
+// network identifier and NOT a URL. A proxy listen host is plugged into
+// net.Listen("tcp", host:port) and into rendered base URLs; if a user
+// (or a buggy migration) hands it something like "http://127.0.0.1",
+// "host evil", or "host/path", the result ranges from confusing error
+// messages to silent misconfiguration (binding the wrong interface,
+// polluting the rendered codex config with embedded slashes/schemes).
+//
+// Accepted shapes:
+//   - "localhost" (hostname)
+//   - IPv4 dotted-quad ("127.0.0.1", "0.0.0.0")
+//   - IPv6 literal ("::1", "fe80::1") — the surrounding brackets, if
+//     present, are stripped before validation so "[::1]" is accepted too
+//   - DNS hostname (letters/digits/dots/hyphens), e.g. "my-host.example.com"
+//
+// Rejected shapes (with descriptive errors):
+//   - any embedded whitespace ("host evil", "   ")
+//   - any URL scheme ("http://host", "https://host", "ftp://host")
+//   - any path separator ("/", "\\") — "host/path" or "host\\path"
+//   - empty string
+//
+// The function is intentionally permissive about the hostname grammar
+// (it does NOT enforce RFC 1123 strictly) so unusual-but-valid identifiers
+// are not rejected. The strict checks target the specific injection
+// vectors (scheme, slash, whitespace) that have caused real bugs.
+func validateProxyHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return fmt.Errorf("proxy host cannot be empty")
+	}
+	// Whitespace anywhere in the host (after trimming the ends) means the
+	// "host" is actually two tokens — a classic argv/header injection.
+	// We trim then re-check so a value like "  " is caught by the empty
+	// check above and a value like "a b" is caught here.
+	if strings.ContainsAny(host, " \t\n\r\v\f") {
+		return fmt.Errorf("proxy host %q must not contain whitespace", host)
+	}
+	// Strip a single pair of surrounding brackets so "[::1]" validates the
+	// same way "::1" does. net.JoinHostPort adds them for IPv6; we want to
+	// accept either form at config time so a paste from a rendered URL
+	// works.
+	probe := host
+	if len(probe) >= 2 && probe[0] == '[' && probe[len(probe)-1] == ']' {
+		probe = probe[1 : len(probe)-1]
+	}
+	// Reject URL schemes. "http://host" parses as scheme=http under
+	// net/url; we treat the presence of ANY scheme as an error because a
+	// bare listen host must never have one. We also catch the scheme-less
+	// "//host" form (which url.Parse may treat as authority-only).
+	if strings.Contains(probe, "://") || strings.HasPrefix(probe, "//") {
+		return fmt.Errorf("proxy host %q must not include a URL scheme (use a bare host like 127.0.0.1)", host)
+	}
+	// Reject any path separator. A listen host with a slash would either
+	// fail to bind (good) or — worse — silently end up in a rendered
+	// base_url as a path component, hiding a misconfiguration.
+	if strings.ContainsAny(probe, "/\\") {
+		return fmt.Errorf("proxy host %q must not contain '/' or '\\'", host)
+	}
+	// Reject a bare host:port form (e.g. "127.0.0.1:8080",
+	// "localhost:18080", "[::1]:8080", "my-host:8888"). The proxy listen
+	// host is a BARE host — the port is a SEPARATE field (--port /
+	// cfg.Proxy.Port). A user who types "127.0.0.1:8080" into --host has
+	// confused the two fields and would either fail to bind (good) or
+	// bind on a mangled host string that pollutes the rendered base_url.
+	//
+	// net.SplitHostPort is the canonical way to recognize the host:port
+	// shape: it returns (host, port, nil) for well-formed inputs including
+	// the bracketed IPv6+port form "[::1]:8080". A bare IPv6 literal like
+	// "::1" or "[::1]" is NOT a valid host:port (SplitHostPort errors with
+	// "missing port"), so those still pass through. We only reject when a
+	// non-empty port was successfully split out.
+	if h, p, err := net.SplitHostPort(host); err == nil && p != "" {
+		_ = h
+		return fmt.Errorf("proxy host %q must not include a port (use --port for %q)", host, p)
+	}
+	return nil
+}
+
+// isControlRune reports whether r is a Unicode control or format
+// character that rejectControlChars should reject. It covers C0 (minus
+// tab, handled by the caller), DEL, C1, and the Cf format category. The
+// check is rune-based, so it works correctly even for multi-byte UTF-8
+// sequences; utf8.RuneError (the replacement rune returned by
+// range-over-string for invalid bytes) is also rejected so a malformed
+// byte sequence cannot slip through.
+func isControlRune(r rune) bool {
+	if r == utf8.RuneError {
+		return true
+	}
+	if r == '\t' {
+		return false
+	}
+	if r < 0x20 || r == 0x7F { // C0 (minus tab handled above) and DEL
+		return true
+	}
+	if r >= 0x80 && r <= 0x9F { // C1 controls
+		return true
+	}
+	if unicode.Is(unicode.Cf, r) { // format chars (BOM, direction marks, etc.)
+		return true
+	}
+	return false
+}

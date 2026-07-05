@@ -100,7 +100,7 @@ func cmdRun(args []string, out io.Writer) error {
 	// including any persisted cfg.ModelMappings for this provider. The
 	// route's Model and ModelMappings are derived here rather than read
 	// ad-hoc from the preset/config, keeping a single source of truth.
-	route := buildProxyRoute(pa.Provider, preset, cfg, protocolAnthropicMessages, token)
+	route := buildProxyRoute(pa.Provider, preset, protocolAnthropicMessages, token, cfg.ModelMappings[pa.Provider])
 	model := route.Model
 
 	fmt.Fprintf(out, "agent: %s\n", agent)
@@ -112,7 +112,14 @@ func cmdRun(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "model_mappings: %d\n", len(route.ModelMappings))
 	}
 	fmt.Fprintf(out, "CODEX_HOME=%s\n", codexHome)
-	fmt.Fprintf(out, "CODE_SWITCH_PROXY_API_KEY=%s\n", token)
+	// SECURITY: the proxy token is a real secret that will be injected via
+	// env at actual launch time. The dry-run preview is meant to be safe
+	// to share (paste into an issue, attach to a PR), so we print a literal
+	// <token> placeholder here instead of the freshly-generated token.
+	// `randomProxyToken` is still called above to exercise the generator
+	// (and to keep the call graph identical to the real launch path), but
+	// its value is deliberately discarded.
+	fmt.Fprintln(out, "CODE_SWITCH_PROXY_API_KEY=<token>")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "codex config.toml:")
 	fmt.Fprint(out, renderProxyCodexConfig(model))
@@ -136,45 +143,59 @@ func randomProxyToken() (string, error) {
 // launch time, so the template emits the literal "<port>" placeholder; the
 // real launch path (not yet implemented) will substitute the bound port.
 func renderProxyCodexConfig(model string) string {
+	return renderProxyCodexConfigForBaseURL(model, "http://127.0.0.1:<port>/v1")
+}
+
+// renderProxyCodexConfigForBaseURL is the baseURL-parameterized form of
+// renderProxyCodexConfig. The `cs proxy preview` path knows the configured
+// host/port and renders the codex config with a concrete, usable base_url
+// (e.g. "http://0.0.0.0:18080/v1") rather than the bare "<port>" placeholder,
+// so a user can copy the previewed fragment directly into a config.toml.
+//
+// The original renderProxyCodexConfig(model) is retained for backwards
+// compatibility with the `cs run --dry-run` path, which genuinely does not
+// know the port until launch time and therefore keeps the placeholder.
+func renderProxyCodexConfigForBaseURL(model, baseURL string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "model = %s\n", tomlQuoteBasicString(model))
 	b.WriteString("model_provider = \"code-switch-proxy\"\n")
 	b.WriteString("\n[model_providers.code-switch-proxy]\n")
 	b.WriteString("name = \"code-switch proxy\"\n")
-	b.WriteString("base_url = \"http://127.0.0.1:<port>/v1\"\n")
+	fmt.Fprintf(&b, "base_url = %s\n", tomlQuoteBasicString(baseURL))
 	b.WriteString("wire_api = \"responses\"\n")
 	b.WriteString("env_key = \"CODE_SWITCH_PROXY_API_KEY\"\n")
 	return b.String()
 }
 
 // buildProxyRoute constructs a ProxyRoute for the given provider, injecting
-// any persisted per-provider model mappings (cfg.ModelMappings[provider])
-// into the route so the proxy's model-resolution layer can rewrite client
-// model names to upstream models. It is the single wiring point between
-// persisted config and the proxy's runtime route table.
+// the supplied model mappings into the route so the proxy's model-resolution
+// layer can rewrite client model names to upstream models. It is the single
+// wiring point between preset/config values and the proxy's runtime route
+// table.
 //
 // The function deliberately does NOT launch a daemon or bind a port: it is a
 // pure value-builder so it can be unit-tested in isolation and reused by
 // both the (future) real launch path and the `run --dry-run` preview. The
-// caller supplies the chosen upstream protocol and the local token the
-// proxy will enforce.
+// caller supplies the chosen upstream protocol, the local token the proxy
+// will enforce, and the model mappings to inject.
 //
 // ModelMappings is defensive-copied: mutating the returned route's map does
-// not mutate cfg.ModelMappings, so a caller cannot accidentally corrupt the
-// persisted config via the route.
-func buildProxyRoute(provider string, preset ProviderPreset, cfg *AppConfig, upstreamProtocol ProviderProtocol, localToken string) ProxyRoute {
+// not mutate the caller's map, so a caller cannot accidentally corrupt its
+// own source (e.g. cfg.ModelMappings or a ProxyRouteConfig snapshot) via the
+// route.
+//
+// The signature intentionally takes only the values it uses (provider, preset,
+// protocol, token, mappings) and NOT the surrounding *AppConfig. This keeps
+// the helper low-coupling and prevents callers from assuming it reads other
+// fields from cfg.
+func buildProxyRoute(provider string, preset ProviderPreset, upstreamProtocol ProviderProtocol, localToken string, mappings map[string]string) ProxyRoute {
 	route := ProxyRoute{
 		Provider:         provider,
 		Model:            preset.Model,
 		UpstreamProtocol: upstreamProtocol,
 		UpstreamBaseURL:  preset.BaseURL,
 		LocalToken:       localToken,
-	}
-	if cfg != nil && len(cfg.ModelMappings[provider]) > 0 {
-		route.ModelMappings = make(map[string]string, len(cfg.ModelMappings[provider]))
-		for k, v := range cfg.ModelMappings[provider] {
-			route.ModelMappings[k] = v
-		}
+		ModelMappings:    copyStringMap(mappings),
 	}
 	return route
 }

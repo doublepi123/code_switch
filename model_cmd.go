@@ -98,25 +98,13 @@ func cmdModelSet(args []string, out io.Writer) error {
 	}
 	defer unlock()
 
-	// Reject providers we know nothing about. Built-in presets and
-	// already-saved custom providers (which carry a BaseURL) are allowed.
-	preset, perr := resolveProviderPreset(provider, cfg)
-	if perr != nil {
-		return fmt.Errorf("unsupported provider %q", provider)
-	}
-	// Validate the model against the provider's rules before persisting:
-	// NoModel providers (e.g. kimi-coding) reject default-model selection
-	// outright, and opencode-go rejects chat/completions-only Anthropic
-	// models. Custom providers pass through (isPresetProvider is false).
-	if err := validateModelSelectionForProvider(provider, model, isPresetProvider(provider), preset); err != nil {
+	// setDefaultModelForProvider centralises the provider/model validation
+	// (unknown provider, NoModel presets, opencode-go chat-only models,
+	// custom providers) and the field-preserving persistence so `model
+	// set` and `use-model` stay in lock-step.
+	if err := setDefaultModelForProvider(cfg, provider, model); err != nil {
 		return err
 	}
-
-	stored := cfg.Providers[provider]
-	// Preserve every other field (API key, tiers, base URL) and only
-	// overwrite the default model.
-	stored.Model = model
-	cfg.Providers[provider] = stored
 	if err := writeJSONAtomic(path, cfg); err != nil {
 		return err
 	}
@@ -209,6 +197,129 @@ func ensureProviderModelMappings(cfg *AppConfig, provider string) map[string]str
 	return m
 }
 
+// useModelForProvider persists `model` as the provider's default model and
+// sets the "default" model mapping to the same model, mirroring the
+// semantics of the `cs use-model` CLI command. It is the single helper
+// shared by the CLI command and the upcoming TUI "Use Model" page.
+//
+// Validation matches `cmdUseModel`:
+//   - provider is canonicalized via providerAliases (e.g. "bigmodel" -> "zhipu-cn");
+//   - empty/whitespace provider or model is rejected with an actionable message;
+//   - unknown providers are rejected (only built-in presets and already-saved
+//     custom providers with a BaseURL are allowed);
+//   - NoModel presets (e.g. kimi-coding) reject default-model selection;
+//   - opencode-go rejects chat/completions-only Anthropic models;
+//   - custom (non-preset) providers pass through.
+//
+// The caller is responsible for locking and persisting cfg via writeJSONAtomic.
+func useModelForProvider(cfg *AppConfig, provider, model string) error {
+	provider = canonicalProviderName(strings.TrimSpace(provider))
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		return fmt.Errorf("provider must not be empty")
+	}
+	if model == "" {
+		return fmt.Errorf("model must not be empty")
+	}
+	if err := setDefaultModelForProvider(cfg, provider, model); err != nil {
+		return err
+	}
+	// Mirror `cs use-model`: also point the "default" client-model
+	// mapping at the same model so the proxy default-fallback resolves
+	// to it.
+	ensureProviderModelMappings(cfg, provider)["default"] = model
+	return nil
+}
+
+// setDefaultModelForProvider is the shared validation + persistence core
+// used by both `cmdModelSet` and `useModelForProvider`. It assumes
+// `provider` and `model` have already been canonicalized and trimmed and
+// are non-empty; callers handle the empty checks themselves so the error
+// messages stay specific. It writes the model to cfg.Providers[provider]
+// (preserving every other field) but does NOT touch model mappings —
+// `useModelForProvider` additionally sets the "default" mapping on top.
+//
+// The caller is responsible for locking and persisting cfg via writeJSONAtomic.
+func setDefaultModelForProvider(cfg *AppConfig, provider, model string) error {
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		return fmt.Errorf("unsupported provider %q", provider)
+	}
+	if err := validateModelSelectionForProvider(provider, model, isPresetProvider(provider), preset); err != nil {
+		return err
+	}
+	stored := cfg.Providers[provider]
+	// Preserve every other field (API key, tiers, base URL) and only
+	// overwrite the default model.
+	stored.Model = model
+	cfg.Providers[provider] = stored
+	return nil
+}
+
+// setModelMappingForProvider records a single client-model -> upstream-model
+// mapping for the provider, mirroring `cs model-map set` semantics. The
+// provider is canonicalized and validated (built-in presets and existing
+// custom providers only). Empty provider, client-model, or upstream-model
+// is rejected.
+//
+// The caller is responsible for locking and persisting cfg via writeJSONAtomic.
+func setModelMappingForProvider(cfg *AppConfig, provider, clientModel, upstreamModel string) error {
+	provider = canonicalProviderName(strings.TrimSpace(provider))
+	clientModel = strings.TrimSpace(clientModel)
+	upstreamModel = strings.TrimSpace(upstreamModel)
+	if provider == "" {
+		return fmt.Errorf("provider must not be empty")
+	}
+	if clientModel == "" || upstreamModel == "" {
+		return fmt.Errorf("client-model and upstream-model must not be empty")
+	}
+	if _, err := resolveProviderPreset(provider, cfg); err != nil {
+		return fmt.Errorf("unsupported provider %q", provider)
+	}
+	ensureProviderModelMappings(cfg, provider)[clientModel] = upstreamModel
+	return nil
+}
+
+// removeModelMappingForProvider deletes a single client-model mapping for
+// the provider, mirroring `cs model-map remove` semantics. The provider is
+// canonicalized and validated. When the provider's mapping table becomes
+// empty after deletion, the provider entry itself is removed from
+// cfg.ModelMappings so a subsequent `model-map get` cleanly reports "no
+// mappings" rather than a lingering empty map.
+//
+// Errors (unknown provider, empty provider/client model, no provider
+// mappings, missing client model) leave cfg untouched.
+//
+// The caller is responsible for locking and persisting cfg via writeJSONAtomic.
+func removeModelMappingForProvider(cfg *AppConfig, provider, clientModel string) error {
+	provider = canonicalProviderName(strings.TrimSpace(provider))
+	clientModel = strings.TrimSpace(clientModel)
+	if provider == "" {
+		return fmt.Errorf("provider must not be empty")
+	}
+	if clientModel == "" {
+		return fmt.Errorf("client-model must not be empty")
+	}
+	if _, err := resolveProviderPreset(provider, cfg); err != nil {
+		return fmt.Errorf("unsupported provider %q", provider)
+	}
+	mappings := cfg.ModelMappings[provider]
+	if mappings == nil {
+		return fmt.Errorf("no model mappings for provider %q", provider)
+	}
+	if _, ok := mappings[clientModel]; !ok {
+		return fmt.Errorf("no mapping for client model %q on provider %q", clientModel, provider)
+	}
+	delete(mappings, clientModel)
+	// Drop the provider entry when it becomes empty so a subsequent
+	// `model-map get` cleanly reports "no mappings" rather than a
+	// lingering empty map.
+	if len(mappings) == 0 {
+		delete(cfg.ModelMappings, provider)
+	}
+	return nil
+}
+
 func cmdModelMapSet(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("model-map set", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -234,12 +345,10 @@ func cmdModelMapSet(args []string, out io.Writer) error {
 		return err
 	}
 	defer unlock()
-	if _, perr := resolveProviderPreset(provider, cfg); perr != nil {
-		return fmt.Errorf("unsupported provider %q", provider)
-	}
 
-	mappings := ensureProviderModelMappings(cfg, provider)
-	mappings[clientModel] = upstreamModel
+	if err := setModelMappingForProvider(cfg, provider, clientModel, upstreamModel); err != nil {
+		return err
+	}
 	if err := writeJSONAtomic(path, cfg); err != nil {
 		return err
 	}
@@ -366,23 +475,8 @@ func cmdModelMapRemove(args []string, out io.Writer) error {
 	}
 	defer unlock()
 
-	if _, perr := resolveProviderPreset(provider, cfg); perr != nil {
-		return fmt.Errorf("unsupported provider %q", provider)
-	}
-
-	mappings := cfg.ModelMappings[provider]
-	if mappings == nil {
-		return fmt.Errorf("no model mappings for provider %q", provider)
-	}
-	if _, ok := mappings[clientModel]; !ok {
-		return fmt.Errorf("no mapping for client model %q on provider %q", clientModel, provider)
-	}
-	delete(mappings, clientModel)
-	// Drop the provider entry when it becomes empty so a subsequent
-	// `model-map get` cleanly reports "no mappings" rather than a
-	// lingering empty map.
-	if len(mappings) == 0 {
-		delete(cfg.ModelMappings, provider)
+	if err := removeModelMappingForProvider(cfg, provider, clientModel); err != nil {
+		return err
 	}
 	if err := writeJSONAtomic(path, cfg); err != nil {
 		return err
@@ -447,24 +541,10 @@ func cmdUseModel(args []string, out io.Writer) error {
 		return err
 	}
 	defer unlock()
-	preset, perr := resolveProviderPreset(provider, cfg)
-	if perr != nil {
-		return fmt.Errorf("unsupported provider %q", provider)
-	}
-	// Same validation as `model set`: NoModel providers reject default-model
-	// selection and opencode-go rejects chat/completions-only Anthropic
-	// models. Custom providers pass through.
-	if err := validateModelSelectionForProvider(provider, model, isPresetProvider(provider), preset); err != nil {
+
+	if err := useModelForProvider(cfg, provider, model); err != nil {
 		return err
 	}
-
-	stored := cfg.Providers[provider]
-	stored.Model = model
-	cfg.Providers[provider] = stored
-
-	mappings := ensureProviderModelMappings(cfg, provider)
-	mappings["default"] = model
-
 	if err := writeJSONAtomic(path, cfg); err != nil {
 		return err
 	}

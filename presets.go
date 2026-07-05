@@ -167,6 +167,7 @@ type AppConfig struct {
 	Agents        map[string]AgentConfig     `json:"agents,omitempty"`
 	Default       string                     `json:"default,omitempty"`
 	ModelMappings map[string]map[string]string `json:"modelMappings,omitempty"`
+	Proxy         *ProxyConfig                `json:"proxy,omitempty"`
 }
 
 type ConfigureSelection struct {

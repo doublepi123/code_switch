@@ -90,6 +90,7 @@ func loadAppConfigFrom(path string) (*AppConfig, error) {
 		}
 		migrateLegacyProviders(cfg)
 		ensureAppConfigMaps(cfg)
+		normalizeAppConfig(cfg)
 		if err := writeJSONAtomic(path, cfg); err != nil {
 			return nil, err
 		}
@@ -100,6 +101,7 @@ func loadAppConfigFrom(path string) (*AppConfig, error) {
 	}
 	migrateLegacyProviders(cfg)
 	ensureAppConfigMaps(cfg)
+	normalizeAppConfig(cfg)
 	return cfg, nil
 }
 

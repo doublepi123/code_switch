@@ -93,6 +93,8 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdCompletion(args[1:], out)
 	case "run":
 		return cmdRun(args[1:], out)
+	case "proxy":
+		return cmdProxy(args[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -108,7 +110,7 @@ func isVersionRequest(args []string) bool {
 	}
 	if len(args) == 2 && args[1] == "--version" {
 		switch args[0] {
-		case "list", "models", "model", "model-map", "use-model", "configure", "current", "set-key", "switch", "default", "env", "token", "restore", "diff", "upgrade", "help", "test", "remove", "backups", "doctor", "export", "import", "completion", "run":
+		case "list", "models", "model", "model-map", "use-model", "configure", "current", "set-key", "switch", "default", "env", "token", "restore", "diff", "upgrade", "help", "test", "remove", "backups", "doctor", "export", "import", "completion", "run", "proxy":
 			return true
 		}
 	}
@@ -498,7 +500,7 @@ _cs() {
 
 	case $cword in
 	1)
-		COMPREPLY=($(compgen -W "list models model model-map use-model configure current set-key switch default env token restore diff test remove backups doctor export import upgrade run completion help --version --help" -- "$cur"))
+		COMPREPLY=($(compgen -W "list models model model-map use-model configure current set-key switch default env token restore diff test remove backups doctor export import upgrade run proxy completion help --version --help" -- "$cur"))
 		;;
 	2)
 		case ${words[1]} in
@@ -514,6 +516,9 @@ _cs() {
 		completion)
 			COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
 			;;
+		proxy)
+			COMPREPLY=($(compgen -W "configure start stop status preview serve" -- "$cur"))
+			;;
 		esac
 		;;
 	esac
@@ -524,11 +529,11 @@ complete -F _cs cs
 
 func zshCompletionString() string {
 	var b strings.Builder
-	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'models:list models for a provider'\n\t\t'model:get/set/list the default model for a provider'\n\t\t'model-map:map client model names to upstream provider models'\n\t\t'use-model:set a provider default model and the proxy default mapping in one step'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'default:get/set the default provider'\n\t\t'env:print shell exports for a provider'\n\t\t'token:print raw API token for command-backed auth'\n\t\t'restore:restore official agent config'\n\t\t'diff:preview env changes for a switch'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'backups:list or prune config backups'\n\t\t'doctor:health-check configs and permissions'\n\t\t'export:dump app config to stdout'\n\t\t'import:merge an exported config'\n\t\t'completion:generate shell completion'\n\t\t'run:launch an agent through the local code-switch proxy (MVP: --dry-run only)'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
+	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'models:list models for a provider'\n\t\t'model:get/set/list the default model for a provider'\n\t\t'model-map:map client model names to upstream provider models'\n\t\t'use-model:set a provider default model and the proxy default mapping in one step'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'default:get/set the default provider'\n\t\t'env:print shell exports for a provider'\n\t\t'token:print raw API token for command-backed auth'\n\t\t'restore:restore official agent config'\n\t\t'diff:preview env changes for a switch'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'backups:list or prune config backups'\n\t\t'doctor:health-check configs and permissions'\n\t\t'export:dump app config to stdout'\n\t\t'import:merge an exported config'\n\t\t'completion:generate shell completion'\n\t\t'run:launch an agent through the local code-switch proxy (MVP: --dry-run only)'\n\t\t'proxy:configure/preview/status/start/stop/serve the local code-switch proxy'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(&b, "\t\t'%s'\n", name)
 	}
-	b.WriteString("\t)\n\n\tlocal -a shells\n\tshells=('bash' 'zsh' 'fish')\n\n\t_arguments \\\n\t\t'--version[show version]' \\\n\t\t'--help[show help]' \\\n\t\t'1:command:_describe command commands' \\\n\t\t'2:provider:_describe provider providers' \\\n\t\t'*::arg:->args'\n}\n_cs\n")
+	b.WriteString("\t)\n\n\tlocal -a shells\n\tshells=('bash' 'zsh' 'fish')\n\n\tlocal -a proxy_subcommands\n\tproxy_subcommands=(\n\t\t'configure:write a proxy route for an agent'\n\t\t'preview:show the resolved proxy route and codex config'\n\t\t'status:show proxy runtime status'\n\t\t'start:launch the proxy as a background process'\n\t\t'stop:terminate a running proxy'\n\t\t'serve:run the proxy HTTP server in the foreground'\n\t)\n\n\t_arguments \\\n\t\t'--version[show version]' \\\n\t\t'--help[show help]' \\\n\t\t'1:command:_describe command commands' \\\n\t\t'2: :->second' \\\n\t\t'*::arg:->args'\n\n\tcase $state in\n\tsecond)\n\t\tcase ${words[1]} in\n\t\tswitch|set-key|env|token|test|remove|models|default|model-map|use-model|diff)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tmodel)\n\t\t\t_values 'subcommand' 'get' 'set' 'list'\n\t\t\t;;\n\t\tmodel-map)\n\t\t\t_values 'subcommand' 'set' 'get' 'list' 'remove'\n\t\t\t;;\n\t\tcompletion)\n\t\t\t_values 'shell' $shells\n\t\t\t;;\n\t\tproxy)\n\t\t\t_describe 'proxy subcommand' proxy_subcommands\n\t\t\t;;\n\t\tesac\n\t\t;;\n\tesac\n}\n_cs\n")
 	return b.String()
 }
 
@@ -559,12 +564,14 @@ complete -c cs -n '__fish_use_subcommand' -a 'export' -d 'Dump app config to std
 complete -c cs -n '__fish_use_subcommand' -a 'import' -d 'Merge an exported config'
 complete -c cs -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion'
 complete -c cs -n '__fish_use_subcommand' -a 'run' -d 'Launch an agent through the local code-switch proxy (MVP: --dry-run only)'
+complete -c cs -n '__fish_use_subcommand' -a 'proxy' -d 'Configure/control the local code-switch proxy'
 complete -c cs -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 
 complete -c cs -n '__fish_seen_subcommand_from switch set-key env token test remove models default model model-map use-model diff' -a '%s'
 complete -c cs -n '__fish_seen_subcommand_from model' -a 'get set list'
 complete -c cs -n '__fish_seen_subcommand_from model-map' -a 'set get list remove'
 complete -c cs -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
+complete -c cs -n '__fish_seen_subcommand_from proxy' -a 'configure start stop status preview serve'
 
 complete -c cs -l version -d 'Show version'
 complete -c cs -l help -d 'Show help'
@@ -597,7 +604,47 @@ func sortedPresetNames() []string {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs version\n  cs list [--agent claude|codex|opencode] [--verbose] [--json]\n  cs models [provider] [--agent claude|codex|opencode] [--api-key sk-xxx] [--json]\n  cs model get <provider>                      # show the provider's default model\n  cs model set <provider> <model>              # persist the provider's default model (key untouched)\n  cs model list <provider>                     # list the provider's available models\n  cs model-map set <provider> <client-model> <upstream-model>\n  cs model-map get <provider> [client-model]\n  cs model-map list <provider>\n  cs model-map remove <provider> <client-model>\n  cs use-model <provider> <model>              # = model set + model-map default set\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex|opencode] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex|opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]\n  cs set-key <provider> <api-key> [--agent claude|codex|opencode]\n  cs switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR] [--dry-run]\n  cs default [provider] [--clear]            # get/set the default provider used by bare `cs switch`\n  cs env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--shell bash|fish|pwsh]\n  cs token <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]\n  cs restore [--agent claude|codex|opencode] [--dry-run]\n  cs diff <provider> [--model model-id] [--api-key sk-xxx] [--claude-dir DIR]   # preview env-var changes vs current settings\n  cs test <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path] [--all]\n  cs remove <provider> [--agent claude|codex|opencode] [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs backups list|prune [--keep N] [--days N] [--all] [--dry-run] [--json]\n  cs doctor [--json]                        # health-check configs, permissions, drift\n  cs export [--redact-keys]                 # dump app config to stdout (for another machine)\n  cs import <file> [--force]                # merge an exported config into your app config\n  cs completion bash|zsh|fish\n  cs run <agent> --provider <provider> [--model model-id] [--dry-run]   # MVP: codex --dry-run only\n\nClaude providers:\n")
+	var b strings.Builder
+	b.WriteString("code-switch\n\nUsage:\n")
+	b.WriteString("  cs --version\n")
+	b.WriteString("  cs version\n")
+	b.WriteString("  cs list [--agent claude|codex|opencode] [--verbose] [--json]\n")
+	b.WriteString("  cs models [provider] [--agent claude|codex|opencode] [--api-key sk-xxx] [--json]\n")
+	b.WriteString("  cs model get <provider>                      # show the provider's default model\n")
+	b.WriteString("  cs model set <provider> <model>              # persist the provider's default model (key untouched)\n")
+	b.WriteString("  cs model list <provider>                     # list the provider's available models\n")
+	b.WriteString("  cs model-map set <provider> <client-model> <upstream-model>\n")
+	b.WriteString("  cs model-map get <provider> [client-model]\n")
+	b.WriteString("  cs model-map list <provider>\n")
+	b.WriteString("  cs model-map remove <provider> <client-model>\n")
+	b.WriteString("  cs use-model <provider> <model>              # = model set + model-map default set\n")
+	b.WriteString("  cs [--dry-run] [--reset-key]         # interactive TUI\n")
+	b.WriteString("  cs configure [--agent claude|codex|opencode] [--dry-run] [--reset-key]\n")
+	b.WriteString("  cs current [--agent claude|codex|opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]\n")
+	b.WriteString("  cs set-key <provider> <api-key> [--agent claude|codex|opencode]\n")
+	b.WriteString("  cs switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR] [--dry-run]\n")
+	b.WriteString("  cs default [provider] [--clear]            # get/set the default provider used by bare `cs switch`\n")
+	b.WriteString("  cs env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--shell bash|fish|pwsh]\n")
+	b.WriteString("  cs token <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]\n")
+	b.WriteString("  cs restore [--agent claude|codex|opencode] [--dry-run]\n")
+	b.WriteString("  cs diff <provider> [--model model-id] [--api-key sk-xxx] [--claude-dir DIR]   # preview env-var changes vs current settings\n")
+	b.WriteString("  cs test <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path] [--all]\n")
+	b.WriteString("  cs remove <provider> [--agent claude|codex|opencode] [--force]\n")
+	b.WriteString("  cs upgrade [--dry-run] [--tag vX.Y.Z]\n")
+	b.WriteString("  cs backups list|prune [--keep N] [--days N] [--all] [--dry-run] [--json]\n")
+	b.WriteString("  cs doctor [--json]                        # health-check configs, permissions, drift\n")
+	b.WriteString("  cs export [--redact-keys]                 # dump app config to stdout (for another machine)\n")
+	b.WriteString("  cs import <file> [--force]                # merge an exported config into your app config\n")
+	b.WriteString("  cs completion bash|zsh|fish\n")
+	b.WriteString("  cs run <agent> --provider <provider> [--model model-id] [--dry-run]   # MVP: codex --dry-run only\n")
+	b.WriteString("  cs proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port]\n")
+	b.WriteString("  cs proxy preview <agent>                  # show the resolved proxy route + codex config\n")
+	b.WriteString("  cs proxy status                            # show proxy runtime status\n")
+	b.WriteString("  cs proxy start                            # launch the proxy as a background process\n")
+	b.WriteString("  cs proxy stop                             # terminate a running proxy\n")
+	b.WriteString("  cs proxy serve                            # run the proxy HTTP server in the foreground\n")
+	b.WriteString("\nClaude providers:\n")
+	fmt.Fprint(out, b.String())
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}
