@@ -192,12 +192,16 @@ func TestEnsureProxyDaemonStartsAndReloadsOnRouteChange(t *testing.T) {
 	stopProxyDaemon = func() error { calls = append(calls, "stop"); return nil }
 	t.Cleanup(func() { resetProxyDaemonHooks() })
 
-	if err := ensureProxyDaemon(&AppConfig{}); err != nil {
+	if restarted, err := ensureProxyDaemon(&AppConfig{}); err != nil {
 		t.Fatalf("ensureProxyDaemon start: %v", err)
+	} else if restarted {
+		t.Fatalf("ensureProxyDaemon start: expected restarted=false")
 	}
 	proxyDaemonIsRunning = func(*AppConfig) (bool, bool, error) { return true, true, nil }
-	if err := ensureProxyDaemon(&AppConfig{}); err != nil {
+	if restarted, err := ensureProxyDaemon(&AppConfig{}); err != nil {
 		t.Fatalf("ensureProxyDaemon reload: %v", err)
+	} else if !restarted {
+		t.Fatalf("ensureProxyDaemon reload: expected restarted=true")
 	}
 	want := strings.Join([]string{"start", "stop", "start"}, ",")
 	if got := strings.Join(calls, ","); got != want {
@@ -274,5 +278,41 @@ func TestProxyDisplayBaseURLShowsAutoPlaceholderForPortZero(t *testing.T) {
 		if got := proxyDisplayBaseURL(tt.port, tt.v1); got != tt.want {
 			t.Fatalf("proxyDisplayBaseURL(%d, %v) = %q, want %q", tt.port, tt.v1, got, tt.want)
 		}
+	}
+}
+
+func TestProxyRoutesHashDeterministic(t *testing.T) {
+	cfg1 := &AppConfig{Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+		"codex": {Agent: "codex", Provider: "deepseek", Model: "deepseek-v4-pro", UpstreamProtocol: "anthropic-messages"},
+	}}}
+	cfg2 := &AppConfig{Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+		"codex": {Agent: "codex", Provider: "deepseek", Model: "deepseek-v4-pro", UpstreamProtocol: "anthropic-messages"},
+	}}}
+	// Different token should NOT affect the hash (tokens are excluded).
+	r := cfg2.Proxy.Routes["codex"]
+	r.Token = "different-token"
+	cfg2.Proxy.Routes["codex"] = r
+
+	h1 := proxyRoutesHash(cfg1)
+	h2 := proxyRoutesHash(cfg2)
+	if h1 == "" {
+		t.Fatal("proxyRoutesHash returned empty for non-empty config")
+	}
+	if h1 != h2 {
+		t.Fatalf("same routes (different token) should have same hash: %q vs %q", h1, h2)
+	}
+
+	// Different model should change the hash.
+	cfg3 := &AppConfig{Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+		"codex": {Agent: "codex", Provider: "deepseek", Model: "deepseek-v4-flash", UpstreamProtocol: "anthropic-messages"},
+	}}}
+	h3 := proxyRoutesHash(cfg3)
+	if h1 == h3 {
+		t.Fatal("different model should produce different hash")
+	}
+
+	// Empty/nil config should return empty hash.
+	if h := proxyRoutesHash(nil); h != "" {
+		t.Fatalf("nil config hash should be empty, got %q", h)
 	}
 }

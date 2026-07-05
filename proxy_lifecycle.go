@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,13 +22,14 @@ import (
 )
 
 type ProxyRuntimeState struct {
-	PID        int       `json:"pid"`
-	InstanceID string    `json:"instanceID,omitempty"`
-	Host       string    `json:"host"`
-	Port       int       `json:"port"`
-	BaseURL    string    `json:"baseURL"`
-	Token      string    `json:"token"`
-	StartedAt  time.Time `json:"startedAt"`
+	PID         int       `json:"pid"`
+	InstanceID  string    `json:"instanceID,omitempty"`
+	Host        string    `json:"host"`
+	Port        int       `json:"port"`
+	BaseURL     string    `json:"baseURL"`
+	Token       string    `json:"token"`
+	StartedAt   time.Time `json:"startedAt"`
+	RoutesHash  string    `json:"routesHash,omitempty"`
 }
 
 type proxyServeInstance struct {
@@ -66,6 +68,36 @@ func removeProxyRuntimeState() error {
 	}
 	return nil
 }
+
+// proxyRoutesHash computes a deterministic fingerprint of the proxy routes in
+// the app config. It captures the agent, provider, model, upstream protocol,
+// and model-mappings of every route (the token is deliberately excluded so a
+// token regeneration alone does not force a daemon restart). Two configs that
+// produce the same hash will serve identical routes at the daemon level, so
+// the daemon does NOT need to be restarted when the hash matches.
+func proxyRoutesHash(cfg *AppConfig) string {
+	if cfg == nil || cfg.Proxy == nil || len(cfg.Proxy.Routes) == 0 {
+		return ""
+	}
+	agents := sortedProxyRouteAgents(cfg.Proxy.Routes)
+	var b strings.Builder
+	for _, agent := range agents {
+		route := cfg.Proxy.Routes[agent]
+		fmt.Fprintf(&b, "%s|%s|%s|%s|", agent, route.Provider, route.Model, route.UpstreamProtocol)
+		keys := make([]string, 0, len(route.ModelMappings))
+		for k := range route.ModelMappings {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(&b, "%s=%s;", k, route.ModelMappings[k])
+		}
+		b.WriteString("\n")
+	}
+	h := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(h[:])
+}
+
 
 func proxyHealthURL(state ProxyRuntimeState) string {
 	// Use net.JoinHostPort so IPv6 hosts are bracketed. A naive
@@ -312,13 +344,14 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 	}
 	pid := os.Getpid()
 	state := ProxyRuntimeState{
-		PID:        pid,
-		InstanceID: instanceID,
-		Host:       proxyCfg.Host,
-		Port:       actualPort,
-		BaseURL:    baseURL,
-		Token:      token,
-		StartedAt:  time.Now().UTC(),
+		PID:         pid,
+		InstanceID:  instanceID,
+		Host:        proxyCfg.Host,
+		Port:        actualPort,
+		BaseURL:     baseURL,
+		Token:       token,
+		StartedAt:   time.Now().UTC(),
+		RoutesHash:  proxyRoutesHash(cfg),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

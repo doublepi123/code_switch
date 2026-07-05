@@ -54,7 +54,7 @@ const (
 )
 
 func providerDetailActionLabels(noModel bool) []string {
-	labels := make([]string, 0, 8)
+	labels := make([]string, 0, 9)
 	if !noModel {
 		labels = append(labels, actionLabelChooseModel, actionLabelUseModel)
 	}
@@ -63,6 +63,7 @@ func providerDetailActionLabels(noModel bool) []string {
 		actionLabelProxyManager,
 		actionLabelSwitchDefault,
 		actionLabelEditAPIKey,
+		actionLabelEditContextWindow,
 		actionLabelEditTiers,
 		actionLabelBack,
 	)

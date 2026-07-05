@@ -209,6 +209,7 @@ func findProxyRouteByBearerToken(r *http.Request, routes []proxyServedRoute) (pr
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1 {
 			match = i
+			break // tokens are unique; first match wins
 		}
 	}
 	if match < 0 {

@@ -153,21 +153,29 @@ func refreshProxyClientConfigs(state ProxyRuntimeState, cfg *AppConfig) error {
 	return nil
 }
 
-func ensureProxyDaemon(cfg *AppConfig) error {
+// ensureProxyDaemon checks the proxy daemon's health and route consistency.
+// It returns (restarted, error): restarted is true when the daemon was
+// stopped and started again because the route table changed. Callers can
+// use this to emit a user-facing message only when a restart actually
+// occurred.
+func ensureProxyDaemon(cfg *AppConfig) (bool, error) {
 	running, routeChanged, err := proxyDaemonIsRunning(cfg)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !running {
-		return startProxyDaemon(cfg)
+		return false, startProxyDaemon(cfg)
 	}
 	if routeChanged {
 		if err := stopProxyDaemon(); err != nil {
-			return err
+			return false, err
 		}
-		return startProxyDaemon(cfg)
+		if err := startProxyDaemon(cfg); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 func defaultProxyDaemonIsRunning(cfg *AppConfig) (bool, bool, error) {
@@ -194,9 +202,16 @@ func defaultProxyDaemonIsRunning(cfg *AppConfig) (bool, bool, error) {
 	if strings.TrimSpace(proxyCfg.Host) != "" && strings.TrimSpace(proxyCfg.Host) != state.Host {
 		return true, true, nil
 	}
-	// Existing daemon processes read the route table at startup. A switch that
-	// rewrites routes must restart the daemon so the in-memory route registry is
-	// refreshed; this may briefly interrupt other proxied agents.
+	// Compare the current config's route fingerprint against the hash the
+	// daemon recorded at startup. When they match the in-memory route table is
+	// already correct and the daemon does NOT need to be restarted — avoiding
+	// a brief interruption of other proxied agents on every switch.
+	currentHash := proxyRoutesHash(cfg)
+	if currentHash != "" && state.RoutesHash != "" && currentHash == state.RoutesHash {
+		return true, false, nil
+	}
+	// Routes have changed (or the hash is missing on either side): the daemon
+	// must be restarted so the in-memory route registry is refreshed.
 	return true, true, nil
 }
 
@@ -278,9 +293,12 @@ func switchProxyProvider(pa *providerArgs, cfg *AppConfig, persistAppConfig func
 	if err := persistAppConfig(); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "proxy route changed; restarting the proxy daemon may briefly interrupt other proxied agents")
-	if err := ensureProxyDaemon(cfg); err != nil {
+	restarted, err := ensureProxyDaemon(cfg)
+	if err != nil {
 		return err
+	}
+	if restarted {
+		fmt.Fprintln(out, "proxy route changed; restarting the proxy daemon may briefly interrupt other proxied agents")
 	}
 	state, err := readProxyRuntimeState()
 	if err != nil {

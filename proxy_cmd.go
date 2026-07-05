@@ -335,6 +335,6 @@ func cmdProxyPreview(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "model_mappings: %d\n", len(route.ModelMappings))
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "codex config.toml:")
-	fmt.Fprint(out, renderProxyCodexConfigForBaseURL(route.Model, codexBaseURL))
+	fmt.Fprint(out, renderProxyCodexConfigForBaseURLWithCatalogProtocol(route.Model, codexBaseURL, "", route.UpstreamProtocol))
 	return nil
 }
