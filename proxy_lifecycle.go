@@ -545,6 +545,13 @@ func cmdProxyStart(args []string, out io.Writer) error {
 		report, healthErr := checkProxyHealth(ctx, existingState)
 		cancel()
 		if healthErr == nil && report.InstanceID == existingState.InstanceID {
+			freshCfg, _, cfgErr := loadAppConfig()
+			if cfgErr != nil {
+				return cfgErr
+			}
+			if err := refreshProxyClientConfigs(existingState, freshCfg); err != nil {
+				return err
+			}
 			fmt.Fprintf(out, "proxy already running\npid: %d\nbase_url: %s\n", existingState.PID, existingState.BaseURL)
 			return nil
 		}
@@ -569,6 +576,13 @@ func cmdProxyStart(args []string, out io.Writer) error {
 			report, healthErr := checkProxyHealth(ctx, state)
 			cancel()
 			if healthErr == nil && report.InstanceID == state.InstanceID {
+				freshCfg, _, cfgErr := loadAppConfig()
+				if cfgErr != nil {
+					return cfgErr
+				}
+				if err := refreshProxyClientConfigs(state, freshCfg); err != nil {
+					return err
+				}
 				fmt.Fprintf(out, "proxy started\npid: %d\nbase_url: %s\n", state.PID, state.BaseURL)
 				return nil
 			}

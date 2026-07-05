@@ -6,6 +6,13 @@ import (
 	"strings"
 )
 
+// anthropicDefaultMaxTokens is used when an inbound protocol does not provide
+// an explicit output cap. Codex often omits max_output_tokens; low defaults can
+// yield max-token stops with no visible assistant text on larger review/fix
+// turns. Xiaomi's Anthropic-compatible endpoint rejects values above 131072, so
+// use that provider-supported maximum as the proxy default.
+const anthropicDefaultMaxTokens = 131072
+
 // anthropicRequestMessage is a single message entry in the Anthropic
 // Messages API request body. The MVP carries only text content blocks.
 type anthropicRequestMessage struct {
@@ -153,7 +160,7 @@ func irToAnthropicRequest(req IRRequest) ([]byte, error) {
 
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
-		maxTokens = 1024
+		maxTokens = anthropicDefaultMaxTokens
 	}
 
 	var systemParts []string
@@ -293,6 +300,9 @@ func anthropicResponseToIR(body []byte) (IRResponse, error) {
 	stopReason := raw.StopReason
 	if stopReason == "end_turn" {
 		stopReason = "stop"
+	}
+	if raw.StopReason == "max_tokens" && b.String() == "" && len(calls) == 0 {
+		return IRResponse{}, fmt.Errorf("anthropic response: empty text with max_tokens stop")
 	}
 
 	resp := IRResponse{

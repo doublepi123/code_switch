@@ -119,6 +119,40 @@ func writeOpencodeProxyConfigInDir(opencodeDir string, port int, token string, m
 	return writeTextAtomic(configPath, string(data)+"\n", 0o600)
 }
 
+func refreshProxyClientConfigs(state ProxyRuntimeState, cfg *AppConfig) error {
+	if cfg == nil || cfg.Proxy == nil || len(cfg.Proxy.Routes) == 0 {
+		return nil
+	}
+	for _, agent := range sortedProxyRouteAgents(cfg.Proxy.Routes) {
+		persisted := cfg.Proxy.Routes[agent]
+		token := strings.TrimSpace(persisted.Token)
+		if token == "" {
+			return fmt.Errorf("proxy route for agent %q has no token", agent)
+		}
+		route, err := buildProxyRouteFromConfig(agent, cfg, token)
+		if err != nil {
+			return err
+		}
+		switch AgentName(agent) {
+		case agentClaude:
+			if err := writeClaudeProxyConfigInDir("", state.Port, token); err != nil {
+				return err
+			}
+		case agentCodex:
+			if err := writeCodexProxyConfigInDir("", state.Port, token, route.UpstreamProtocol, route.Model); err != nil {
+				return err
+			}
+		case agentOpencode:
+			if err := writeOpencodeProxyConfigInDir("", state.Port, token, route.Model); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported agent %q", agent)
+		}
+	}
+	return nil
+}
+
 func ensureProxyDaemon(cfg *AppConfig) error {
 	running, routeChanged, err := proxyDaemonIsRunning(cfg)
 	if err != nil {

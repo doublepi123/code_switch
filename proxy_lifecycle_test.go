@@ -871,6 +871,17 @@ func TestCmdProxyStartSuccessPath(t *testing.T) {
 		t.Fatalf("status after start should report running: %q", statusOut.String())
 	}
 
+	// Starting on an auto-allocated port must refresh client config files with
+	// the actual bound port. Otherwise Codex keeps connecting to a stale port
+	// after `cs proxy stop && cs proxy start`.
+	codexConfig, err := os.ReadFile(codexConfigPath(""))
+	if err != nil {
+		t.Fatalf("read codex config after start: %v", err)
+	}
+	if !strings.Contains(string(codexConfig), fmt.Sprintf(`base_url = "http://127.0.0.1:%d/v1"`, child.state.Port)) {
+		t.Fatalf("codex config missing refreshed base_url for port %d:\n%s", child.state.Port, string(codexConfig))
+	}
+
 	// Stop must terminate the recorded PID and remove the state.
 	var stopOut bytes.Buffer
 	if err := cmdProxyStop(nil, &stopOut); err != nil {

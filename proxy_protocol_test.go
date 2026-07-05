@@ -995,8 +995,11 @@ func TestIRToAnthropicResponse(t *testing.T) {
 }
 
 // TestIRToAnthropicRequestDefaultsMaxTokens verifies that an unset or
-// non-positive MaxTokens falls back to the MVP default of 1024 rather than
-// being emitted as zero (which the Anthropic API would reject).
+// non-positive MaxTokens falls back to the upstream-supported maximum rather than
+// being emitted as zero (which the Anthropic API would reject). The default
+// must be high enough for Codex review/fix turns; lower caps caused upstream
+// max-token stops with no visible text, while 512k is rejected by the Xiaomi
+// Anthropic-compatible endpoint.
 func TestIRToAnthropicRequestDefaultsMaxTokens(t *testing.T) {
 	for _, max := range []int{0, -1, -100} {
 		t.Run(fmt.Sprintf("max_%d", max), func(t *testing.T) {
@@ -1005,10 +1008,23 @@ func TestIRToAnthropicRequestDefaultsMaxTokens(t *testing.T) {
 			if err != nil {
 				t.Fatalf("irToAnthropicRequest returned error: %v", err)
 			}
-			if !strings.Contains(string(data), `"max_tokens":1024`) {
-				t.Fatalf("expected default max_tokens 1024, body: %s", string(data))
+			if !strings.Contains(string(data), `"max_tokens":131072`) {
+				t.Fatalf("expected default max_tokens 131072, body: %s", string(data))
 			}
 		})
+	}
+}
+
+// TestAnthropicResponseToIRRejectsEmptyMaxTokenResponse verifies that a
+// max-token stop with no text and no tool call is surfaced as an error instead
+// of being rendered to Codex as a successful empty assistant turn.
+func TestAnthropicResponseToIRRejectsEmptyMaxTokenResponse(t *testing.T) {
+	_, err := anthropicResponseToIR([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":""}],"stop_reason":"max_tokens","usage":{"input_tokens":11424,"output_tokens":1024}}`))
+	if err == nil {
+		t.Fatal("anthropicResponseToIR returned nil, want error for empty max-token response")
+	}
+	if !strings.Contains(err.Error(), "empty") || !strings.Contains(err.Error(), "max_tokens") {
+		t.Fatalf("error = %q, want mention empty max_tokens response", err.Error())
 	}
 }
 
