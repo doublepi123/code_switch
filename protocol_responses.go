@@ -32,9 +32,11 @@ const responsesStopReasonMaxTokens = "max_tokens"
 // field is decoded lazily because the wire shape is a union: either a
 // plain string or an array of message objects.
 //
-// Honoured fields: model/input/stream/max_output_tokens/instructions.
+// Honoured fields: model/input/stream/max_output_tokens/instructions/text.
 // Instructions is a top-level system-prompt string mapped onto a leading
-// IR system message.
+// IR system message. text.format=json_schema is translated into an
+// additional system instruction because downstream Anthropic translation
+// cannot carry the Responses text config natively.
 //
 // Accepted-and-ignored fields (non-semantic for a simple text response):
 //   - prompt_cache_key — Codex cache hint.
@@ -48,13 +50,13 @@ const responsesStopReasonMaxTokens = "max_tokens"
 //     or execute tool calls; accepting and ignoring these fields ONLY
 //     lets simple-text requests that carry an unused tools array run
 //     end-to-end. Tool-call round-trips are not supported.
-//   - reasoning — Codex sends reasoning:null when reasoning is disabled.
-//     A JSON null is accepted and ignored; any non-null reasoning value
-//     (e.g. {"effort":"high"}) is still rejected because the MVP does
-//     not honour reasoning effort.
+//   - reasoning — Codex sends reasoning hints for some requests; the MVP
+//     does not honour them, so they are accepted and ignored.
+//   - service_tier — OpenAI routing hint; no equivalent in the local
+//     proxy path, so it is accepted and ignored.
 //
 // Every other top-level key (temperature, top_p, previous_response_id,
-// metadata, user, text, ...) is rejected by
+// metadata, user, ...) is rejected by
 // responsesRejectUnsupportedTopLevelFields so that unsupported features
 // surface as 400s rather than being silently dropped (which would change
 // request semantics).
@@ -63,9 +65,22 @@ type responsesRawRequest struct {
 	Input           json.RawMessage `json:"input"`
 	Instructions    json.RawMessage `json:"instructions"`
 	Reasoning       json.RawMessage `json:"reasoning"`
+	Text            json.RawMessage `json:"text"`
 	Tools           []responsesTool `json:"tools,omitempty"`
 	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
 	Stream          bool            `json:"stream,omitempty"`
+}
+
+type responsesTextConfig struct {
+	Verbosity string               `json:"verbosity,omitempty"`
+	Format    *responsesTextFormat `json:"format,omitempty"`
+}
+
+type responsesTextFormat struct {
+	Type   string          `json:"type"`
+	Name   string          `json:"name,omitempty"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+	Strict bool            `json:"strict,omitempty"`
 }
 
 type responsesOutboundRequest struct {
@@ -101,6 +116,8 @@ var responsesAllowedTopLevelFields = map[string]bool{
 	"tool_choice":         true,
 	"parallel_tool_calls": true,
 	"reasoning":           true,
+	"text":                true,
+	"service_tier":        true,
 }
 
 // responsesRawMessage models a single element of the Input array form.
@@ -137,10 +154,8 @@ type responsesRawContentPart struct {
 // simple text response (prompt_cache_key, client_metadata, store,
 // include, tools, tool_choice, parallel_tool_calls, reasoning). All
 // other keys (temperature, top_p, previous_response_id, metadata,
-// user, text, ...) are rejected with a message that includes the
-// offending field name. The reasoning field is given a second,
-// value-sensitive check in responsesRequestToIR (null is allowed,
-// any non-null value is rejected).
+// user, ...) are rejected with a message that includes the offending
+// field name.
 func responsesRejectUnsupportedTopLevelFields(body []byte) error {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(body, &probe); err != nil {
@@ -165,11 +180,11 @@ func responsesRejectUnsupportedTopLevelFields(body []byte) error {
 // implement Anthropic SSE upstream). Any top-level field outside the
 // accepted set is rejected rather than silently dropped. The accepted
 // non-semantic fields (prompt_cache_key, client_metadata, store,
-// include, tools, tool_choice, parallel_tool_calls) are ignored.
-// reasoning:null is ignored; a non-null reasoning value is rejected
-// because the MVP does not honour reasoning effort. instructions (when
-// a non-empty string) is mapped onto a leading IR system message. A
-// negative max_output_tokens is rejected rather than silently clamped
+// include, tools, tool_choice, parallel_tool_calls, reasoning,
+// service_tier) are ignored. instructions (when a non-empty string) is
+// mapped onto a leading IR system message. text.format=json_schema is
+// translated into a system instruction that asks for schema-shaped JSON.
+// A negative max_output_tokens is rejected rather than silently clamped
 // to the default.
 //
 // An absent or empty "model" field is NOT rejected here: the proxy's
@@ -184,11 +199,6 @@ func responsesRequestToIR(body []byte) (IRRequest, error) {
 	var raw responsesRawRequest
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return IRRequest{}, fmt.Errorf("responses request: parse body: %w", err)
-	}
-	// reasoning value-sensitive check: null is allowed (Codex sends it
-	// when reasoning is disabled), any non-null value is rejected.
-	if raw.Reasoning != nil && string(raw.Reasoning) != "null" {
-		return IRRequest{}, fmt.Errorf("responses request: %q is not supported in the MVP (only null is accepted)", "reasoning")
 	}
 	if raw.MaxOutputTokens < 0 {
 		return IRRequest{}, fmt.Errorf("responses request: max_output_tokens must be >= 0 (got %d)", raw.MaxOutputTokens)
@@ -214,6 +224,19 @@ func responsesRequestToIR(body []byte) (IRRequest, error) {
 		if instructions == "" {
 			return IRRequest{}, fmt.Errorf("responses request: instructions must not be empty")
 		}
+	}
+	textInstruction, err := responsesTextConfigInstruction(raw.Text)
+	if err != nil {
+		return IRRequest{}, err
+	}
+	if textInstruction != "" {
+		if instructions != "" {
+			instructions += "\n\n" + textInstruction
+		} else {
+			instructions = textInstruction
+		}
+	}
+	if instructions != "" {
 		sysMsg := IRMessage{
 			Role:  "system",
 			Parts: []IRPart{{Type: irPartText, Text: instructions}},
@@ -232,6 +255,44 @@ func responsesRequestToIR(body []byte) (IRRequest, error) {
 		return IRRequest{}, fmt.Errorf("responses request: %w", err)
 	}
 	return req, nil
+}
+
+func responsesTextConfigInstruction(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var cfg responsesTextConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return "", fmt.Errorf("responses request: text must be an object")
+	}
+	if cfg.Format == nil {
+		return "", nil
+	}
+	switch cfg.Format.Type {
+	case "text":
+		return "", nil
+	case "json_schema":
+		if len(cfg.Format.Schema) == 0 || string(cfg.Format.Schema) == "null" {
+			return "", fmt.Errorf("responses request: text.format.schema must be present for json_schema")
+		}
+		var schema any
+		if err := json.Unmarshal(cfg.Format.Schema, &schema); err != nil {
+			return "", fmt.Errorf("responses request: text.format.schema must be valid JSON")
+		}
+		compactSchema, err := json.Marshal(schema)
+		if err != nil {
+			return "", fmt.Errorf("responses request: text.format.schema: %w", err)
+		}
+		name := cfg.Format.Name
+		if name == "" {
+			name = "response_schema"
+		}
+		return fmt.Sprintf("Respond only with JSON matching the requested schema. Do not include markdown fences or explanatory text. Schema name: %s. Schema: %s", name, string(compactSchema)), nil
+	case "":
+		return "", fmt.Errorf("responses request: text.format.type must be present")
+	default:
+		return "", fmt.Errorf("responses request: text.format.type %q is not supported in the MVP", cfg.Format.Type)
+	}
 }
 
 func irToResponsesRequest(req IRRequest) ([]byte, error) {

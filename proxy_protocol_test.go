@@ -348,18 +348,17 @@ func TestResponsesRequestToIRAcceptsTopLevelTools(t *testing.T) {
 	}
 }
 
-// TestResponsesRequestToIRRejectsTopLevelReasoningObject verifies that
-// a non-null reasoning value still surfaces as an error (the MVP does
-// not honour reasoning effort). A null reasoning is accepted in its
-// own dedicated test below.
-func TestResponsesRequestToIRRejectsTopLevelReasoningObject(t *testing.T) {
+// TestResponsesRequestToIRAcceptsTopLevelReasoningObject verifies that
+// Codex reasoning hints are accepted and ignored. The MVP does not honour
+// reasoning effort, but rejecting the field interrupts Codex guardian turns.
+func TestResponsesRequestToIRAcceptsTopLevelReasoningObject(t *testing.T) {
 	body := []byte(`{"model":"m","input":"hi","reasoning":{"effort":"high"}}`)
-	_, err := responsesRequestToIR(body)
-	if err == nil {
-		t.Fatal("responsesRequestToIR returned nil, want error for top-level reasoning object")
+	req, err := responsesRequestToIR(body)
+	if err != nil {
+		t.Fatalf("responsesRequestToIR returned error for top-level reasoning object: %v", err)
 	}
-	if !strings.Contains(err.Error(), "reasoning") {
-		t.Fatalf("error = %q, want mention reasoning", err.Error())
+	if got := req.Messages[0].Parts[0].Text; got != "hi" {
+		t.Fatalf("text = %q, want hi", got)
 	}
 }
 
@@ -374,6 +373,47 @@ func TestResponsesRequestToIRAcceptsReasoningNull(t *testing.T) {
 	}
 	if got := req.Messages[0].Parts[0].Text; got != "hi" {
 		t.Fatalf("text = %q, want hi", got)
+	}
+}
+
+// TestResponsesRequestToIRAcceptsCodexGuardianTextFormat verifies that a
+// Codex auto-approval guardian request carrying the Responses text config
+// (including a json_schema output format), reasoning hints, and service tier
+// is accepted. The proxy cannot enforce the output schema when translating to
+// Anthropic, but it must not reject the request before the guardian can run.
+func TestResponsesRequestToIRAcceptsCodexGuardianTextFormat(t *testing.T) {
+	body := []byte(`{
+		"model":"m",
+		"input":"Review this command: ls",
+		"text":{
+			"verbosity":"low",
+			"format":{
+				"type":"json_schema",
+				"strict":true,
+				"name":"codex_output_schema",
+				"schema":{
+					"type":"object",
+					"properties":{"outcome":{"type":"string","enum":["allow","deny"]}},
+					"required":["outcome"],
+					"additionalProperties":false
+				}
+			}
+		},
+		"reasoning":{"effort":"minimal"},
+		"service_tier":"default"
+	}`)
+	req, err := responsesRequestToIR(body)
+	if err != nil {
+		t.Fatalf("responsesRequestToIR returned error: %v", err)
+	}
+	if got := req.Messages[0].Role; got != "system" {
+		t.Fatalf("first role = %q, want system", got)
+	}
+	if got := req.Messages[0].Parts[0].Text; !strings.Contains(got, "codex_output_schema") || !strings.Contains(got, "Respond only with JSON") {
+		t.Fatalf("system instruction = %q, want schema guidance", got)
+	}
+	if got := req.Messages[1].Parts[0].Text; got != "Review this command: ls" {
+		t.Fatalf("user text = %q, want guardian prompt", got)
 	}
 }
 
@@ -464,9 +504,9 @@ func TestResponsesRequestToIRAcceptsCodexCommonFields(t *testing.T) {
 // TestResponsesRequestToIRRejectsUnknownFields verifies that top-level
 // keys outside the supported set are rejected with a field-specific
 // error rather than silently ignored. temperature, previous_response_id,
-// metadata, user, and text are common OpenAI Responses fields the MVP
-// does not honour. (store and include are now accepted-and-ignored
-// because real Codex sends them; see the dedicated acceptance test.)
+// metadata, and user are common OpenAI Responses fields the MVP does not
+// honour. (store, include, text, service_tier, and reasoning are now
+// accepted because real Codex sends them; see the dedicated acceptance tests.)
 func TestResponsesRequestToIRRejectsUnknownFields(t *testing.T) {
 	cases := []struct {
 		name string
@@ -478,7 +518,6 @@ func TestResponsesRequestToIRRejectsUnknownFields(t *testing.T) {
 		{"previous_response_id", `{"model":"m","input":"hi","previous_response_id":"resp_1"}`, "previous_response_id"},
 		{"metadata", `{"model":"m","input":"hi","metadata":{"k":"v"}}`, "metadata"},
 		{"user", `{"model":"m","input":"hi","user":"u-1"}`, "user"},
-		{"text", `{"model":"m","input":"hi","text":{"format":{"name":"json_object"}}}`, "text"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
