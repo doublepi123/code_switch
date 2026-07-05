@@ -270,7 +270,7 @@ func switchProxyProvider(pa *providerArgs, cfg *AppConfig, persistAppConfig func
 		fmt.Fprintf(out, "[dry-run] would switch %s to %s via proxy\n", pa.Agent, preset.Name)
 		fmt.Fprintf(out, "[dry-run] mode: proxy\n")
 		fmt.Fprintf(out, "[dry-run] upstream_protocol: %s\n", plan.UpstreamProtocol)
-		fmt.Fprintf(out, "[dry-run] local_proxy: %s\n", proxyBaseURL(normalizeProxyConfig(*cfg.Proxy).Port, pa.Agent != agentClaude))
+		fmt.Fprintf(out, "[dry-run] local_proxy: %s\n", proxyDisplayBaseURL(normalizeProxyConfig(*cfg.Proxy).Port, pa.Agent != agentClaude))
 		return nil
 	}
 
@@ -317,6 +317,22 @@ func proxyBaseURL(port int, v1 bool) string {
 		return base + "/v1"
 	}
 	return base
+}
+
+// proxyDisplayBaseURL renders the local proxy base URL for human-facing
+// output only. Port 0 means "auto-allocate when the daemon starts"; showing
+// the literal ":0" would look like a broken address, so the placeholder
+// "<auto>" is rendered instead. Never use this for URLs that are written to
+// agent configs or matched against runtime state — those must use
+// proxyBaseURL with a concrete port.
+func proxyDisplayBaseURL(port int, v1 bool) string {
+	if port == 0 {
+		if v1 {
+			return "http://127.0.0.1:<auto>/v1"
+		}
+		return "http://127.0.0.1:<auto>"
+	}
+	return proxyBaseURL(port, v1)
 }
 
 func proxyDaemonStatusText() string {

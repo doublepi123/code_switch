@@ -259,3 +259,20 @@ func stubProxyLifecycle(t *testing.T, running bool) func() {
 	stopProxyDaemon = func() error { return removeProxyRuntimeState() }
 	return func() { resetProxyDaemonHooks() }
 }
+
+func TestProxyDisplayBaseURLShowsAutoPlaceholderForPortZero(t *testing.T) {
+	for _, tt := range []struct {
+		port int
+		v1   bool
+		want string
+	}{
+		{0, true, "http://127.0.0.1:<auto>/v1"},
+		{0, false, "http://127.0.0.1:<auto>"},
+		{18080, true, "http://127.0.0.1:18080/v1"},
+		{18080, false, "http://127.0.0.1:18080"},
+	} {
+		if got := proxyDisplayBaseURL(tt.port, tt.v1); got != tt.want {
+			t.Fatalf("proxyDisplayBaseURL(%d, %v) = %q, want %q", tt.port, tt.v1, got, tt.want)
+		}
+	}
+}
