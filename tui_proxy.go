@@ -71,25 +71,34 @@ func providerDetailActionLabels(noModel bool) []string {
 //  1. A session-typed custom model (ts.customModels[provider]) wins —
 //     if the operator already typed/edited something this session, keep
 //     it so they can correct a typo without retyping.
-//  2. The provider's stored model (cfg.Providers[provider].Model) — the
-//     persisted default, so the operator sees the current value and can
-//     edit it rather than starting from a blank field.
-//  3. The preset's built-in Model (resolveProviderPreset(...).Model) —
+//  2. The provider's stored model in the agent-appropriate namespace.
+//  3. The preset's built-in Model (resolveAgentProviderPreset) —
 //     for a provider that has never had its model edited, fall back to
 //     the preset default so the field is not empty.
 //
 // NoModel providers (e.g. kimi-coding) yield "" — the page itself is
 // hidden for them, but the helper must still be safe to call. Whitespace
 // is trimmed so the form never starts with "  ".
-func useModelFormDefault(cfg *AppConfig, provider, customModel string) string {
+func useModelFormDefault(agent AgentName, cfg *AppConfig, provider, customModel string) string {
 	if custom := strings.TrimSpace(customModel); custom != "" {
 		return custom
 	}
 	if cfg != nil {
-		if stored := cfg.Providers[provider]; strings.TrimSpace(stored.Model) != "" {
-			return strings.TrimSpace(stored.Model)
+		switch agent {
+		case agentCodex:
+			if stored := codexProviderConfig(cfg, provider); strings.TrimSpace(stored.Model) != "" {
+				return strings.TrimSpace(stored.Model)
+			}
+		case agentOpencode:
+			if stored := opencodeProviderConfig(cfg, provider); strings.TrimSpace(stored.Model) != "" {
+				return strings.TrimSpace(stored.Model)
+			}
+		default:
+			if stored := cfg.Providers[provider]; strings.TrimSpace(stored.Model) != "" {
+				return strings.TrimSpace(stored.Model)
+			}
 		}
-		if preset, err := resolveProviderPreset(provider, cfg); err == nil && !preset.NoModel {
+		if preset, err := resolveAgentProviderPreset(agent, provider, cfg); err == nil && !preset.NoModel {
 			return strings.TrimSpace(preset.Model)
 		}
 	}
@@ -108,7 +117,7 @@ func useModelFormDefault(cfg *AppConfig, provider, customModel string) string {
 //   - Validation errors are surfaced inline via errLabel so the operator can
 //     correct the input without losing context.
 func (ts *tuiState) showUseModelForm(provider string) {
-	modelValue := useModelFormDefault(ts.cfg, provider, ts.customModels[provider])
+	modelValue := useModelFormDefault(ts.agent, ts.cfg, provider, ts.customModels[provider])
 	errLabel := tview.NewTextView()
 	errLabel.SetTextColor(tcell.ColorRed)
 	form := tview.NewForm()
@@ -122,7 +131,7 @@ func (ts *tuiState) showUseModelForm(provider string) {
 			errLabel.SetText(err.Error())
 			return
 		}
-		if err := useModelForProvider(cfg, provider, modelValue); err != nil {
+		if err := useModelForProvider(cfg, ts.agent, provider, modelValue); err != nil {
 			unlock()
 			errLabel.SetText(err.Error())
 			return
@@ -467,8 +476,26 @@ func proxyRouteFormDefaults(provider, agent string, cfg *AppConfig) proxyRouteFo
 	}
 	model := ""
 	if cfg != nil {
-		if preset, err := resolveProviderPreset(provider, cfg); err == nil {
-			if !preset.NoModel {
+		agentName := AgentName(honoured)
+		switch agentName {
+		case agentCodex:
+			if stored := codexProviderConfig(cfg, provider); strings.TrimSpace(stored.Model) != "" {
+				model = strings.TrimSpace(stored.Model)
+			}
+		case agentOpencode:
+			if stored := opencodeProviderConfig(cfg, provider); strings.TrimSpace(stored.Model) != "" {
+				model = strings.TrimSpace(stored.Model)
+			}
+		}
+		if model == "" {
+			if stored := cfg.Providers[provider]; strings.TrimSpace(stored.Model) != "" {
+				model = strings.TrimSpace(stored.Model)
+			}
+		}
+		if model == "" {
+			if preset, err := resolveAgentProviderPreset(agentName, provider, cfg); err == nil && !preset.NoModel {
+				model = strings.TrimSpace(preset.Model)
+			} else if preset, err := resolveProviderPreset(provider, cfg); err == nil && !preset.NoModel {
 				model = strings.TrimSpace(preset.Model)
 			}
 		}

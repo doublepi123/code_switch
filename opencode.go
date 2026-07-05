@@ -57,7 +57,7 @@ func switchOpencodeProvider(provider string, cfg *AppConfig, apiKey, modelOverri
 		return err
 	}
 
-	updated, err := applyOpencodePresetJSON(existing, preset, provider, apiKey)
+	updated, err := applyOpencodePresetJSON(existing, preset, provider, apiKey, cfg)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func opencodeNPMForProvider(providerKey string) string {
 	return "@ai-sdk/anthropic"
 }
 
-func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey string, apiKey string) (string, error) {
+func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey string, apiKey string, cfg *AppConfig) (string, error) {
 	root := map[string]any{}
 	if strings.TrimSpace(existing) != "" {
 		if err := json.Unmarshal([]byte(existing), &root); err != nil {
@@ -118,7 +118,11 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 		if !ok {
 			return "", fmt.Errorf("parse existing OpenCode config: provider must be an object")
 		}
-		providers = existingProviders
+		for key, value := range existingProviders {
+			if !isOpencodeManagedProviderKey(key, cfg) {
+				providers[key] = value
+			}
+		}
 	}
 	providers[providerKey] = providerEntry
 	root["provider"] = providers
@@ -156,7 +160,10 @@ func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dr
 		return err
 	}
 	existing := string(existingBytes)
-	updated := removeOpencodeManagedJSON(existing, cfg)
+	updated, err := removeOpencodeManagedJSON(existing, cfg)
+	if err != nil {
+		return err
+	}
 
 	if err := backupIfExists(configPath); err != nil {
 		return err
@@ -177,20 +184,20 @@ func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dr
 	return nil
 }
 
-func removeOpencodeManagedJSON(existing string, cfg *AppConfig) string {
+func removeOpencodeManagedJSON(existing string, cfg *AppConfig) (string, error) {
 	root := map[string]any{}
 	if strings.TrimSpace(existing) == "" {
-		return ""
+		return "", nil
 	}
 	if err := json.Unmarshal([]byte(existing), &root); err != nil {
-		return existing
+		return "", fmt.Errorf("parse existing OpenCode config: %w", err)
 	}
 
 	delete(root, "model")
 	if raw, ok := root["provider"]; ok {
 		providers, ok := raw.(map[string]any)
 		if !ok {
-			return existing
+			return "", fmt.Errorf("parse existing OpenCode config: provider must be an object")
 		}
 		for key := range providers {
 			if isOpencodeManagedProviderKey(key, cfg) {
@@ -207,20 +214,18 @@ func removeOpencodeManagedJSON(existing string, cfg *AppConfig) string {
 	// If only $schema remains, return empty to trigger file deletion
 	if len(root) == 1 {
 		if _, hasSchema := root["$schema"]; hasSchema {
-			return ""
+			return "", nil
 		}
 	}
 
 	if len(root) == 0 {
-		return ""
+		return "", nil
 	}
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
-		// Preserve the original content rather than returning "" which
-		// restoreOpencodeConfig treats as a signal to os.Remove the file.
-		return existing
+		return "", fmt.Errorf("marshal OpenCode config: %w", err)
 	}
-	return string(data) + "\n"
+	return string(data) + "\n", nil
 }
 
 func isOpencodeManagedProviderKey(provider string, cfg *AppConfig) bool {

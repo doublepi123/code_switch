@@ -85,7 +85,7 @@ func scanBackups(agent, dir string) []backupEntry {
 }
 
 func isBackupFile(name string) bool {
-	return strings.Contains(name, ".bak-") || strings.HasSuffix(name, ".bak")
+	return strings.Contains(name, ".bak-")
 }
 
 func backupBase(name string) string {

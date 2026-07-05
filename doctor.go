@@ -193,7 +193,7 @@ func checkCodexFile(path string) checkResult {
 	}
 	_, provider, model, _, err := currentCodexProvider(filepath.Dir(path))
 	if err != nil {
-		return okResult("codex config", "present")
+		return failResult("codex config", err.Error())
 	}
 	if provider == "" {
 		return okResult("codex config", fmt.Sprintf("%s present, no provider", filepath.Base(path)))
@@ -218,7 +218,7 @@ func checkOpencodeFile(path string) checkResult {
 	}
 	_, model, baseURL, _, providerName, err := currentOpencodeProvider(filepath.Dir(path))
 	if err != nil {
-		return okResult("opencode config", "present")
+		return failResult("opencode config", err.Error())
 	}
 	detail := "present"
 	if baseURL != "" {

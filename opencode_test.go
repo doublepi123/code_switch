@@ -613,7 +613,7 @@ func TestOpencodeApplyPresetJSONCustomProviderKey(t *testing.T) {
 	}
 	// "acme" is not a key in providerPresets, so this exercises the
 	// custom-provider-key path of applyOpencodePresetJSON.
-	out, err := applyOpencodePresetJSON("", preset, "acme", "sk-acme-test")
+	out, err := applyOpencodePresetJSON("", preset, "acme", "sk-acme-test", &AppConfig{})
 	if err != nil {
 		t.Fatalf("applyOpencodePresetJSON returned error: %v", err)
 	}

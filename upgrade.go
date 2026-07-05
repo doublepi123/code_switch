@@ -676,11 +676,16 @@ func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo
 	}
 
 	// Strategy 1: try <asset>.sha256 (just the hash)
+	var sidecarMismatch error
 	shaURL := releaseDownloadURL(baseURL, repo, tag, asset+".sha256")
 	shaData, err := downloadChecksumContent(ctx, client, shaURL)
 	if err == nil && strings.TrimSpace(shaData) != "" {
 		expected := strings.TrimSpace(strings.Fields(shaData)[0])
-		return validateSHA256(archivePath, expected)
+		if validateErr := validateSHA256(archivePath, expected); validateErr == nil {
+			return nil
+		} else {
+			sidecarMismatch = validateErr
+		}
 	}
 
 	// Strategy 2: try checksums.txt
@@ -703,6 +708,9 @@ func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo
 		}
 	}
 
+	if sidecarMismatch != nil {
+		return sidecarMismatch
+	}
 	return errNoChecksumAvailable
 }
 
@@ -741,7 +749,7 @@ func validateSHA256(filePath, expected string) error {
 		return fmt.Errorf("compute checksum: %w", err)
 	}
 	actualHex := hex.EncodeToString(h.Sum(nil))
-	if actualHex != expected {
+	if !strings.EqualFold(actualHex, expected) {
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expected, actualHex)
 	}
 	return nil

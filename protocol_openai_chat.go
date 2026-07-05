@@ -12,9 +12,10 @@ type openAIChatMessage struct {
 }
 
 type openAIChatRequest struct {
-	Model    string              `json:"model"`
-	Messages []openAIChatMessage `json:"messages"`
-	Stream   bool                `json:"stream,omitempty"`
+	Model      string              `json:"model"`
+	Messages   []openAIChatMessage `json:"messages"`
+	MaxTokens  int                 `json:"max_tokens,omitempty"`
+	Stream     bool                `json:"stream,omitempty"`
 }
 
 func irToOpenAIChatRequest(req IRRequest) ([]byte, error) {
@@ -29,7 +30,7 @@ func irToOpenAIChatRequest(req IRRequest) ([]byte, error) {
 		}
 		messages = append(messages, openAIChatMessage{Role: msg.Role, Content: b.String()})
 	}
-	out := openAIChatRequest{Model: req.Model, Messages: messages}
+	out := openAIChatRequest{Model: req.Model, Messages: messages, MaxTokens: req.MaxTokens}
 	return json.Marshal(out)
 }
 

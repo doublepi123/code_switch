@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -104,7 +105,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	} else if selection.APIKey != "" {
 		apiKey = selection.APIKey
 	} else if apiKey == "" || *resetKey || selection.ResetKey {
-		apiKey, err = promptAPIKey(reader, out, provider)
+		apiKey, err = promptAPIKey(in, reader, out, provider)
 		if err != nil {
 			return err
 		}
@@ -220,12 +221,17 @@ func (ts *tuiState) finishSelection(provider, model string) {
 			ov = ts.cfg.Providers[provider]
 		}
 	}
+	authEnv := ""
+	if ts.cfg != nil && ts.agent == agentClaude {
+		authEnv = ts.cfg.Providers[provider].AuthEnv
+	}
 	ts.result = ConfigureSelection{
 		Agent:    string(ts.agent),
 		Provider: provider,
 		Model:    model,
 		ResetKey: ts.resetKeys[provider],
 		APIKey:   strings.TrimSpace(ts.typedAPIKeys[provider]),
+		AuthEnv:  authEnv,
 		Haiku:    ov.Haiku,
 		Sonnet:   ov.Sonnet,
 		Opus:     ov.Opus,
@@ -394,7 +400,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 		case canSwitch && (event.Rune() == 's' || event.Rune() == 'S'):
 			ts.finishSelection(provider, preset.Model)
 			return nil
-		case !preset.NoModel && (event.Rune() == 't' || event.Rune() == 'T'):
+		case ts.agent != agentOpencode && !preset.NoModel && (event.Rune() == 't' || event.Rune() == 'T'):
 			ts.showTierConfig(provider, backPage)
 			return nil
 		case !preset.NoModel && (event.Rune() == 'u' || event.Rune() == 'U'):
@@ -1163,24 +1169,41 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 				modelText = defaultModel
 			}
 
+			stored := cfg.Providers[provider]
+			if agent == agentOpencode {
+				stored = opencodeProviderConfig(cfg, provider)
+			} else if agent == agentCodex {
+				stored = codexProviderConfig(cfg, provider)
+			}
+
 			return ConfigureSelection{
 				Agent:    string(agent),
 				Provider: provider,
 				Model:    modelText,
+				AuthEnv:  stored.AuthEnv,
+				Haiku:    stored.Haiku,
+				Sonnet:   stored.Sonnet,
+				Opus:     stored.Opus,
+				Subagent: stored.Subagent,
 			}, nil
 		}
 		fmt.Fprintf(out, "\nInvalid provider: %s\n", strings.TrimSpace(text))
 	}
 }
 
-func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string, error) {
+func promptAPIKey(in io.Reader, reader *bufio.Reader, out io.Writer, provider string) (string, error) {
 	fmt.Fprintf(out, "Enter API key for %s:\n", provider)
-	useTerminalMasking := term.IsTerminal(int(os.Stdin.Fd()))
+	useTerminalMasking := false
+	var maskFd uintptr
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		useTerminalMasking = true
+		maskFd = f.Fd()
+	}
 	for {
 		fmt.Fprint(out, "API key: ")
 		var key string
 		if useTerminalMasking {
-			raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+			raw, err := term.ReadPassword(int(maskFd))
 			fmt.Fprintln(out)
 			if err != nil {
 				return "", err
@@ -1389,15 +1412,20 @@ func detectOpencodeCurrentProvider(cfg *AppConfig, opencodeDir string) (string, 
 		return provider, cm
 	}
 	if cm != "" {
+		var matches []string
 		for name, stored := range cfg.Providers {
 			if stored.Model == cm {
-				return name, cm
+				matches = append(matches, name)
 			}
 		}
 		for name, stored := range agentConfig(cfg, agentOpencode).Providers {
 			if stored.Model == cm {
-				return name, cm
+				matches = append(matches, name)
 			}
+		}
+		if len(matches) > 0 {
+			sort.Strings(matches)
+			return matches[0], cm
 		}
 	}
 	return "", cm

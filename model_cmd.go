@@ -54,18 +54,28 @@ func parseProviderArg(args []string, usage string) (string, []string, error) {
 }
 
 func cmdModelGet(args []string, out io.Writer) error {
-	provider, rest, err := parseProviderArg(args, "usage: code-switch model get <provider>")
+	fs := flag.NewFlagSet("model get", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	provider, rest, err := parseProviderArg(fs.Args(), "usage: code-switch model get <provider> [--agent claude|codex|opencode]")
 	if err != nil {
 		return err
 	}
 	if len(rest) > 0 {
 		return fmt.Errorf("usage: code-switch model get <provider> (unexpected extra arguments)")
 	}
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
 	cfg, _, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	preset, err := resolveProviderPreset(provider, cfg)
+	preset, err := resolveAgentProviderPreset(agent, provider, cfg)
 	if err != nil {
 		return fmt.Errorf("unsupported provider %q", provider)
 	}
@@ -76,12 +86,13 @@ func cmdModelGet(args []string, out io.Writer) error {
 func cmdModelSet(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("model set", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	rest := fs.Args()
 	if len(rest) != 2 {
-		return fmt.Errorf("usage: code-switch model set <provider> <model>")
+		return fmt.Errorf("usage: code-switch model set <provider> <model> [--agent claude|codex|opencode]")
 	}
 	provider := canonicalProviderName(strings.TrimSpace(rest[0]))
 	if provider == "" {
@@ -91,6 +102,10 @@ func cmdModelSet(args []string, out io.Writer) error {
 	if model == "" {
 		return fmt.Errorf("model must not be empty")
 	}
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
 
 	cfg, path, unlock, err := loadAppConfigLocked()
 	if err != nil {
@@ -98,11 +113,7 @@ func cmdModelSet(args []string, out io.Writer) error {
 	}
 	defer unlock()
 
-	// setDefaultModelForProvider centralises the provider/model validation
-	// (unknown provider, NoModel presets, opencode-go chat-only models,
-	// custom providers) and the field-preserving persistence so `model
-	// set` and `use-model` stay in lock-step.
-	if err := setDefaultModelForProvider(cfg, provider, model); err != nil {
+	if err := setDefaultModelForAgent(cfg, agent, provider, model); err != nil {
 		return err
 	}
 	if err := writeJSONAtomic(path, cfg); err != nil {
@@ -113,31 +124,34 @@ func cmdModelSet(args []string, out io.Writer) error {
 }
 
 func cmdModelList(args []string, out io.Writer) error {
-	provider, rest, err := parseProviderArg(args, "usage: code-switch model list <provider>")
+	fs := flag.NewFlagSet("model list", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	provider, rest, err := parseProviderArg(fs.Args(), "usage: code-switch model list <provider> [--agent claude|codex|opencode]")
 	if err != nil {
 		return err
 	}
 	if len(rest) > 0 {
 		return fmt.Errorf("usage: code-switch model list <provider> (unexpected extra arguments)")
 	}
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
 	cfg, _, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	preset, err := resolveProviderPreset(provider, cfg)
+	preset, err := resolveAgentProviderPreset(agent, provider, cfg)
 	if err != nil {
 		return fmt.Errorf("unsupported provider %q", provider)
 	}
 
 	fmt.Fprintf(out, "Models for %s:\n", provider)
-	// A custom provider (not a built-in preset) with no stored model:
-	// resolveProviderPreset synthesises a "custom-model" placeholder so
-	// the rest of the pipeline always has a non-empty Model, but that
-	// name is not a real model the user can invoke. Detect this case
-	// (custom provider + empty stored model) and surface the explicit
-	// "(no models available)" placeholder instead of printing the
-	// synthetic name as if it were real.
-	if !isPresetProvider(provider) {
+	if agent == agentClaude && !isPresetProvider(provider) {
 		stored := cfg.Providers[provider]
 		if strings.TrimSpace(stored.Model) == "" {
 			fmt.Fprintf(out, "  (no models available)\n")
@@ -212,7 +226,7 @@ func ensureProviderModelMappings(cfg *AppConfig, provider string) map[string]str
 //   - custom (non-preset) providers pass through.
 //
 // The caller is responsible for locking and persisting cfg via writeJSONAtomic.
-func useModelForProvider(cfg *AppConfig, provider, model string) error {
+func useModelForProvider(cfg *AppConfig, agent AgentName, provider, model string) error {
 	provider = canonicalProviderName(strings.TrimSpace(provider))
 	model = strings.TrimSpace(model)
 	if provider == "" {
@@ -221,7 +235,7 @@ func useModelForProvider(cfg *AppConfig, provider, model string) error {
 	if model == "" {
 		return fmt.Errorf("model must not be empty")
 	}
-	if err := setDefaultModelForProvider(cfg, provider, model); err != nil {
+	if err := setDefaultModelForAgent(cfg, agent, provider, model); err != nil {
 		return err
 	}
 	// Mirror `cs use-model`: also point the "default" client-model
@@ -231,15 +245,43 @@ func useModelForProvider(cfg *AppConfig, provider, model string) error {
 	return nil
 }
 
-// setDefaultModelForProvider is the shared validation + persistence core
-// used by both `cmdModelSet` and `useModelForProvider`. It assumes
-// `provider` and `model` have already been canonicalized and trimmed and
-// are non-empty; callers handle the empty checks themselves so the error
-// messages stay specific. It writes the model to cfg.Providers[provider]
-// (preserving every other field) but does NOT touch model mappings —
-// `useModelForProvider` additionally sets the "default" mapping on top.
-//
-// The caller is responsible for locking and persisting cfg via writeJSONAtomic.
+// setDefaultModelForAgent is the shared validation + persistence core
+// used by both `cmdModelSet` and `useModelForProvider`. It writes the
+// model to the agent-appropriate config namespace while preserving
+// every other stored field.
+func setDefaultModelForAgent(cfg *AppConfig, agent AgentName, provider, model string) error {
+	switch agent {
+	case agentCodex:
+		preset, err := resolveAgentProviderPreset(agent, provider, cfg)
+		if err != nil {
+			return fmt.Errorf("unsupported provider %q", provider)
+		}
+		if err := validateModelSelectionForProvider(provider, model, true, preset); err != nil {
+			return err
+		}
+		stored := codexProviderConfig(cfg, provider)
+		stored.Model = model
+		setAgentProviderConfig(cfg, agentCodex, provider, stored)
+		return nil
+	case agentOpencode:
+		preset, err := resolveAgentProviderPreset(agent, provider, cfg)
+		if err != nil {
+			return fmt.Errorf("unsupported provider %q", provider)
+		}
+		if err := validateModelSelectionForProvider(provider, model, isPresetProvider(provider), preset); err != nil {
+			return err
+		}
+		stored := opencodeProviderConfig(cfg, provider)
+		stored.Model = model
+		setAgentProviderConfig(cfg, agentOpencode, provider, stored)
+		return nil
+	default:
+		return setDefaultModelForProvider(cfg, provider, model)
+	}
+}
+
+// setDefaultModelForProvider persists a default model for Claude/shared
+// providers. Agent-specific storage uses setDefaultModelForAgent.
 func setDefaultModelForProvider(cfg *AppConfig, provider, model string) error {
 	preset, err := resolveProviderPreset(provider, cfg)
 	if err != nil {
@@ -520,12 +562,13 @@ func validateModelSelectionForProvider(provider string, model string, presetKnow
 func cmdUseModel(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("use-model", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude, codex, or opencode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	rest := fs.Args()
 	if len(rest) != 2 {
-		return fmt.Errorf("usage: code-switch use-model <provider> <model>")
+		return fmt.Errorf("usage: code-switch use-model <provider> <model> [--agent claude|codex|opencode]")
 	}
 	provider := canonicalProviderName(strings.TrimSpace(rest[0]))
 	if provider == "" {
@@ -535,6 +578,10 @@ func cmdUseModel(args []string, out io.Writer) error {
 	if model == "" {
 		return fmt.Errorf("model must not be empty")
 	}
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
 
 	cfg, path, unlock, err := loadAppConfigLocked()
 	if err != nil {
@@ -542,7 +589,7 @@ func cmdUseModel(args []string, out io.Writer) error {
 	}
 	defer unlock()
 
-	if err := useModelForProvider(cfg, provider, model); err != nil {
+	if err := useModelForProvider(cfg, agent, provider, model); err != nil {
 		return err
 	}
 	if err := writeJSONAtomic(path, cfg); err != nil {

@@ -125,6 +125,38 @@ func mergeAppConfig(dst *AppConfig, src *AppConfig) {
 	if strings.TrimSpace(src.Default) != "" {
 		dst.Default = src.Default
 	}
+	if len(src.ModelMappings) > 0 {
+		if dst.ModelMappings == nil {
+			dst.ModelMappings = map[string]map[string]string{}
+		}
+		for provider, mappings := range src.ModelMappings {
+			if dst.ModelMappings[provider] == nil {
+				dst.ModelMappings[provider] = map[string]string{}
+			}
+			for k, v := range mappings {
+				dst.ModelMappings[provider][k] = v
+			}
+		}
+	}
+	if src.Proxy != nil {
+		if dst.Proxy == nil {
+			dst.Proxy = &ProxyConfig{}
+		}
+		if strings.TrimSpace(src.Proxy.Host) != "" {
+			dst.Proxy.Host = src.Proxy.Host
+		}
+		if src.Proxy.Port != 0 {
+			dst.Proxy.Port = src.Proxy.Port
+		}
+		if len(src.Proxy.Routes) > 0 {
+			if dst.Proxy.Routes == nil {
+				dst.Proxy.Routes = map[string]ProxyRouteConfig{}
+			}
+			for k, v := range src.Proxy.Routes {
+				dst.Proxy.Routes[k] = v
+			}
+		}
+	}
 }
 
 // redactConfigKeys returns a deep copy of cfg with all API keys blanked.

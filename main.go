@@ -418,8 +418,11 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 		}
 		delete(agentCfg.Providers, provider)
 		cfg.Agents[string(agentCodex)] = agentCfg
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			return err
+		}
 		fmt.Fprintf(out, "removed %s (codex) from %s\n", provider, path)
-		return writeJSONAtomic(path, cfg)
+		return nil
 	}
 
 	if agent == agentOpencode {
@@ -444,8 +447,11 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 		}
 		delete(agentCfg.Providers, provider)
 		cfg.Agents[string(agentOpencode)] = agentCfg
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			return err
+		}
 		fmt.Fprintf(out, "removed %s (opencode) from %s\n", provider, path)
-		return writeJSONAtomic(path, cfg)
+		return nil
 	}
 
 	stored, ok := cfg.Providers[provider]
@@ -467,8 +473,11 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 	}
 
 	delete(cfg.Providers, provider)
+	if err := writeJSONAtomic(path, cfg); err != nil {
+		return err
+	}
 	fmt.Fprintf(out, "removed %s from %s\n", provider, path)
-	return writeJSONAtomic(path, cfg)
+	return nil
 }
 func cmdCompletion(args []string, out io.Writer) error {
 	if len(args) == 0 {

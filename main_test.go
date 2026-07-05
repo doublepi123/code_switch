@@ -4833,7 +4833,7 @@ func TestCmdRemoveConfirmYes(t *testing.T) {
 func TestPromptAPIKeyEOF(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	output := &bytes.Buffer{}
-	_, err := promptAPIKey(reader, output, "test-provider")
+	_, err := promptAPIKey(strings.NewReader(""), reader, output, "test-provider")
 	if err == nil {
 		t.Fatal("expected error on EOF")
 	}

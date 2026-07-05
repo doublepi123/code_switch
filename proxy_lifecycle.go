@@ -295,7 +295,13 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 		_, _ = w.Write(body)
 	})
 	mux.Handle("/", newProxyHandler(route, cfg.Providers[route.Provider].APIKey))
-	server := &http.Server{Handler: mux}
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       65 * time.Second,
+		WriteTimeout:      65 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	if err := writeProxyRuntimeState(state); err != nil {
 		_ = ln.Close()
 		return nil, err

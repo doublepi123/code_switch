@@ -97,11 +97,13 @@ func runTestRequest(ctx context.Context, preset ProviderPreset, apiKey, testPath
 	testURL := baseURL + tp
 
 	reqBody := testRequest{
-		Model:     preset.Model,
 		MaxTokens: 10,
 		Messages: []testMessage{
 			{Role: "user", Content: "Say hi"},
 		},
+	}
+	if !preset.NoModel {
+		reqBody.Model = preset.Model
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -138,6 +140,37 @@ func runTestRequest(ctx context.Context, preset ProviderPreset, apiKey, testPath
 		return oc, nil
 	}
 	return oc, fmt.Errorf("test %s: status %d", preset.Name, resp.StatusCode)
+}
+
+func runCodexTestRequest(ctx context.Context, preset ProviderPreset, apiKey string, client *http.Client) testOutcome {
+	testURL := codexResponsesURL(preset.BaseURL)
+	bodyBytes, err := json.Marshal(codexTestRequest{Model: preset.Model, Input: "Say hi"})
+	if err != nil {
+		return testOutcome{URL: testURL}
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, testURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return testOutcome{URL: testURL}
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", "code-switch/"+version)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return testOutcome{URL: testURL, RequestErr: err}
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	oc := testOutcome{StatusCode: resp.StatusCode, URL: testURL, Body: body, ReadErr: readErr}
+	if readErr != nil {
+		return oc
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		oc.OK = true
+	}
+	return oc
 }
 
 func testProvider(out io.Writer, preset ProviderPreset, apiKey, testPath string) error {
@@ -237,7 +270,13 @@ func probeOneForAll(agent AgentName, cfg *AppConfig, name, apiKeyFlag, testPath 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	start := time.Now()
-	oc, _ := runTestRequest(ctx, preset, key, testPath, client)
+	var oc testOutcome
+	switch agent {
+	case agentCodex:
+		oc = runCodexTestRequest(ctx, preset, key, client)
+	default:
+		oc, _ = runTestRequest(ctx, preset, key, testPath, client)
+	}
 	row.Duration = time.Since(start)
 	row.HTTP = oc.StatusCode
 	if oc.OK {

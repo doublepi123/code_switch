@@ -669,6 +669,9 @@ func currentCodexProvider(codexDir string) (string, string, string, string, erro
 		return "", "", "", "", err
 	}
 	provider, model, baseURL, err := parseCodexTopLevel(content)
+	if provider != "" {
+		provider = codexTOMLProviderKey(provider)
+	}
 	return configPath, provider, model, baseURL, err
 }
 

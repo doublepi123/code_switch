@@ -330,7 +330,7 @@ func TestUseModelFormDefaultFallsBackToPresetModel(t *testing.T) {
 	cfg := &AppConfig{}
 	// No stored model, no custom model — fall back to the preset's
 	// built-in Model. zhipu-cn ships glm-5.2 in providerPresets.
-	got := useModelFormDefault(cfg, "zhipu-cn", "")
+	got := useModelFormDefault(agentClaude, cfg, "zhipu-cn", "")
 	if got == "" {
 		t.Fatal("useModelFormDefault should fall back to preset model, got empty")
 	}
@@ -347,7 +347,7 @@ func TestUseModelFormDefaultPrefersStoredModel(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "sk-test", Model: "user-picked"}},
 	}
-	got := useModelFormDefault(cfg, "zhipu-cn", "")
+	got := useModelFormDefault(agentClaude, cfg, "zhipu-cn", "")
 	if got != "user-picked" {
 		t.Fatalf("useModelFormDefault = %q, want user-picked", got)
 	}
@@ -358,7 +358,7 @@ func TestUseModelFormDefaultPrefersCustomTypedModel(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "sk-test", Model: "stored"}},
 	}
-	got := useModelFormDefault(cfg, "zhipu-cn", "session-typed")
+	got := useModelFormDefault(agentClaude, cfg, "zhipu-cn", "session-typed")
 	if got != "session-typed" {
 		t.Fatalf("useModelFormDefault = %q, want session-typed", got)
 	}
@@ -369,7 +369,7 @@ func TestUseModelFormDefaultNoModelProviderEmpty(t *testing.T) {
 	// the page itself is hidden for NoModel providers, but the helper
 	// must still be safe to call).
 	cfg := &AppConfig{}
-	got := useModelFormDefault(cfg, "kimi-coding", "")
+	got := useModelFormDefault(agentClaude, cfg, "kimi-coding", "")
 	if got != "" {
 		t.Fatalf("useModelFormDefault for NoModel provider = %q, want empty", got)
 	}
@@ -379,7 +379,7 @@ func TestUseModelFormDefaultTrimsWhitespace(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{"zhipu-cn": {Model: "  glm-5.2  "}},
 	}
-	got := useModelFormDefault(cfg, "zhipu-cn", "  ")
+	got := useModelFormDefault(agentClaude, cfg, "zhipu-cn", "  ")
 	if got != "glm-5.2" {
 		t.Fatalf("useModelFormDefault should trim whitespace, got %q", got)
 	}

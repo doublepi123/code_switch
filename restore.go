@@ -25,15 +25,20 @@ func cmdRestore(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, _, unlock, err := loadAppConfigLocked()
-	if err != nil {
-		return err
-	}
-	defer unlock()
 	switch agent {
 	case agentCodex:
+		cfg, _, unlock, err := loadAppConfigLocked()
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		return restoreCodexConfig(*codexDir, cfg, out, *dryRun)
 	case agentOpencode:
+		cfg, _, unlock, err := loadAppConfigLocked()
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		return restoreOpencodeConfig(*opencodeDir, cfg, out, *dryRun)
 	default:
 		return restoreClaudeConfig(*claudeDir, out, *dryRun)

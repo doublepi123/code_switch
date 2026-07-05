@@ -21,7 +21,7 @@ func TestUseModelForProviderUpdatesModelAndDefaultMapping(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "sk-test"}},
 	}
-	if err := useModelForProvider(cfg, "zhipu-cn", "glm-5.2"); err != nil {
+	if err := useModelForProvider(cfg, agentClaude, "zhipu-cn", "glm-5.2"); err != nil {
 		t.Fatalf("useModelForProvider error: %v", err)
 	}
 	stored := cfg.Providers["zhipu-cn"]
@@ -41,7 +41,7 @@ func TestUseModelForProviderCanonicalizesAlias(t *testing.T) {
 		Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "sk-test"}},
 	}
 	// "bigmodel" is an alias for zhipu-cn.
-	if err := useModelForProvider(cfg, "bigmodel", "glm-5.2"); err != nil {
+	if err := useModelForProvider(cfg, agentClaude, "bigmodel", "glm-5.2"); err != nil {
 		t.Fatalf("useModelForProvider alias error: %v", err)
 	}
 	if got := cfg.Providers["zhipu-cn"].Model; got != "glm-5.2" {
@@ -54,7 +54,7 @@ func TestUseModelForProviderCanonicalizesAlias(t *testing.T) {
 
 func TestUseModelForProviderRejectsUnknownProvider(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
-	err := useModelForProvider(cfg, "ghost", "glm-5.2")
+	err := useModelForProvider(cfg, agentClaude, "ghost", "glm-5.2")
 	if err == nil {
 		t.Fatal("expected error for unknown provider, got nil")
 	}
@@ -75,7 +75,7 @@ func TestUseModelForProviderRejectsEmptyArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := useModelForProvider(cfg, tc.provider, tc.model)
+			err := useModelForProvider(cfg, agentClaude, tc.provider, tc.model)
 			if err == nil {
 				t.Fatalf("expected error for %s, got nil", tc.name)
 			}
@@ -89,7 +89,7 @@ func TestUseModelForProviderRejectsEmptyArgs(t *testing.T) {
 func TestUseModelForProviderRejectsNoModelProvider(t *testing.T) {
 	// kimi-coding is a NoModel preset (configured by API key alone).
 	cfg := &AppConfig{Providers: map[string]StoredProvider{"kimi-coding": {APIKey: "sk-test"}}}
-	err := useModelForProvider(cfg, "kimi-coding", "anything")
+	err := useModelForProvider(cfg, agentClaude, "kimi-coding", "anything")
 	if err == nil {
 		t.Fatal("expected error for NoModel provider, got nil")
 	}
@@ -101,7 +101,7 @@ func TestUseModelForProviderRejectsNoModelProvider(t *testing.T) {
 func TestUseModelForProviderRejectsUnsupportedOpencodeGoModel(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{"opencode-go": {APIKey: "sk-test"}}}
 	// glm-5 is in unsupportedOpenCodeGoAnthropicModels.
-	err := useModelForProvider(cfg, "opencode-go", "glm-5")
+	err := useModelForProvider(cfg, agentClaude, "opencode-go", "glm-5")
 	if err == nil {
 		t.Fatal("expected error for unsupported opencode-go model, got nil")
 	}

@@ -121,6 +121,17 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          : > checksums.txt
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) | sort | while read -r f; do
+            hash=$(sha256sum "$f" | awk '{print $1}')
+            name=$(basename "$f")
+            printf '%s  %s\n' "$hash" "$name" >> checksums.txt
+          done
+          cat checksums.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -129,6 +140,7 @@ jobs:
           draft: false
           generate_release_notes: true
           files: |
+            artifacts/checksums.txt
             artifacts/${{ env.PROJECT_NAME }}-darwin-amd64/${{ env.PROJECT_NAME }}-darwin-amd64.tar.gz
             artifacts/${{ env.PROJECT_NAME }}-darwin-arm64/${{ env.PROJECT_NAME }}-darwin-arm64.tar.gz
             artifacts/${{ env.PROJECT_NAME }}-linux-amd64/${{ env.PROJECT_NAME }}-linux-amd64.tar.gz
