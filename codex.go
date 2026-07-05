@@ -25,6 +25,75 @@ func codexConfigPath(overrideDir string) string {
 	return filepath.Join(dir, "config.toml")
 }
 
+func codexModelCatalogPath(overrideDir string) string {
+	return filepath.Join(filepath.Dir(codexConfigPath(overrideDir)), "code-switch-model-catalog.json")
+}
+
+func writeCodexModelCatalog(path, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	window := codexModelContextWindow(model)
+	catalog := map[string]any{
+		"models": []map[string]any{
+			{
+				"slug":                             model,
+				"display_name":                     model,
+				"description":                      "Custom model routed by code-switch",
+				"default_reasoning_level":          "medium",
+				"supported_reasoning_levels":       codexSupportedReasoningLevels(),
+				"shell_type":                       "shell_command",
+				"visibility":                       "list",
+				"supported_in_api":                 true,
+				"priority":                         0,
+				"availability_nux":                 nil,
+				"upgrade":                          nil,
+				"base_instructions":                "You are Codex.",
+				"supports_reasoning_summaries":     false,
+				"default_reasoning_summary":        "none",
+				"support_verbosity":                false,
+				"default_verbosity":                nil,
+				"apply_patch_tool_type":            nil,
+				"truncation_policy":                map[string]any{"mode": "tokens", "limit": 10000},
+				"supports_parallel_tool_calls":     false,
+				"context_window":                   window,
+				"effective_context_window_percent": 95,
+				"experimental_supported_tools":     []string{},
+				"input_modalities":                 []string{"text"},
+				"prefer_websockets":                false,
+				"supports_search_tool":             false,
+				"max_context_window":               window,
+			},
+		},
+	}
+	return writeJSONAtomic(path, catalog)
+}
+
+func codexSupportedReasoningLevels() []map[string]string {
+	return []map[string]string{
+		{"effort": "low", "description": "Low"},
+		{"effort": "medium", "description": "Medium"},
+		{"effort": "high", "description": "High"},
+	}
+}
+
+func codexModelContextWindow(model string) int {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.Contains(lower, "[1m]") || strings.Contains(lower, "1m"):
+		return 1000000
+	case strings.Contains(lower, "[512k]") || strings.Contains(lower, "512k"):
+		return 512000
+	case strings.Contains(lower, "[256k]") || strings.Contains(lower, "256k"):
+		return 256000
+	case strings.Contains(lower, "[128k]") || strings.Contains(lower, "128k"):
+		return 128000
+	default:
+		return 128000
+	}
+}
+
 func codexTOMLProviderName(provider string) string {
 	switch provider {
 	case "deepseek":

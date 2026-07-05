@@ -26,7 +26,7 @@ import (
 //
 // The provider/model/key are resolved through the Claude resolver so every
 // Claude preset is selectable; the upstream provider key is NEVER printed.
-// Dry-run emits the proxy plan (agent/provider/model/protocol/urls/env) and
+// Dry-run emits the proxy plan (agent/provider/model/protocol/urls/auth) and
 // the rendered codex config.toml.
 func cmdRun(args []string, out io.Writer) error {
 	if len(args) == 0 {
@@ -82,11 +82,6 @@ func cmdRun(args []string, out io.Writer) error {
 		return err
 	}
 
-	token, err := randomProxyToken()
-	if err != nil {
-		return fmt.Errorf("generate proxy token: %w", err)
-	}
-
 	codexHome := filepath.Join(os.TempDir(), fmt.Sprintf("code-switch-codex-%d", os.Getpid()))
 
 	// MVP only supports the Anthropic Messages upstream protocol (see
@@ -100,7 +95,7 @@ func cmdRun(args []string, out io.Writer) error {
 	// including any persisted cfg.ModelMappings for this provider. The
 	// route's Model and ModelMappings are derived here rather than read
 	// ad-hoc from the preset/config, keeping a single source of truth.
-	route := buildProxyRoute(pa.Provider, preset, protocolAnthropicMessages, token, cfg.ModelMappings[pa.Provider])
+	route := buildProxyRoute(pa.Provider, preset, protocolAnthropicMessages, "<token>", cfg.ModelMappings[pa.Provider])
 	model := route.Model
 
 	fmt.Fprintf(out, "agent: %s\n", agent)
@@ -112,14 +107,7 @@ func cmdRun(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "model_mappings: %d\n", len(route.ModelMappings))
 	}
 	fmt.Fprintf(out, "CODEX_HOME=%s\n", codexHome)
-	// SECURITY: the proxy token is a real secret that will be injected via
-	// env at actual launch time. The dry-run preview is meant to be safe
-	// to share (paste into an issue, attach to a PR), so we print a literal
-	// <token> placeholder here instead of the freshly-generated token.
-	// `randomProxyToken` is still called above to exercise the generator
-	// (and to keep the call graph identical to the real launch path), but
-	// its value is deliberately discarded.
-	fmt.Fprintln(out, "CODE_SWITCH_PROXY_API_KEY=<token>")
+	fmt.Fprintln(out, "auth: command-backed (cs token code-switch-proxy --agent codex)")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "codex config.toml:")
 	fmt.Fprint(out, renderProxyCodexConfig(model))
@@ -156,14 +144,23 @@ func renderProxyCodexConfig(model string) string {
 // compatibility with the `cs run --dry-run` path, which genuinely does not
 // know the port until launch time and therefore keeps the placeholder.
 func renderProxyCodexConfigForBaseURL(model, baseURL string) string {
+	return renderProxyCodexConfigForBaseURLWithCatalog(model, baseURL, "")
+}
+
+func renderProxyCodexConfigForBaseURLWithCatalog(model, baseURL, catalogPath string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "model = %s\n", tomlQuoteBasicString(model))
 	b.WriteString("model_provider = \"code-switch-proxy\"\n")
+	if strings.TrimSpace(catalogPath) != "" {
+		fmt.Fprintf(&b, "model_catalog_json = %s\n", tomlQuoteBasicString(catalogPath))
+	}
 	b.WriteString("\n[model_providers.code-switch-proxy]\n")
 	b.WriteString("name = \"code-switch proxy\"\n")
 	fmt.Fprintf(&b, "base_url = %s\n", tomlQuoteBasicString(baseURL))
 	b.WriteString("wire_api = \"responses\"\n")
-	b.WriteString("env_key = \"CODE_SWITCH_PROXY_API_KEY\"\n")
+	b.WriteString("\n[model_providers.code-switch-proxy.auth]\n")
+	b.WriteString("command = \"cs\"\n")
+	b.WriteString("args = [\"token\", \"code-switch-proxy\", \"--agent\", \"codex\"]\n")
 	return b.String()
 }
 

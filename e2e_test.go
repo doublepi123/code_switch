@@ -623,19 +623,22 @@ func TestE2E_RunDryRunIncludesModelMappings(t *testing.T) {
 		"upstream_protocol: anthropic-messages",
 		"proxy_base_url: http://127.0.0.1:<port>/v1",
 		"CODEX_HOME=",
-		"CODE_SWITCH_PROXY_API_KEY=<token>",
+		"auth: command-backed (cs token code-switch-proxy --agent codex)",
 		"model_mappings: 1",
 		"codex config.toml:",
 		"model_provider = \"code-switch-proxy\"",
 		"wire_api = \"responses\"",
+		"[model_providers.code-switch-proxy.auth]",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("run --dry-run missing %q\nfull output:\n%s", want, out)
 		}
 	}
 
-	// The real token must NEVER appear in dry-run output (only <token>).
-	// The configured API key must also never leak.
+	// The real token and configured API key must never leak.
+	if strings.Contains(out, "CODE_SWITCH_PROXY_API_KEY") || strings.Contains(out, "csproxy-") {
+		t.Fatalf("dry-run leaked or required proxy token material:\n%s", out)
+	}
 	if strings.Contains(out, "sk-zhipu") {
 		t.Fatalf("dry-run leaked provider API key:\n%s", out)
 	}

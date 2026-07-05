@@ -154,6 +154,21 @@ func cmdToken(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(providerArg) == "code-switch-proxy" {
+		cfg, _, err := loadAppConfig()
+		if err != nil {
+			return err
+		}
+		if cfg.Proxy == nil || cfg.Proxy.Routes == nil {
+			return fmt.Errorf("proxy route for agent %q is not configured", agent)
+		}
+		route, ok := cfg.Proxy.Routes[string(agent)]
+		if !ok || strings.TrimSpace(route.Token) == "" {
+			return fmt.Errorf("proxy route for agent %q has no token", agent)
+		}
+		fmt.Fprintln(out, strings.TrimSpace(route.Token))
+		return nil
+	}
 	pa, _, _, err := resolveProviderAndKeyForAgent(agent, providerArg, *apiKey, "")
 	if err != nil {
 		return err

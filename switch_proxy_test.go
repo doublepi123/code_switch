@@ -53,7 +53,14 @@ func TestWriteCodexProxyConfigWritesProxyProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if err := writeCodexProxyConfig(18081, "route-token", protocolAnthropicMessages); err != nil {
+	cfg := AppConfig{Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+		"codex": {Agent: "codex", Provider: "xiaomimimo-cn", Model: "mimo-v2.5-pro[1m]", Token: "route-token"},
+	}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	if err := writeCodexProxyConfigInDir("", 18081, "route-token", protocolAnthropicMessages, "mimo-v2.5-pro[1m]"); err != nil {
 		t.Fatalf("writeCodexProxyConfig: %v", err)
 	}
 
@@ -63,17 +70,52 @@ func TestWriteCodexProxyConfigWritesProxyProvider(t *testing.T) {
 	}
 	got := string(content)
 	for _, want := range []string{
+		`model = "mimo-v2.5-pro[1m]"`,
 		`model_provider = "code-switch-proxy"`,
+		`model_catalog_json = "` + filepath.Join(home, ".codex", "code-switch-model-catalog.json") + `"`,
 		`base_url = "http://127.0.0.1:18081/v1"`,
 		`wire_api = "responses"`,
-		`env_key = "CODE_SWITCH_PROXY_API_KEY"`,
+		`[model_providers.code-switch-proxy.auth]`,
+		`command = "cs"`,
+		`args = ["token", "code-switch-proxy", "--agent", "codex"]`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("codex config missing %q\n%s", want, got)
 		}
 	}
-	if got := os.Getenv("CODE_SWITCH_PROXY_API_KEY"); got != "route-token" {
-		t.Fatalf("CODE_SWITCH_PROXY_API_KEY = %q", got)
+	if strings.Contains(got, `env_key = "CODE_SWITCH_PROXY_API_KEY"`) {
+		t.Fatalf("codex proxy config should not require shell env key:\n%s", got)
+	}
+
+	catalog, err := os.ReadFile(filepath.Join(home, ".codex", "code-switch-model-catalog.json"))
+	if err != nil {
+		t.Fatalf("read codex model catalog: %v", err)
+	}
+	for _, want := range []string{
+		`"slug": "mimo-v2.5-pro[1m]"`,
+		`"default_reasoning_level": "medium"`,
+		`"supported_reasoning_levels"`,
+		`"effort": "medium"`,
+		`"shell_type": "shell_command"`,
+		`"visibility": "list"`,
+		`"supported_in_api": true`,
+		`"truncation_policy"`,
+		`"effective_context_window_percent": 95`,
+		`"input_modalities"`,
+		`"context_window": 1000000`,
+		`"max_context_window": 1000000`,
+	} {
+		if !strings.Contains(string(catalog), want) {
+			t.Fatalf("catalog missing %q\n%s", want, string(catalog))
+		}
+	}
+
+	output := &bytes.Buffer{}
+	if err := cmdToken([]string{"code-switch-proxy", "--agent", "codex"}, output); err != nil {
+		t.Fatalf("proxy token command: %v", err)
+	}
+	if got := strings.TrimSpace(output.String()); got != "route-token" {
+		t.Fatalf("proxy token command = %q", got)
 	}
 }
 

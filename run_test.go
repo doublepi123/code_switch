@@ -33,9 +33,11 @@ func TestRunCodexDryRun(t *testing.T) {
 		"model: MiniMax-M3",
 		"upstream_protocol: anthropic-messages",
 		"CODEX_HOME=",
-		"CODE_SWITCH_PROXY_API_KEY=",
+		"auth: command-backed (cs token code-switch-proxy --agent codex)",
 		"codex config.toml",
 		`model = "MiniMax-M3"`,
+		`[model_providers.code-switch-proxy.auth]`,
+		`args = ["token", "code-switch-proxy", "--agent", "codex"]`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("dry-run output missing %q\noutput:\n%s", want, got)
@@ -44,29 +46,12 @@ func TestRunCodexDryRun(t *testing.T) {
 	if strings.Contains(got, "sk-secret") {
 		t.Fatalf("dry-run output must not leak the upstream API key\noutput:\n%s", got)
 	}
-	// The dry-run preview must NOT print the real generated proxy token.
-	// It is a shareable security artifact, so the token is masked with the
-	// literal placeholder "<token>".
-	tokLine := getProxyToken(t, got)
-	if tokLine != "<token>" {
-		t.Fatalf("proxy token should be masked as <token>, got %q\noutput:\n%s", tokLine, got)
+	if strings.Contains(got, "CODE_SWITCH_PROXY_API_KEY") {
+		t.Fatalf("dry-run output should not require CODE_SWITCH_PROXY_API_KEY:\n%s", got)
 	}
 	if strings.Contains(got, "csproxy-") {
 		t.Fatalf("dry-run output must not leak a real csproxy- token:\n%s", got)
 	}
-}
-
-// getProxyToken extracts the value printed after "CODE_SWITCH_PROXY_API_KEY="
-// so the test can assert on its shape without depending on the random value.
-func getProxyToken(t *testing.T, out string) string {
-	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
-		if v, ok := strings.CutPrefix(line, "CODE_SWITCH_PROXY_API_KEY="); ok {
-			return strings.TrimSpace(v)
-		}
-	}
-	t.Fatalf("proxy token not found in output:\n%s", out)
-	return ""
 }
 
 func TestRunCodexNonDryRunNotImplemented(t *testing.T) {
@@ -156,7 +141,9 @@ func TestRenderProxyCodexConfigContainsProviderBlock(t *testing.T) {
 		`name = "code-switch proxy"`,
 		`base_url = "http://127.0.0.1:<port>/v1"`,
 		`wire_api = "responses"`,
-		`env_key = "CODE_SWITCH_PROXY_API_KEY"`,
+		`[model_providers.code-switch-proxy.auth]`,
+		`command = "cs"`,
+		`args = ["token", "code-switch-proxy", "--agent", "codex"]`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("renderProxyCodexConfig missing %q\noutput:\n%s", want, got)

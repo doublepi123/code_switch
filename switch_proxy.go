@@ -14,8 +14,8 @@ import (
 
 var (
 	proxyDaemonIsRunning = defaultProxyDaemonIsRunning
-	startProxyDaemon    = defaultStartProxyDaemon
-	stopProxyDaemon     = defaultStopProxyDaemon
+	startProxyDaemon     = defaultStartProxyDaemon
+	stopProxyDaemon      = defaultStopProxyDaemon
 )
 
 func resetProxyDaemonHooks() {
@@ -72,12 +72,11 @@ func writeCodexProxyConfigInDir(codexDir string, port int, token string, upstrea
 	if strings.TrimSpace(model) == "" {
 		model = "code-switch-proxy"
 	}
-	if strings.TrimSpace(token) != "" {
-		if err := os.Setenv("CODE_SWITCH_PROXY_API_KEY", strings.TrimSpace(token)); err != nil {
-			return err
-		}
+	catalogPath := codexModelCatalogPath(codexDir)
+	if err := writeCodexModelCatalog(catalogPath, model); err != nil {
+		return err
 	}
-	return writeTextAtomic(configPath, renderProxyCodexConfigForBaseURL(model, proxyBaseURL(port, true)), 0o600)
+	return writeTextAtomic(configPath, renderProxyCodexConfigForBaseURLWithCatalog(model, proxyBaseURL(port, true), catalogPath), 0o600)
 }
 
 func writeOpencodeProxyConfig(port int, token string) error {

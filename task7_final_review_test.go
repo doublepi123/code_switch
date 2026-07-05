@@ -362,17 +362,17 @@ func TestRunCodexDryRunMasksProxyToken(t *testing.T) {
 		t.Fatalf("run returned error: %v", err)
 	}
 	got := out.String()
-	// The line must be present but with a placeholder, never the real token.
-	if !strings.Contains(got, "CODE_SWITCH_PROXY_API_KEY=") {
-		t.Fatalf("dry-run missing CODE_SWITCH_PROXY_API_KEY line:\n%s", got)
+	// The dry-run preview must use command-backed auth rather than printing or
+	// requiring a shell env token.
+	if !strings.Contains(got, "auth: command-backed (cs token code-switch-proxy --agent codex)") {
+		t.Fatalf("dry-run missing command-backed auth line:\n%s", got)
+	}
+	if strings.Contains(got, "CODE_SWITCH_PROXY_API_KEY") {
+		t.Fatalf("dry-run should not require CODE_SWITCH_PROXY_API_KEY:\n%s", got)
 	}
 	// Must NOT contain a real csproxy- token anywhere.
 	if strings.Contains(got, "csproxy-") {
 		t.Fatalf("dry-run output leaked a real csproxy- token:\n%s", got)
-	}
-	// Must contain the masked placeholder.
-	if !strings.Contains(got, "CODE_SWITCH_PROXY_API_KEY=<token>") {
-		t.Fatalf("dry-run must mask the token with <token>:\n%s", got)
 	}
 }
 
