@@ -54,10 +54,10 @@ func writeClaudeProxyConfigInDir(claudeDir string, port int, token string) error
 }
 
 func writeCodexProxyConfig(port int, token string, upstreamProtocol ProviderProtocol) error {
-	return writeCodexProxyConfigInDir("", port, token, upstreamProtocol, "code-switch-proxy")
+	return writeCodexProxyConfigInDir("", port, token, upstreamProtocol, "code-switch-proxy", nil, "")
 }
 
-func writeCodexProxyConfigInDir(codexDir string, port int, token string, upstreamProtocol ProviderProtocol, model string) error {
+func writeCodexProxyConfigInDir(codexDir string, port int, token string, upstreamProtocol ProviderProtocol, model string, cfg *AppConfig, provider string) error {
 	configPath := codexConfigPath(codexDir)
 	cf := newConfigFile(configPath)
 	unlock, err := cf.lock()
@@ -72,7 +72,8 @@ func writeCodexProxyConfigInDir(codexDir string, port int, token string, upstrea
 		model = "code-switch-proxy"
 	}
 	catalogPath := codexModelCatalogPath(codexDir)
-	if err := writeCodexModelCatalog(catalogPath, model); err != nil {
+	window := modelContextWindowFromConfig(cfg, agentCodex, provider, model)
+	if err := writeCodexModelCatalog(catalogPath, model, window); err != nil {
 		return err
 	}
 	return writeTextAtomic(configPath, renderProxyCodexConfigForBaseURLWithCatalogProtocol(model, proxyBaseURL(port, true), catalogPath, upstreamProtocol), 0o600)
@@ -138,7 +139,7 @@ func refreshProxyClientConfigs(state ProxyRuntimeState, cfg *AppConfig) error {
 				return err
 			}
 		case agentCodex:
-			if err := writeCodexProxyConfigInDir("", state.Port, token, route.UpstreamProtocol, route.Model); err != nil {
+			if err := writeCodexProxyConfigInDir("", state.Port, token, route.UpstreamProtocol, route.Model, cfg, persisted.Provider); err != nil {
 				return err
 			}
 		case agentOpencode:
@@ -291,7 +292,7 @@ func switchProxyProvider(pa *providerArgs, cfg *AppConfig, persistAppConfig func
 			return err
 		}
 	case agentCodex:
-		if err := writeCodexProxyConfigInDir(codexDir, state.Port, route.Token, plan.UpstreamProtocol, model); err != nil {
+		if err := writeCodexProxyConfigInDir(codexDir, state.Port, route.Token, plan.UpstreamProtocol, model, cfg, provider); err != nil {
 			return err
 		}
 	case agentOpencode:

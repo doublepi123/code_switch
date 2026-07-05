@@ -157,7 +157,8 @@ type StoredProvider struct {
 	Haiku    string           `json:"haiku,omitempty"`
 	Sonnet   string           `json:"sonnet,omitempty"`
 	Opus     string           `json:"opus,omitempty"`
-	Subagent string           `json:"subagent,omitempty"`
+	Subagent       string `json:"subagent,omitempty"`
+	ContextWindow  int    `json:"contextWindow,omitempty"`
 }
 
 type AgentConfig struct {
@@ -186,6 +187,7 @@ type ConfigureSelection struct {
 	Sonnet   string
 	Opus     string
 	Subagent string
+	ContextWindow int
 }
 
 type AgentName string

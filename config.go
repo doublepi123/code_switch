@@ -257,6 +257,9 @@ func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey s
 	stored.Sonnet = strings.TrimSpace(selection.Sonnet)
 	stored.Opus = strings.TrimSpace(selection.Opus)
 	stored.Subagent = strings.TrimSpace(selection.Subagent)
+	if selection.ContextWindow > 0 {
+		stored.ContextWindow = selection.ContextWindow
+	}
 	if selection.Name != "" {
 		stored.Name = strings.TrimSpace(selection.Name)
 	}
@@ -279,6 +282,9 @@ func upsertAgentProviderConfig(cfg *AppConfig, agent AgentName, selection Config
 	}
 	if selection.BaseURL != "" {
 		stored.BaseURL = strings.TrimSpace(selection.BaseURL)
+	}
+	if selection.ContextWindow > 0 {
+		stored.ContextWindow = selection.ContextWindow
 	}
 	setAgentProviderConfig(cfg, agent, selection.Provider, stored)
 }

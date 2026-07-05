@@ -60,7 +60,7 @@ func TestWriteCodexProxyConfigWritesProxyProvider(t *testing.T) {
 		t.Fatalf("write app config: %v", err)
 	}
 
-	if err := writeCodexProxyConfigInDir("", 18081, "route-token", protocolAnthropicMessages, "mimo-v2.5-pro[1m]"); err != nil {
+	if err := writeCodexProxyConfigInDir("", 18081, "route-token", protocolAnthropicMessages, "mimo-v2.5-pro[1m]", nil, "xiaomimimo-cn"); err != nil {
 		t.Fatalf("writeCodexProxyConfig: %v", err)
 	}
 

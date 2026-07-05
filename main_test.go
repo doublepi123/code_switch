@@ -8806,6 +8806,115 @@ func TestSwitchCodexProviderNonDryRun(t *testing.T) {
 	}
 }
 
+func TestCodexModelContextWindow(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int
+	}{
+		{"mimo-v2.5-pro", 1_000_000},
+		{"mimo-v2.5", 1_000_000},
+		{"mimo-v2-flash", 1_000_000},
+		{"mimo-v2.5-pro[1m]", 1_000_000},
+		{"deepseek-v4-pro[1m]", 1_000_000},
+		{"glm-5.2[512k]", 512_000},
+		{"qwen3-coder", 128_000},
+	}
+	for _, tt := range tests {
+		if got := codexModelContextWindow(tt.model); got != tt.want {
+			t.Errorf("codexModelContextWindow(%q) = %d, want %d", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestWriteCodexModelCatalogMimoUsesOneMContextWindow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "code-switch-model-catalog.json")
+	if err := writeCodexModelCatalog(path, "mimo-v2.5-pro", 0); err != nil {
+		t.Fatalf("writeCodexModelCatalog: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	for _, want := range []string{
+		`"slug": "mimo-v2.5-pro"`,
+		`"context_window": 1000000`,
+		`"max_context_window": 1000000`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("catalog missing %q\n%s", want, string(data))
+		}
+	}
+}
+
+func TestWriteCodexModelCatalogUsesStoredContextWindowOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "code-switch-model-catalog.json")
+	if err := writeCodexModelCatalog(path, "custom-model", 2_000_000); err != nil {
+		t.Fatalf("writeCodexModelCatalog: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	for _, want := range []string{
+		`"context_window": 2000000`,
+		`"max_context_window": 2000000`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("catalog missing %q\n%s", want, string(data))
+		}
+	}
+}
+
+func TestParseContextWindowInput(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    int
+		wantErr bool
+	}{
+		{"", 0, false},
+		{"auto", 0, false},
+		{"128000", 128000, false},
+		{"128k", 128000, false},
+		{"1m", 1_000_000, false},
+		{"2M", 2_000_000, false},
+		{"abc", 0, true},
+		{"0", 0, false},
+	}
+	for _, tt := range tests {
+		got, err := parseContextWindowInput(tt.in)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("parseContextWindowInput(%q) expected error", tt.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseContextWindowInput(%q) error: %v", tt.in, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("parseContextWindowInput(%q) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestModelContextWindowFromConfig(t *testing.T) {
+	cfg := &AppConfig{
+		Agents: map[string]AgentConfig{
+			string(agentCodex): {
+				Providers: map[string]StoredProvider{
+					"xiaomimimo-cn": {ContextWindow: 2_000_000},
+				},
+			},
+		},
+	}
+	if got := modelContextWindowFromConfig(cfg, agentCodex, "xiaomimimo-cn", "mimo-v2.5-pro"); got != 2_000_000 {
+		t.Fatalf("modelContextWindowFromConfig = %d, want 2000000", got)
+	}
+}
+
 func TestCodexResponsesURL(t *testing.T) {
 	tests := []struct {
 		input    string

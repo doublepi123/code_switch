@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,12 +30,12 @@ func codexModelCatalogPath(overrideDir string) string {
 	return filepath.Join(filepath.Dir(codexConfigPath(overrideDir)), "code-switch-model-catalog.json")
 }
 
-func writeCodexModelCatalog(path, model string) error {
+func writeCodexModelCatalog(path, model string, contextWindow int) error {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return nil
 	}
-	window := codexModelContextWindow(model)
+	window := resolveModelContextWindow(model, contextWindow)
 	catalog := map[string]any{
 		"models": []map[string]any{
 			{
@@ -78,9 +79,35 @@ func codexSupportedReasoningLevels() []map[string]string {
 	}
 }
 
+func resolveModelContextWindow(model string, override int) int {
+	if override > 0 {
+		return override
+	}
+	return codexModelContextWindow(model)
+}
+
+func modelContextWindowFromConfig(cfg *AppConfig, agent AgentName, provider, model string) int {
+	if cfg == nil {
+		return 0
+	}
+	provider = canonicalProviderName(provider)
+	switch agent {
+	case agentCodex:
+		return codexProviderConfig(cfg, provider).ContextWindow
+	case agentOpencode:
+		return opencodeProviderConfig(cfg, provider).ContextWindow
+	default:
+		return cfg.Providers[provider].ContextWindow
+	}
+}
+
 func codexModelContextWindow(model string) int {
 	lower := strings.ToLower(strings.TrimSpace(model))
 	switch {
+	case strings.HasPrefix(lower, "mimo-"):
+		// Xiaomi MiMo models (e.g. mimo-v2.5-pro) support 1M context but do not
+		// use the [1m] suffix that other providers put in model IDs.
+		return 1000000
 	case strings.Contains(lower, "[1m]") || strings.Contains(lower, "1m"):
 		return 1000000
 	case strings.Contains(lower, "[512k]") || strings.Contains(lower, "512k"):
@@ -92,6 +119,52 @@ func codexModelContextWindow(model string) int {
 	default:
 		return 128000
 	}
+}
+
+func parseContextWindowInput(text string) (int, error) {
+	text = strings.TrimSpace(text)
+	if text == "" || strings.EqualFold(text, "auto") || text == "0" {
+		return 0, nil
+	}
+	lower := strings.ToLower(text)
+	multiplier := 1
+	switch {
+	case strings.HasSuffix(lower, "k"):
+		multiplier = 1000
+		lower = strings.TrimSuffix(lower, "k")
+	case strings.HasSuffix(lower, "m"):
+		multiplier = 1_000_000
+		lower = strings.TrimSuffix(lower, "m")
+	}
+	value, err := strconv.Atoi(lower)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("context window must be a positive integer (e.g. 128000, 128k, 1m); leave empty for auto")
+	}
+	window := value * multiplier
+	if window < 1000 {
+		return 0, fmt.Errorf("context window must be at least 1000 tokens")
+	}
+	return window, nil
+}
+
+func refreshCodexModelCatalogForProvider(cfg *AppConfig, codexDir, provider string) error {
+	if cfg == nil || cfg.Proxy == nil || cfg.Proxy.Routes == nil {
+		return nil
+	}
+	route, ok := cfg.Proxy.Routes[string(agentCodex)]
+	if !ok || canonicalProviderName(route.Provider) != canonicalProviderName(provider) {
+		return nil
+	}
+	model := strings.TrimSpace(route.Model)
+	if model == "" {
+		_, _, model, _, _ = currentCodexProvider(codexDir)
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	window := modelContextWindowFromConfig(cfg, agentCodex, provider, model)
+	return writeCodexModelCatalog(codexModelCatalogPath(codexDir), model, window)
 }
 
 func codexTOMLProviderName(provider string) string {

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -46,7 +47,8 @@ const (
 	actionLabelManageMappings = "Manage Model Mappings"
 	actionLabelProxyManager   = "Proxy Manager"
 	actionLabelEditAPIKey     = "Edit API Key"
-	actionLabelEditTiers      = "Edit Tiers"
+	actionLabelEditTiers         = "Edit Tiers"
+	actionLabelEditContextWindow = "Edit Context Window"
 	actionLabelSwitchDefault  = "Switch (default)"
 	actionLabelBack           = "Back"
 )
@@ -165,6 +167,87 @@ func (ts *tuiState) showUseModelForm(provider string) {
 	page.AddItem(errLabel, 1, 0, false)
 	page.AddItem(form, 0, 1, true)
 	ts.pages.AddAndSwitchToPage("use-model", page, true)
+	ts.app.SetFocus(form)
+}
+
+func contextWindowFormDefault(agent AgentName, cfg *AppConfig, provider, model string) string {
+	if cfg == nil {
+		return ""
+	}
+	var stored StoredProvider
+	switch agent {
+	case agentCodex:
+		stored = codexProviderConfig(cfg, provider)
+	default:
+		stored = cfg.Providers[provider]
+	}
+	if stored.ContextWindow > 0 {
+		return strconv.Itoa(stored.ContextWindow)
+	}
+	return ""
+}
+
+// showContextWindowForm lets the operator override the Codex model-catalog
+// context window for a provider/model pair. An empty value clears the override
+// and falls back to name-based auto detection on the next switch.
+func (ts *tuiState) showContextWindowForm(provider string) {
+	model := useModelFormDefault(ts.agent, ts.cfg, provider, ts.customModels[provider])
+	autoWindow := resolveModelContextWindow(model, 0)
+	windowValue := contextWindowFormDefault(ts.agent, ts.cfg, provider, model)
+	errLabel := tview.NewTextView()
+	errLabel.SetTextColor(tcell.ColorRed)
+	form := tview.NewForm()
+	form.AddInputField("Context", windowValue, 0, nil, func(text string) {
+		windowValue = text
+	})
+	form.AddButton("Save", func() {
+		window, err := parseContextWindowInput(windowValue)
+		if err != nil {
+			errLabel.SetText(err.Error())
+			return
+		}
+		cfg, path, unlock, err := loadAppConfigLocked()
+		if err != nil {
+			errLabel.SetText(err.Error())
+			return
+		}
+		agentCfg := agentConfig(cfg, agentCodex)
+		stored := agentCfg.Providers[provider]
+		stored.ContextWindow = window
+		setAgentProviderConfig(cfg, agentCodex, provider, stored)
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			unlock()
+			errLabel.SetText(err.Error())
+			return
+		}
+		unlock()
+		ts.cfg = cfg
+		if err := refreshCodexModelCatalogForProvider(cfg, ts.codexDir, provider); err != nil {
+			errLabel.SetText(err.Error())
+			return
+		}
+		ts.showDetail(provider, "detail")
+	})
+	form.AddButton("Cancel", func() { ts.showDetail(provider, "detail") })
+	form.SetBorder(true)
+	form.SetTitle(" Context Window ")
+	form.SetButtonsAlign(tview.AlignLeft)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			ts.showDetail(provider, "detail")
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView()
+	help.SetText(fmt.Sprintf("Provider: %s  |  Model: %s  |  Auto: %d tokens  |  Empty = auto  |  Examples: 128000, 128k, 1m",
+		providerTitle(provider, ts.cfg), model, autoWindow))
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(help, 2, 0, false)
+	page.AddItem(errLabel, 1, 0, false)
+	page.AddItem(form, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("context-window", page, true)
 	ts.app.SetFocus(form)
 }
 

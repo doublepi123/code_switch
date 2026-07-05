@@ -466,6 +466,11 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			})
 		})
 	}
+	if ts.agent == agentCodex && !preset.NoModel {
+		actions.AddItem(actionLabelEditContextWindow, "", 'c', func() {
+			ts.showContextWindowForm(provider)
+		})
+	}
 	if ts.agent != agentOpencode && !preset.NoModel {
 		actions.AddItem(actionLabelEditTiers, "", 't', func() {
 			ts.showTierConfig(provider, backPage)
@@ -487,6 +492,9 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			return nil
 		case canSwitch && (event.Rune() == 's' || event.Rune() == 'S'):
 			ts.finishSelection(provider, preset.Model)
+			return nil
+		case ts.agent == agentCodex && !preset.NoModel && (event.Rune() == 'c' || event.Rune() == 'C'):
+			ts.showContextWindowForm(provider)
 			return nil
 		case ts.agent != agentOpencode && !preset.NoModel && (event.Rune() == 't' || event.Rune() == 'T'):
 			ts.showTierConfig(provider, backPage)
@@ -530,6 +538,16 @@ func providerDetailInfoText(agent AgentName, cfg *AppConfig, provider string, pr
 		fmt.Fprintf(&b, "[::b]Connection[::-] %s (%s -> %s)\n", plan.Mode, plan.ClientProtocol, plan.UpstreamProtocol)
 		if plan.Mode == connectionModeProxy {
 			fmt.Fprintf(&b, "[yellow]Cross-protocol selection will be routed through a local proxy route.[-]\n")
+		}
+	}
+	if agent == agentCodex {
+		model := defaultSelectionModelForAgent(cfg, agent, provider, currentProvider, currentModel)
+		stored := codexProviderConfig(cfg, provider)
+		window := resolveModelContextWindow(model, stored.ContextWindow)
+		if stored.ContextWindow > 0 {
+			fmt.Fprintf(&b, "[::b]Context[::-]   %d tokens (custom)\n", window)
+		} else {
+			fmt.Fprintf(&b, "[::b]Context[::-]   %d tokens (auto)\n", window)
 		}
 	}
 	return b.String()
