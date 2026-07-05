@@ -164,6 +164,30 @@ func renderProxyCodexConfigForBaseURLWithCatalog(model, baseURL, catalogPath str
 	return b.String()
 }
 
+
+// renderProxyCodexConfigForBaseURLWithCatalogProtocol is the protocol-aware
+// version of renderProxyCodexConfigForBaseURLWithCatalog. It uses the upstream
+// protocol to select the correct wire_api value ("responses" or "chat")
+// instead of hardcoding "responses". This is needed when the proxy route
+// targets an OpenAI Chat upstream (e.g. deepseek, openrouter) rather than
+// an OpenAI Responses upstream.
+func renderProxyCodexConfigForBaseURLWithCatalogProtocol(model, baseURL, catalogPath string, protocol ProviderProtocol) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "model = %s\n", tomlQuoteBasicString(model))
+	b.WriteString("model_provider = \"code-switch-proxy\"\n")
+	if strings.TrimSpace(catalogPath) != "" {
+		fmt.Fprintf(&b, "model_catalog_json = %s\n", tomlQuoteBasicString(catalogPath))
+	}
+	b.WriteString("\n[model_providers.code-switch-proxy]\n")
+	b.WriteString("name = \"code-switch proxy\"\n")
+	fmt.Fprintf(&b, "base_url = %s\n", tomlQuoteBasicString(baseURL))
+	fmt.Fprintf(&b, "wire_api = %s\n", tomlQuoteBasicString(codexWireAPIForProtocol(protocol)))
+	b.WriteString("\n[model_providers.code-switch-proxy.auth]\n")
+	b.WriteString("command = \"cs\"\n")
+	b.WriteString("args = [\"token\", \"code-switch-proxy\", \"--agent\", \"codex\"]\n")
+	return b.String()
+}
+
 // buildProxyRoute constructs a ProxyRoute for the given provider, injecting
 // the supplied model mappings into the route so the proxy's model-resolution
 // layer can rewrite client model names to upstream models. It is the single

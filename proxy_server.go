@@ -130,7 +130,7 @@ func newProxyHandlerWithRegistry(route ProxyRoute, providerKey string, registry 
 			return
 		}
 		if inboundAdapter.Name() == upstreamAdapter.Name() && supportsSameProtocolPassthrough(inboundAdapter.Name()) {
-			if handled := serveSameProtocolPassthrough(w, r, route, providerKey, body, inboundAdapter, upstreamAdapter); handled {
+			if handled := serveSameProtocolPassthrough(w, r, route, providerKey, body, upstreamAdapter); handled {
 				return
 			}
 		}
@@ -234,7 +234,7 @@ func supportsSameProtocolPassthrough(protocol ProviderProtocol) bool {
 	}
 }
 
-func serveSameProtocolPassthrough(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, body []byte, inboundAdapter, upstreamAdapter ProtocolAdapter) bool {
+func serveSameProtocolPassthrough(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, body []byte, upstreamAdapter ProtocolAdapter) bool {
 	model, stream, err := passthroughRequestModelAndStream(body)
 	if err != nil {
 		writeProxyError(w, http.StatusBadRequest, err.Error())
@@ -257,7 +257,6 @@ func serveSameProtocolPassthrough(w http.ResponseWriter, r *http.Request, route 
 		return true
 	}
 	serveRawProtocolUpstream(w, r, route, providerKey, upstreamBody, upstreamAdapter)
-	_ = inboundAdapter
 	return true
 }
 
@@ -432,7 +431,6 @@ func serveStreamingProtocolUpstream(w http.ResponseWriter, r *http.Request, req 
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	_ = r
 	if err := decoder.DecodeStream(resp.Body, func(event StreamEvent) error {
 		return encoder.EncodeStreamEvent(w, event)
 	}); err != nil && r.Context().Err() == nil {

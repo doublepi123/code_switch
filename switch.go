@@ -188,7 +188,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return err
 	}
 	if plan.Mode == connectionModeProxy {
-		return switchProxyProvider(pa, cfg, configPath, persistAppConfig, plan, *claudeDir, *codexDir, *opencodeDir, out, *dryRun)
+		return switchProxyProvider(pa, cfg, persistAppConfig, plan, *claudeDir, *codexDir, *opencodeDir, out, *dryRun)
 	}
 
 	if agent == agentCodex {

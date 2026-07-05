@@ -58,7 +58,6 @@ func writeCodexProxyConfig(port int, token string, upstreamProtocol ProviderProt
 }
 
 func writeCodexProxyConfigInDir(codexDir string, port int, token string, upstreamProtocol ProviderProtocol, model string) error {
-	_ = upstreamProtocol
 	configPath := codexConfigPath(codexDir)
 	cf := newConfigFile(configPath)
 	unlock, err := cf.lock()
@@ -76,7 +75,7 @@ func writeCodexProxyConfigInDir(codexDir string, port int, token string, upstrea
 	if err := writeCodexModelCatalog(catalogPath, model); err != nil {
 		return err
 	}
-	return writeTextAtomic(configPath, renderProxyCodexConfigForBaseURLWithCatalog(model, proxyBaseURL(port, true), catalogPath), 0o600)
+	return writeTextAtomic(configPath, renderProxyCodexConfigForBaseURLWithCatalogProtocol(model, proxyBaseURL(port, true), catalogPath, upstreamProtocol), 0o600)
 }
 
 func writeOpencodeProxyConfig(port int, token string) error {
@@ -245,7 +244,7 @@ func writeProxyRouteConfig(cfg *AppConfig, plan ConnectionPlan, model, token str
 	return nil
 }
 
-func switchProxyProvider(pa *providerArgs, cfg *AppConfig, configPath string, persistAppConfig func() error, plan ConnectionPlan, claudeDir, codexDir, opencodeDir string, out io.Writer, dryRun bool) error {
+func switchProxyProvider(pa *providerArgs, cfg *AppConfig, persistAppConfig func() error, plan ConnectionPlan, claudeDir, codexDir, opencodeDir string, out io.Writer, dryRun bool) error {
 	provider := canonicalProviderName(pa.Provider)
 	preset, err := resolveAgentSwitchPreset(pa.Agent, provider, cfg, pa.Model)
 	if err != nil {
@@ -302,7 +301,6 @@ func switchProxyProvider(pa *providerArgs, cfg *AppConfig, configPath string, pe
 	default:
 		return fmt.Errorf("unsupported agent %q", pa.Agent)
 	}
-	_ = configPath
 	fmt.Fprintf(out, "%s\n", successPrefix(fmt.Sprintf("switched %s to %s via proxy", pa.Agent, preset.Name)))
 	fmt.Fprintf(out, "%s\n", formatLabel("mode", string(connectionModeProxy)))
 	fmt.Fprintf(out, "%s\n", formatLabel("client_protocol", string(plan.ClientProtocol)))

@@ -168,7 +168,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return switchProxyProvider(pa, cfg, configPath, persist, plan, *claudeDir, *codexDir, *opencodeDir, out, false)
+		return switchProxyProvider(pa, cfg, persist, plan, *claudeDir, *codexDir, *opencodeDir, out, false)
 	}
 
 	switch agent {

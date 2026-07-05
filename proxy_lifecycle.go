@@ -239,7 +239,7 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("proxy token is required")
 	}
-	_ = strings.TrimSpace(agent)
+	agent = strings.TrimSpace(agent)
 	cfg, path, unlock, err := loadAppConfigLocked()
 	if err != nil {
 		return nil, err
