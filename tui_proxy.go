@@ -34,20 +34,21 @@ import (
 //     still refined inside showDetail based on preset flags (canSwitch,
 //     NoAPIKey, agent != opencode, NoModel). The labels list is the
 //     superset; showDetail filters at rendering time.
+//
 // Action label constants shared between providerDetailActionLabels and
 // showDetail. They are the single source of truth for the action labels'
 // spelling so a typo in either place cannot drift away from the other.
 // New actions should be added here, referenced from
 // providerDetailActionLabels, and rendered in showDetail.
 const (
-	actionLabelChooseModel       = "Choose Model"
-	actionLabelUseModel          = "Use Model"
-	actionLabelManageMappings    = "Manage Model Mappings"
-	actionLabelProxyManager      = "Proxy Manager"
-	actionLabelEditAPIKey        = "Edit API Key"
-	actionLabelEditTiers         = "Edit Tiers"
-	actionLabelSwitchDefault     = "Switch (default)"
-	actionLabelBack              = "Back"
+	actionLabelChooseModel    = "Choose Model"
+	actionLabelUseModel       = "Use Model"
+	actionLabelManageMappings = "Manage Model Mappings"
+	actionLabelProxyManager   = "Proxy Manager"
+	actionLabelEditAPIKey     = "Edit API Key"
+	actionLabelEditTiers      = "Edit Tiers"
+	actionLabelSwitchDefault  = "Switch (default)"
+	actionLabelBack           = "Back"
 )
 
 func providerDetailActionLabels(noModel bool) []string {
@@ -359,6 +360,35 @@ func proxyManagerPreviewArgs(agent string) []string {
 	return []string{agent}
 }
 
+func proxyManagerRouteSummaries(cfg *AppConfig) []string {
+	if cfg == nil || cfg.Proxy == nil || len(cfg.Proxy.Routes) == 0 {
+		return []string{"(no routes configured)"}
+	}
+	agents := make([]string, 0, len(cfg.Proxy.Routes))
+	for agent := range cfg.Proxy.Routes {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+	summaries := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		route := cfg.Proxy.Routes[agent]
+		summaries = append(summaries, fmt.Sprintf("agent: %s  provider: %s  protocol: %s  token: %s", route.Agent, route.Provider, route.UpstreamProtocol, maskProxyToken(route.Token)))
+	}
+	return summaries
+}
+
+func proxyManagerRemoveRoute(cfg *AppConfig, agent string) (bool, string) {
+	agent = strings.TrimSpace(agent)
+	if cfg == nil || cfg.Proxy == nil || cfg.Proxy.Routes == nil {
+		return false, "route not found"
+	}
+	if _, ok := cfg.Proxy.Routes[agent]; !ok {
+		return false, "route not found"
+	}
+	delete(cfg.Proxy.Routes, agent)
+	return true, "route removed; restart daemon to apply route changes"
+}
+
 // showProxyManager renders the proxy manager menu for the active provider.
 // The menu aggregates the proxy lifecycle subcommands so the operator can
 // configure a route, start/stop the proxy, check status, and preview the
@@ -398,7 +428,11 @@ func (ts *tuiState) showProxyManagerForAgent(provider, agent string) {
 			ts.showProxyManagerForAgent(provider, alt)
 		})
 	}
+	for _, summary := range proxyManagerRouteSummaries(ts.cfg) {
+		list.AddItem(summary, "", 0, nil)
+	}
 	list.AddItem("Configure Route", "", 'c', func() { ts.showProxyRouteForm(provider, agent) })
+	list.AddItem("Delete Route", "", 'd', func() { ts.showProxyRemoveRouteForm(provider, agent) })
 	list.AddItem("Start Proxy", "", 's', func() { ts.showProxyActionResult(provider, "start", agent) })
 	list.AddItem("Stop Proxy", "", 'x', func() { ts.showProxyActionResult(provider, "stop", agent) })
 	list.AddItem("Status", "", 't', func() { ts.showProxyActionResult(provider, "status", agent) })
@@ -414,13 +448,60 @@ func (ts *tuiState) showProxyManagerForAgent(provider, agent string) {
 		return event
 	})
 	help := tview.NewTextView()
-	help.SetText(fmt.Sprintf("Provider: %s  Agent: %s  |  Enter select   c configure   s start   x stop   t status   p preview   b/esc/q back", providerTitle(provider, ts.cfg), agent))
+	help.SetText(fmt.Sprintf("Provider: %s  Agent: %s  |  c configure   d delete   s start   x stop   t status   p preview   b/esc/q back", providerTitle(provider, ts.cfg), agent))
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
 	page.AddItem(help, 1, 0, false)
 	page.AddItem(list, 0, 1, true)
 	ts.pages.AddAndSwitchToPage("proxy-manager", page, true)
 	ts.app.SetFocus(list)
+}
+
+func (ts *tuiState) showProxyRemoveRouteForm(provider, agent string) {
+	errLabel := tview.NewTextView()
+	errLabel.SetTextColor(tcell.ColorRed)
+	form := tview.NewForm()
+	form.AddButton("Delete", func() {
+		cfg, path, unlock, err := loadAppConfigLocked()
+		if err != nil {
+			errLabel.SetText(err.Error())
+			return
+		}
+		removed, msg := proxyManagerRemoveRoute(cfg, agent)
+		if !removed {
+			unlock()
+			errLabel.SetText(msg)
+			return
+		}
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			unlock()
+			errLabel.SetText(err.Error())
+			return
+		}
+		unlock()
+		ts.cfg = cfg
+		errLabel.SetText(msg)
+		ts.showProxyManagerForAgent(provider, agent)
+	})
+	form.AddButton("Cancel", func() { ts.showProxyManagerForAgent(provider, agent) })
+	form.SetBorder(true)
+	form.SetTitle(" Delete Proxy Route ")
+	form.SetButtonsAlign(tview.AlignLeft)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			ts.showProxyManagerForAgent(provider, agent)
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView()
+	help.SetText(fmt.Sprintf("Delete route for agent %s. Restart daemon to apply route changes.", agent))
+	page := tview.NewFlex().SetDirection(tview.FlexRow)
+	page.AddItem(help, 1, 0, false)
+	page.AddItem(errLabel, 1, 0, false)
+	page.AddItem(form, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("proxy-remove-route", page, true)
+	ts.app.SetFocus(form)
 }
 
 // proxyRouteFormSpec is the pure-data view of the route configuration form

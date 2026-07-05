@@ -105,6 +105,31 @@ func TestBuildProxyRouteFromConfigDefaultsProtocol(t *testing.T) {
 	}
 }
 
+func TestBuildProxyRouteFromConfigUsesProtocolEndpointBaseURL(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"deepseek": {APIKey: "sk-test"},
+		},
+		Proxy: &ProxyConfig{
+			Routes: map[string]ProxyRouteConfig{
+				"codex": {
+					Agent:            "codex",
+					Provider:         "deepseek",
+					UpstreamProtocol: string(protocolOpenAIChat),
+				},
+			},
+		},
+	}
+
+	route, err := buildProxyRouteFromConfig("codex", cfg, "tok")
+	if err != nil {
+		t.Fatalf("buildProxyRouteFromConfig error: %v", err)
+	}
+	if route.UpstreamBaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("UpstreamBaseURL = %q, want https://api.deepseek.com/v1", route.UpstreamBaseURL)
+	}
+}
+
 func TestBuildProxyRouteFromConfigRejectsMissingRoute(t *testing.T) {
 	_, err := buildProxyRouteFromConfig("codex", &AppConfig{Providers: map[string]StoredProvider{}}, "token")
 	if err == nil {
@@ -130,5 +155,32 @@ func TestBuildProxyRouteFromConfigRejectsUnknownProvider(t *testing.T) {
 	}
 	if _, err := buildProxyRouteFromConfig("codex", cfg, "tok"); err == nil {
 		t.Fatal("expected unknown provider error")
+	}
+}
+
+func TestProxyRouteConfigResolveProtocolUsesAgentDefaultAndRegistry(t *testing.T) {
+	reg := defaultProtocolRegistry()
+
+	got, err := (ProxyRouteConfig{Agent: "claude"}).ResolveProtocol(reg)
+	if err != nil {
+		t.Fatalf("ResolveProtocol default error: %v", err)
+	}
+	if got != protocolOpenAIResponses {
+		t.Fatalf("default protocol = %q, want %q", got, protocolOpenAIResponses)
+	}
+
+	got, err = (ProxyRouteConfig{Agent: "codex", UpstreamProtocol: " openai-chat "}).ResolveProtocol(reg)
+	if err != nil {
+		t.Fatalf("ResolveProtocol explicit error: %v", err)
+	}
+	if got != protocolOpenAIChat {
+		t.Fatalf("explicit protocol = %q, want %q", got, protocolOpenAIChat)
+	}
+}
+
+func TestProxyRouteConfigValidateProtocolAcceptsSameProtocolPassthrough(t *testing.T) {
+	route := ProxyRouteConfig{Agent: "claude", UpstreamProtocol: string(protocolAnthropicMessages)}
+	if err := route.ValidateProtocol(defaultProtocolRegistry()); err != nil {
+		t.Fatalf("ValidateProtocol same protocol passthrough: %v", err)
 	}
 }

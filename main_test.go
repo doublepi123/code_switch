@@ -880,7 +880,10 @@ func TestApplyPresetReasoningEffortFromModelReasoningEffort(t *testing.T) {
 
 func TestApplyPresetReasoningEffortFromPreset(t *testing.T) {
 	root := map[string]any{}
-	preset := codexDeepSeekPreset()
+	preset, err := presetForAgentDirectProtocol(agentCodex, "deepseek")
+	if err != nil {
+		t.Fatalf("presetForAgentDirectProtocol: %v", err)
+	}
 	preset.ReasoningEffort = "xhigh"
 	applyPreset(root, preset, "sk-ds")
 
@@ -7322,8 +7325,12 @@ func TestProviderModelsForAgent(t *testing.T) {
 	if len(codexModels) == 0 {
 		t.Fatalf("expected non-empty model list for codex/ollama-cloud")
 	}
-	if codexModels[0] != codexOllamaCloudPreset().Model {
-		t.Fatalf("first model = %q, want %q", codexModels[0], codexOllamaCloudPreset().Model)
+	codexPreset, err := presetForAgentDirectProtocol(agentCodex, "ollama-cloud")
+	if err != nil {
+		t.Fatalf("presetForAgentDirectProtocol: %v", err)
+	}
+	if codexModels[0] != codexPreset.Model {
+		t.Fatalf("first model = %q, want %q", codexModels[0], codexPreset.Model)
 	}
 }
 
@@ -7367,8 +7374,12 @@ func TestDefaultSelectionModelForAgent(t *testing.T) {
 	}
 
 	model = defaultSelectionModelForAgent(cfg, agentCodex, "ollama-cloud", "", "")
-	if model != codexOllamaCloudPreset().Model {
-		t.Fatalf("codex default = %q, want %q", model, codexOllamaCloudPreset().Model)
+	codexPreset, err := presetForAgentDirectProtocol(agentCodex, "ollama-cloud")
+	if err != nil {
+		t.Fatalf("presetForAgentDirectProtocol: %v", err)
+	}
+	if model != codexPreset.Model {
+		t.Fatalf("codex default = %q, want %q", model, codexPreset.Model)
 	}
 
 	model = defaultSelectionModelForAgent(cfg, agentClaude, "deepseek", "deepseek", "deepseek-v4-flash")
@@ -7506,7 +7517,10 @@ func TestTestCodexProviderHTTPTest(t *testing.T) {
 	defer server.Close()
 
 	output := &bytes.Buffer{}
-	preset := codexOllamaCloudPreset()
+	preset, err := presetForAgentDirectProtocol(agentCodex, "ollama-cloud")
+	if err != nil {
+		t.Fatalf("presetForAgentDirectProtocol: %v", err)
+	}
 	preset.BaseURL = server.URL
 	if err := testCodexProvider(output, preset, "test-key"); err != nil {
 		t.Fatalf("testCodexProvider returned error: %v", err)
@@ -7524,7 +7538,10 @@ func TestTestCodexProviderHTTPTestFailure(t *testing.T) {
 	defer server.Close()
 
 	output := &bytes.Buffer{}
-	preset := codexOllamaCloudPreset()
+	preset, err := presetForAgentDirectProtocol(agentCodex, "ollama-cloud")
+	if err != nil {
+		t.Fatalf("presetForAgentDirectProtocol: %v", err)
+	}
 	preset.BaseURL = server.URL
 	if err := testCodexProvider(output, preset, "bad-key"); err == nil {
 		t.Fatalf("expected error for 401 response")
@@ -9170,9 +9187,9 @@ func TestProviderModelsForAgentCodexNoModels(t *testing.T) {
 	// (ollama-cloud has 11 models, so the old guard using it was always false and
 	// the fallback body never ran.)
 	cfg := &AppConfig{}
-	preset, err := codexPresetForProvider("kimi-coding")
+	preset, err := presetForAgentDirectProtocol(agentCodex, "kimi-coding")
 	if err != nil {
-		t.Fatalf("codexPresetForProvider(kimi-coding): %v", err)
+		t.Fatalf("presetForAgentDirectProtocol(codex, kimi-coding): %v", err)
 	}
 	if len(preset.Models) != 0 {
 		t.Fatalf("kimi-coding codex preset must have empty Models to exercise the fallback, got %v", preset.Models)
@@ -10195,8 +10212,19 @@ func TestProviderNamesForAgentCodex(t *testing.T) {
 	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
 	ensureAppConfigMaps(cfg)
 	names := providerNamesForAgent(agentCodex, cfg, false, false)
-	if len(names) != 4 {
-		t.Fatalf("expected 4 codex providers, got %d: %v", len(names), names)
+	want := sortedProviderNames(cfg, false)
+	if len(names) != len(want) {
+		t.Fatalf("expected %d codex providers, got %d: %v", len(want), len(names), names)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("codex providers = %v, want %v", names, want)
+		}
+	}
+	for _, crossProtocol := range []string{"minimax-cn", "opencode-go", "volcengine"} {
+		if !containsString(names, crossProtocol) {
+			t.Fatalf("codex providers missing cross-protocol provider %q: %v", crossProtocol, names)
+		}
 	}
 }
 

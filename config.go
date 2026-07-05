@@ -249,6 +249,9 @@ func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey s
 	stored := cfg.Providers[selection.Provider]
 	stored.APIKey = apiKey
 	stored.Model = strings.TrimSpace(selection.Model)
+	if selection.Protocol != "" {
+		stored.Protocol = selection.Protocol
+	}
 	stored.AuthEnv = strings.TrimSpace(selection.AuthEnv)
 	stored.Haiku = strings.TrimSpace(selection.Haiku)
 	stored.Sonnet = strings.TrimSpace(selection.Sonnet)
@@ -268,6 +271,9 @@ func upsertAgentProviderConfig(cfg *AppConfig, agent AgentName, selection Config
 	stored := agentCfg.Providers[selection.Provider]
 	stored.APIKey = apiKey
 	stored.Model = strings.TrimSpace(selection.Model)
+	if selection.Protocol != "" {
+		stored.Protocol = selection.Protocol
+	}
 	if selection.Name != "" {
 		stored.Name = strings.TrimSpace(selection.Name)
 	}

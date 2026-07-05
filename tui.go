@@ -155,6 +155,22 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	unlock()
 	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
 
+	if msg, changed, err := configureProxyRouteForCrossProtocolSelection(cfg, selection); err != nil {
+		return err
+	} else if changed {
+		if err := writeJSONAtomic(configPath, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, msg)
+		pa := &providerArgs{Agent: agent, Provider: provider, APIKey: apiKey, Model: selection.Model, Haiku: selection.Haiku, Sonnet: selection.Sonnet, Opus: selection.Opus, Subagent: selection.Subagent}
+		persist := func() error { return writeJSONAtomic(configPath, cfg) }
+		plan, err := resolveConnection(agent, provider, mustResolveAgentSwitchPreset(agent, provider, cfg, selection.Model), "proxy")
+		if err != nil {
+			return err
+		}
+		return switchProxyProvider(pa, cfg, configPath, persist, plan, *claudeDir, *codexDir, *opencodeDir, out, false)
+	}
+
 	switch agent {
 	case agentCodex:
 		if err := switchCodexProvider(provider, cfg, apiKey, selection.Model, *codexDir, out, false); err != nil {
@@ -170,6 +186,38 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func mustResolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, model string) ProviderPreset {
+	preset, _ := resolveAgentSwitchPreset(agent, provider, cfg, model)
+	return preset
+}
+
+func configureProxyRouteForCrossProtocolSelection(cfg *AppConfig, selection ConfigureSelection) (string, bool, error) {
+	agent, err := parseAgentName(selection.Agent)
+	if err != nil {
+		return "", false, err
+	}
+	provider := canonicalProviderName(selection.Provider)
+	preset, err := resolveAgentSwitchPreset(agent, provider, cfg, selection.Model)
+	if err != nil {
+		return "", false, err
+	}
+	plan, err := resolveConnection(agent, provider, preset, "auto")
+	if err != nil {
+		return "", false, err
+	}
+	if plan.Mode != connectionModeProxy {
+		return "", false, nil
+	}
+	model := strings.TrimSpace(selection.Model)
+	if model == "" {
+		model = strings.TrimSpace(preset.Model)
+	}
+	if err := writeProxyRouteConfig(cfg, plan, model, ""); err != nil {
+		return "", false, err
+	}
+	return fmt.Sprintf("cross-protocol selection will use local proxy route: %s -> %s (%s)", plan.ClientProtocol, plan.UpstreamProtocol, provider), true, nil
 }
 
 type tuiState struct {
@@ -281,6 +329,7 @@ func (ts *tuiState) rebuildProviderList() {
 			selectedIndex = len(filteredNames)
 		}
 		filteredNames = append(filteredNames, name)
+		title, secondary := providerListItemText(ts.agent, ts.cfg, name, preset, ts.currentProvider, storedAPIKeyForAgent(ts.cfg, ts.agent, name))
 		suffix := []string{}
 		if name == ts.currentProvider {
 			suffix = append(suffix, "current")
@@ -290,15 +339,62 @@ func (ts *tuiState) rebuildProviderList() {
 		} else if storedAPIKeyForAgent(ts.cfg, ts.agent, name) != "" {
 			suffix = append(suffix, "saved")
 		}
-		title := providerTitle(name, ts.cfg)
 		if len(suffix) > 0 {
 			title += " [" + strings.Join(suffix, ", ") + "]"
 		}
-		ts.providerList.AddItem(title, preset.BaseURL, 0, nil)
+		ts.providerList.AddItem(title, secondary, 0, nil)
 		ts.displayNames = append(ts.displayNames, name)
 	}
 	ts.names = filteredNames
 	ts.providerList.SetCurrentItem(selectedIndex)
+}
+
+func providerListItemText(agent AgentName, cfg *AppConfig, name string, preset ProviderPreset, currentProvider, savedKey string) (string, string) {
+	title := providerTitle(name, cfg)
+	badges := protocolBadges(providerProtocols(preset))
+	if badges != "" {
+		title += " " + badges
+	}
+	if plan, err := resolveConnection(agent, name, preset, "auto"); err == nil {
+		title += " [" + string(plan.Mode) + "]"
+	}
+	return title, preset.BaseURL
+}
+
+func providerProtocols(preset ProviderPreset) []ProviderProtocol {
+	seen := map[ProviderProtocol]bool{}
+	protocols := []ProviderProtocol{}
+	add := func(protocol ProviderProtocol) {
+		if protocol == "" || seen[protocol] {
+			return
+		}
+		seen[protocol] = true
+		protocols = append(protocols, protocol)
+	}
+	if strings.TrimSpace(preset.BaseURL) != "" {
+		add(protocolAnthropicMessages)
+	}
+	for _, protocol := range []ProviderProtocol{protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses} {
+		if endpoint, ok := preset.Endpoints[protocol]; ok && strings.TrimSpace(endpoint.BaseURL) != "" {
+			add(protocol)
+		}
+	}
+	return protocols
+}
+
+func protocolBadges(protocols []ProviderProtocol) string {
+	badges := []string{}
+	for _, protocol := range protocols {
+		switch protocol {
+		case protocolAnthropicMessages:
+			badges = append(badges, "[A]")
+		case protocolOpenAIChat:
+			badges = append(badges, "[C]")
+		case protocolOpenAIResponses:
+			badges = append(badges, "[R]")
+		}
+	}
+	return strings.Join(badges, "")
 }
 
 func (ts *tuiState) showDetail(provider, backPage string) {
@@ -312,15 +408,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 
 	hasSavedKey := storedAPIKeyForAgent(ts.cfg, ts.agent, provider) != ""
 	var b strings.Builder
-	fmt.Fprintf(&b, "[::b]Provider[::-]  %s\n", providerTitle(provider, ts.cfg))
-	fmt.Fprintf(&b, "[::b]Preset[::-]    %s\n", preset.Name)
-	fmt.Fprintf(&b, "[::b]Base URL[::-]  %s\n", preset.BaseURL)
-	if preset.NoAPIKey {
-		fmt.Fprintf(&b, "[::b]API Key[::-]   [green]Not required[-]\n")
-	} else {
-		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider)))
-	}
-	fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(ts.currentProvider), currentModelLabel(ts.currentModel))
+	b.WriteString(providerDetailInfoText(ts.agent, ts.cfg, provider, preset, ts.currentProvider, ts.currentModel, preset.NoAPIKey, hasSavedKey))
 	if preset.Website != "" {
 		fmt.Fprintf(&b, "[::b]Website[::-]     %s\n", preset.Website)
 	}
@@ -419,6 +507,32 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	page.AddItem(actions, 12, 0, true)
 	ts.pages.AddAndSwitchToPage("detail", page, true)
 	ts.app.SetFocus(actions)
+}
+
+func providerDetailInfoText(agent AgentName, cfg *AppConfig, provider string, preset ProviderPreset, currentProvider, currentModel string, noAPIKey, hasSavedKey bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[::b]Provider[::-]  %s\n", providerTitle(provider, cfg))
+	fmt.Fprintf(&b, "[::b]Preset[::-]    %s\n", preset.Name)
+	fmt.Fprintf(&b, "[::b]Base URL[::-]  %s\n", preset.BaseURL)
+	if noAPIKey {
+		fmt.Fprintf(&b, "[::b]API Key[::-]   [green]Not required[-]\n")
+	} else {
+		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(storedAPIKeyForAgent(cfg, agent, provider)))
+	}
+	fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
+	fmt.Fprintf(&b, "[::b]Protocol Endpoints[::-]\n")
+	for _, protocol := range providerProtocols(preset) {
+		if endpoint, ok := preset.presetEndpoint(protocol); ok {
+			fmt.Fprintf(&b, "  %s  %s\n", protocol, endpoint.BaseURL)
+		}
+	}
+	if plan, err := resolveConnection(agent, provider, preset, "auto"); err == nil {
+		fmt.Fprintf(&b, "[::b]Connection[::-] %s (%s -> %s)\n", plan.Mode, plan.ClientProtocol, plan.UpstreamProtocol)
+		if plan.Mode == connectionModeProxy {
+			fmt.Fprintf(&b, "[yellow]Cross-protocol selection will be routed through a local proxy route.[-]\n")
+		}
+	}
+	return b.String()
 }
 
 func (ts *tuiState) updateTierInfo(provider, model string) {
@@ -847,6 +961,13 @@ func (ts *tuiState) showCustomProviderForm() {
 	form.AddInputField("Model", "", 0, nil, func(text string) {
 		modelValue = text
 	})
+	protocolValue := protocolAnthropicMessages
+	protocolOptions := []string{string(protocolAnthropicMessages), string(protocolOpenAIChat), string(protocolOpenAIResponses)}
+	form.AddDropDown("Protocol", protocolOptions, 0, func(_ string, idx int) {
+		if idx >= 0 && idx < len(protocolOptions) {
+			protocolValue = ProviderProtocol(protocolOptions[idx])
+		}
+	})
 	form.AddDropDown("Auth Style", []string{"x-api-key (default)", "Bearer token"}, 0, func(option string, idx int) {
 		if idx == 1 {
 			authEnvValue = "ANTHROPIC_AUTH_TOKEN"
@@ -887,6 +1008,7 @@ func (ts *tuiState) showCustomProviderForm() {
 			BaseURL:  baseURLValue,
 			APIKey:   apiKeyValue,
 			Model:    modelValue,
+			Protocol: protocolValue,
 			AuthEnv:  authEnvValue,
 		}
 		ts.resultErr = nil

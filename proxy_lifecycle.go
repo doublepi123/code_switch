@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -148,6 +149,18 @@ func cmdProxyStatus(args []string, out io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(out, "proxy: running\npid: %d\nbase_url: %s\nstarted_at: %s\n", state.PID, state.BaseURL, state.StartedAt.Format(time.RFC3339))
+	if cfg, _, cfgErr := loadAppConfig(); cfgErr == nil && cfg.Proxy != nil && len(cfg.Proxy.Routes) > 0 {
+		fmt.Fprintln(out, "routes:")
+		for _, agent := range sortedProxyRouteAgents(cfg.Proxy.Routes) {
+			route := cfg.Proxy.Routes[agent]
+			protocol, err := route.ResolveProtocol(defaultProtocolRegistry())
+			if err != nil {
+				protocol = ProviderProtocol(strings.TrimSpace(route.UpstreamProtocol))
+			}
+			fmt.Fprintf(out, "- agent: %s\n  provider: %s\n  protocol: %s\n  token: %s\n",
+				agent, canonicalProviderName(route.Provider), protocol, maskProxyToken(route.Token))
+		}
+	}
 	return nil
 }
 
@@ -204,6 +217,17 @@ func cmdProxyServe(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "proxy listening on %s\n", inst.state.BaseURL)
+	if cfg, _, cfgErr := loadAppConfig(); cfgErr == nil && cfg.Proxy != nil && len(cfg.Proxy.Routes) > 0 {
+		fmt.Fprintln(out, "routes:")
+		for _, agent := range sortedProxyRouteAgents(cfg.Proxy.Routes) {
+			route := cfg.Proxy.Routes[agent]
+			protocol, err := route.ResolveProtocol(defaultProtocolRegistry())
+			if err != nil {
+				protocol = ProviderProtocol(strings.TrimSpace(route.UpstreamProtocol))
+			}
+			fmt.Fprintf(out, "- agent: %s provider: %s protocol: %s token: %s\n", agent, canonicalProviderName(route.Provider), protocol, maskProxyToken(route.Token))
+		}
+	}
 	err = inst.server.Serve(inst.ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -215,27 +239,38 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("proxy token is required")
 	}
-	cfg, _, err := loadAppConfig()
+	_ = strings.TrimSpace(agent)
+	cfg, path, unlock, err := loadAppConfigLocked()
 	if err != nil {
 		return nil, err
 	}
-	route, err := buildProxyRouteFromConfig(agent, cfg, token)
+	defer unlock()
+	changed, err := ensureProxyRouteTokens(cfg)
 	if err != nil {
 		return nil, err
 	}
-	// API key enforcement: a provider that requires a key (preset.NoAPIKey
-	// == false) MUST have a non-empty key in the app config before the
-	// proxy can serve. Without it the proxy would start but every proxied
-	// request would 401 against the upstream. NoAPIKey providers (e.g.
-	// ollama talking to a local daemon that needs no auth) skip this check.
-	preset, presetErr := resolveProviderPreset(route.Provider, cfg)
-	if presetErr != nil {
-		// Should never happen (buildProxyRouteFromConfig already resolved
-		// the provider); surface defensively rather than panic.
-		return nil, presetErr
+	if changed {
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			return nil, err
+		}
 	}
-	if !preset.NoAPIKey && strings.TrimSpace(cfg.Providers[route.Provider].APIKey) == "" {
-		return nil, fmt.Errorf("provider %q has no API key configured; run `cs set-key %s <key>` before starting the proxy", route.Provider, route.Provider)
+	routes, err := buildProxyServedRoutesFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	// Backward compatibility: existing callers/tests that start a daemon for a
+	// specific agent still receive an instance token through the runtime state.
+	// Keep that token usable for the requested agent while the persisted
+	// per-agent route token remains the primary credential for new clients.
+	if requestedAgent := strings.TrimSpace(agent); requestedAgent != "" {
+		for _, route := range routes {
+			if route.Agent == requestedAgent && route.Route.LocalToken != token {
+				alias := route
+				alias.Route.LocalToken = token
+				routes = append(routes, alias)
+				break
+			}
+		}
 	}
 	proxyCfg := ProxyConfig{Host: host, Port: port}
 	if strings.TrimSpace(proxyCfg.Host) == "" {
@@ -294,7 +329,7 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 		body, _ := json.Marshal(proxyHealthReport{OK: true, InstanceID: instanceID, PID: pid})
 		_, _ = w.Write(body)
 	})
-	mux.Handle("/", newProxyHandler(route, cfg.Providers[route.Provider].APIKey))
+	mux.Handle("/", newProxyMultiRouteHandler(routes, defaultProtocolRegistry()))
 	server := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -307,6 +342,58 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 		return nil, err
 	}
 	return &proxyServeInstance{server: server, ln: ln, state: state}, nil
+}
+
+func sortedProxyRouteAgents(routes map[string]ProxyRouteConfig) []string {
+	agents := make([]string, 0, len(routes))
+	for agent := range routes {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+	return agents
+}
+
+func buildProxyServedRoutesFromConfig(cfg *AppConfig) ([]proxyServedRoute, error) {
+	if cfg == nil || cfg.Proxy == nil || len(cfg.Proxy.Routes) == 0 {
+		return nil, errors.New("no proxy routes configured")
+	}
+	routes := make([]proxyServedRoute, 0, len(cfg.Proxy.Routes))
+	for _, agent := range sortedProxyRouteAgents(cfg.Proxy.Routes) {
+		persisted := cfg.Proxy.Routes[agent]
+		if err := validateProxyRouteHasAPIKey(persisted, cfg); err != nil {
+			return nil, err
+		}
+		token := strings.TrimSpace(persisted.Token)
+		if token == "" {
+			return nil, fmt.Errorf("proxy route for agent %q has no token", agent)
+		}
+		route, err := buildProxyRouteFromConfig(agent, cfg, token)
+		if err != nil {
+			return nil, err
+		}
+		profile, ok := agentProfiles[AgentName(agent)]
+		if !ok {
+			return nil, fmt.Errorf("unsupported agent %q", agent)
+		}
+		routes = append(routes, proxyServedRoute{
+			Agent:          agent,
+			ClientProtocol: profile.ClientProtocol,
+			Route:          route,
+			ProviderKey:    cfg.Providers[route.Provider].APIKey,
+		})
+	}
+	return routes, nil
+}
+
+func maskProxyToken(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "<missing>"
+	}
+	if len(token) <= 12 {
+		return token[:1] + "…" + token[len(token)-1:]
+	}
+	return token[:8] + "…" + token[len(token)-4:]
 }
 
 // randomProxyInstanceID returns a random non-sensitive identifier of the

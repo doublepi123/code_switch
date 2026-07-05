@@ -128,6 +128,7 @@ type ModelTiers struct {
 type ProviderPreset struct {
 	Name                 string
 	BaseURL              string
+	Endpoints            map[ProviderProtocol]ProtocolEndpoint
 	Model                string
 	Models               []string
 	Haiku                string
@@ -147,15 +148,16 @@ type ProviderPreset struct {
 }
 
 type StoredProvider struct {
-	Name     string `json:"name,omitempty"`
-	BaseURL  string `json:"baseUrl,omitempty"`
-	Model    string `json:"model,omitempty"`
-	APIKey   string `json:"apiKey,omitempty"`
-	AuthEnv  string `json:"authEnv,omitempty"`
-	Haiku    string `json:"haiku,omitempty"`
-	Sonnet   string `json:"sonnet,omitempty"`
-	Opus     string `json:"opus,omitempty"`
-	Subagent string `json:"subagent,omitempty"`
+	Name     string           `json:"name,omitempty"`
+	BaseURL  string           `json:"baseUrl,omitempty"`
+	Protocol ProviderProtocol `json:"protocol,omitempty"`
+	Model    string           `json:"model,omitempty"`
+	APIKey   string           `json:"apiKey,omitempty"`
+	AuthEnv  string           `json:"authEnv,omitempty"`
+	Haiku    string           `json:"haiku,omitempty"`
+	Sonnet   string           `json:"sonnet,omitempty"`
+	Opus     string           `json:"opus,omitempty"`
+	Subagent string           `json:"subagent,omitempty"`
 }
 
 type AgentConfig struct {
@@ -163,11 +165,11 @@ type AgentConfig struct {
 }
 
 type AppConfig struct {
-	Providers     map[string]StoredProvider  `json:"providers"`
-	Agents        map[string]AgentConfig     `json:"agents,omitempty"`
-	Default       string                     `json:"default,omitempty"`
+	Providers     map[string]StoredProvider    `json:"providers"`
+	Agents        map[string]AgentConfig       `json:"agents,omitempty"`
+	Default       string                       `json:"default,omitempty"`
 	ModelMappings map[string]map[string]string `json:"modelMappings,omitempty"`
-	Proxy         *ProxyConfig                `json:"proxy,omitempty"`
+	Proxy         *ProxyConfig                 `json:"proxy,omitempty"`
 }
 
 type ConfigureSelection struct {
@@ -178,6 +180,7 @@ type ConfigureSelection struct {
 	APIKey   string
 	Name     string
 	BaseURL  string
+	Protocol ProviderProtocol
 	AuthEnv  string
 	Haiku    string
 	Sonnet   string
@@ -195,16 +198,16 @@ const (
 
 var providerPresets = map[string]ProviderPreset{
 	"minimax-cn": {
-		Name:      "MiniMax CN Token Plan",
-		BaseURL:   "https://api.minimaxi.com/anthropic",
-		Model:     "MiniMax-M3",
-		Models:    []string{"MiniMax-M3", "MiniMax-M3-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
-		Haiku:     "MiniMax-M3",
-		Sonnet:    "MiniMax-M3",
-		Opus:      "MiniMax-M3",
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://platform.minimaxi.com",
-		APIKeyURL: "https://platform.minimaxi.com/docs/token-plan/claude-code",
+		Name:            "MiniMax CN Token Plan",
+		BaseURL:         "https://api.minimaxi.com/anthropic",
+		Model:           "MiniMax-M3",
+		Models:          []string{"MiniMax-M3", "MiniMax-M3-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
+		Haiku:           "MiniMax-M3",
+		Sonnet:          "MiniMax-M3",
+		Opus:            "MiniMax-M3",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://platform.minimaxi.com",
+		APIKeyURL:       "https://platform.minimaxi.com/docs/token-plan/claude-code",
 		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
@@ -212,16 +215,16 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"minimax-global": {
-		Name:      "MiniMax Global Token Plan",
-		BaseURL:   "https://api.minimax.io/anthropic",
-		Model:     "MiniMax-M3",
-		Models:    []string{"MiniMax-M3", "MiniMax-M3-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
-		Haiku:     "MiniMax-M3",
-		Sonnet:    "MiniMax-M3",
-		Opus:      "MiniMax-M3",
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://platform.minimax.io",
-		APIKeyURL: "https://platform.minimax.io/docs/token-plan/claude-code",
+		Name:            "MiniMax Global Token Plan",
+		BaseURL:         "https://api.minimax.io/anthropic",
+		Model:           "MiniMax-M3",
+		Models:          []string{"MiniMax-M3", "MiniMax-M3-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"},
+		Haiku:           "MiniMax-M3",
+		Sonnet:          "MiniMax-M3",
+		Opus:            "MiniMax-M3",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://platform.minimax.io",
+		APIKeyURL:       "https://platform.minimax.io/docs/token-plan/claude-code",
 		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
@@ -229,20 +232,26 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"openrouter": {
-		Name:      "OpenRouter",
-		BaseURL:   "https://openrouter.ai/api",
-		Model:     "anthropic/claude-sonnet-4.6",
-		Models:    []string{"anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5", "anthropic/claude-opus-4.7"},
-		Haiku:     "anthropic/claude-haiku-4.5",
-		Sonnet:    "anthropic/claude-sonnet-4.6",
-		Opus:      "anthropic/claude-opus-4.7",
+		Name:    "OpenRouter",
+		BaseURL: "https://openrouter.ai/api",
+		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
+			protocolOpenAIChat: {BaseURL: "https://openrouter.ai/api/v1", AuthEnv: "OPENROUTER_API_KEY"},
+		},
+		Model:           "anthropic/claude-sonnet-4.6",
+		Models:          []string{"anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5", "anthropic/claude-opus-4.7"},
+		Haiku:           "anthropic/claude-haiku-4.5",
+		Sonnet:          "anthropic/claude-sonnet-4.6",
+		Opus:            "anthropic/claude-opus-4.7",
 		ReasoningEffort: "xhigh",
-		Website:   "https://openrouter.ai",
-		APIKeyURL: "https://openrouter.ai/keys",
+		Website:         "https://openrouter.ai",
+		APIKeyURL:       "https://openrouter.ai/keys",
 	},
 	"deepseek": {
-		Name:      "DeepSeek",
-		BaseURL:   "https://api.deepseek.com/anthropic",
+		Name:    "DeepSeek",
+		BaseURL: "https://api.deepseek.com/anthropic",
+		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
+			protocolOpenAIChat: {BaseURL: "https://api.deepseek.com/v1", AuthEnv: "DEEPSEEK_API_KEY"},
+		},
 		Model:     "deepseek-v4-pro[1m]",
 		Models:    []string{"deepseek-v4-pro[1m]", "deepseek-v4-pro", "deepseek-v4-flash"},
 		Haiku:     "deepseek-v4-flash",
@@ -277,35 +286,38 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"xiaomimimo-cn": {
-		Name:      "Xiaomi MiMo Token Plan CN",
-		BaseURL:   "https://token-plan-cn.xiaomimimo.com/anthropic",
-		Model:     "mimo-v2.5-pro",
-		Models:    []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni", "mimo-v2-flash"},
-		Haiku:     "mimo-v2.5-pro",
-		Sonnet:    "mimo-v2.5-pro",
-		Opus:      "mimo-v2.5-pro",
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
+		Name:            "Xiaomi MiMo Token Plan CN",
+		BaseURL:         "https://token-plan-cn.xiaomimimo.com/anthropic",
+		Model:           "mimo-v2.5-pro",
+		Models:          []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni", "mimo-v2-flash"},
+		Haiku:           "mimo-v2.5-pro",
+		Sonnet:          "mimo-v2.5-pro",
+		Opus:            "mimo-v2.5-pro",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		ReasoningEffort: "xhigh",
-		Website:   "https://platform.xiaomimimo.com",
-		APIKeyURL: "https://platform.xiaomimimo.com/#/console/plan-manage",
+		Website:         "https://platform.xiaomimimo.com",
+		APIKeyURL:       "https://platform.xiaomimimo.com/#/console/plan-manage",
 	},
 	"ollama": {
 		Name:    "Ollama (Local)",
 		BaseURL: "http://localhost:11434",
-		Model:   "qwen3-coder",
+		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
+			protocolOpenAIChat: {BaseURL: "http://localhost:11434/v1"},
+		},
+		Model: "qwen3-coder",
 		Models: []string{"qwen3-coder", "gpt-oss:20b", "qwen2.5:14b", "qwen2.5:7b", "qwen2.5:32b", "qwen2.5:72b",
 			"qwen2.5-coder:14b", "qwen2.5-coder:7b", "deepseek-r1:14b", "deepseek-r1:32b",
 			"llama3.1:8b", "llama3.1:70b", "gemma3:12b", "gemma3:27b",
 			"mistral:7b", "codellama:13b", "codellama:34b", "phi4:14b",
 			"glm-4.7:cloud", "minimax-m2.1:cloud"},
-		Haiku:     "qwen2.5:7b",
-		Sonnet:    "qwen3-coder",
-		Opus:      "qwen2.5:32b",
-		Subagent:  "qwen2.5-coder:7b",
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://ollama.com",
-		APIKeyURL: "https://ollama.com",
-		NoAPIKey:  true,
+		Haiku:           "qwen2.5:7b",
+		Sonnet:          "qwen3-coder",
+		Opus:            "qwen2.5:32b",
+		Subagent:        "qwen2.5-coder:7b",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://ollama.com",
+		APIKeyURL:       "https://ollama.com",
+		NoAPIKey:        true,
 		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "600000",
@@ -313,17 +325,17 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"zai": {
-		Name:      "Z.AI GLM Coding Plan",
-		BaseURL:   "https://api.z.ai/api/anthropic",
-		Model:     "glm-5.1",
-		Models:    []string{"glm-5.2[1m]", "glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
-		Haiku:     "glm-4.5-air",
-		Sonnet:    "glm-5-turbo",
-		Opus:      "glm-5.1",
-		Subagent:  "glm-5-turbo",
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://open.z.ai",
-		APIKeyURL: "https://open.z.ai",
+		Name:            "Z.AI GLM Coding Plan",
+		BaseURL:         "https://api.z.ai/api/anthropic",
+		Model:           "glm-5.1",
+		Models:          []string{"glm-5.2[1m]", "glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
+		Haiku:           "glm-4.5-air",
+		Sonnet:          "glm-5-turbo",
+		Opus:            "glm-5.1",
+		Subagent:        "glm-5-turbo",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://open.z.ai",
+		APIKeyURL:       "https://open.z.ai",
 		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
@@ -338,17 +350,17 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"zhipu-cn": {
-		Name:      "Zhipu (智谱) GLM Coding Plan",
-		BaseURL:   "https://open.bigmodel.cn/api/anthropic",
-		Model:     "glm-5.2",
-		Models:    []string{"glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
-		Haiku:     "glm-4.5-air",
-		Sonnet:    "glm-5-turbo",
-		Opus:      "glm-5.2",
-		Subagent:  "glm-5-turbo",
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://open.bigmodel.cn",
-		APIKeyURL: "https://open.bigmodel.cn",
+		Name:            "Zhipu (智谱) GLM Coding Plan",
+		BaseURL:         "https://open.bigmodel.cn/api/anthropic",
+		Model:           "glm-5.2",
+		Models:          []string{"glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5-turbo", "glm-4.7", "glm-4.5-air"},
+		Haiku:           "glm-4.5-air",
+		Sonnet:          "glm-5-turbo",
+		Opus:            "glm-5.2",
+		Subagent:        "glm-5-turbo",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://open.bigmodel.cn",
+		APIKeyURL:       "https://open.bigmodel.cn",
 		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
@@ -365,7 +377,10 @@ var providerPresets = map[string]ProviderPreset{
 	"ollama-cloud": {
 		Name:    "Ollama Cloud",
 		BaseURL: "https://ollama.com",
-		Model:   "qwen3-coder:480b",
+		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
+			protocolOpenAIChat: {BaseURL: "https://ollama.com/v1", AuthEnv: "OLLAMA_API_KEY"},
+		},
+		Model: "qwen3-coder:480b",
 		Models: []string{
 			"qwen3-coder:480b",
 			"minimax-m2.7",
@@ -388,9 +403,9 @@ var providerPresets = map[string]ProviderPreset{
 			"deepseek-v4-pro":   "xhigh",
 			"deepseek-v4-flash": "xhigh",
 		},
-		AuthEnv:   "ANTHROPIC_AUTH_TOKEN",
-		Website:   "https://ollama.com/cloud",
-		APIKeyURL: "https://ollama.com/settings/keys",
+		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
+		Website:         "https://ollama.com/cloud",
+		APIKeyURL:       "https://ollama.com/settings/keys",
 		ReasoningEffort: "xhigh",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "600000",
@@ -417,8 +432,11 @@ var providerPresets = map[string]ProviderPreset{
 		},
 	},
 	"kimi-coding": {
-		Name:            "Kimi Coding",
-		BaseURL:         "https://api.kimi.com/coding/",
+		Name:    "Kimi Coding",
+		BaseURL: "https://api.kimi.com/coding/",
+		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
+			protocolOpenAIChat: {BaseURL: "https://api.kimi.com/coding/v1", AuthEnv: "KIMI_API_KEY"},
+		},
 		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		NoModel:         true,
 		ReasoningEffort: "xhigh",

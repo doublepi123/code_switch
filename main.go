@@ -207,8 +207,15 @@ func cmdCurrent(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "  %s\n", formatLabel("settings", settingsPath))
 		if baseURL == "" {
 			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
+		} else if route, ok := proxyRouteForLocalConfig(agentClaude, baseURL, stringFromMap(env, "ANTHROPIC_AUTH_TOKEN")); ok {
+			fmt.Fprintf(out, "  %s\n", formatLabel("mode", "proxy"))
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", canonicalProviderName(route.Provider)))
+			fmt.Fprintf(out, "  %s\n", formatLabel("upstream_protocol", route.UpstreamProtocol))
+			fmt.Fprintf(out, "  %s\n", formatLabel("daemon", proxyDaemonStatusText()))
+			fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
 		} else {
 			fmt.Fprintf(out, "  %s\n", formatLabel("provider", detectProvider(baseURL, model)))
+			fmt.Fprintf(out, "  %s\n", formatLabel("mode", "direct"))
 			fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
 			if model != "" {
 				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
@@ -241,8 +248,18 @@ func cmdCurrent(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "  %s\n", formatLabel("config", configPath))
 		if provider == "" {
 			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
+		} else if route, ok := proxyRouteForLocalConfig(agentCodex, baseURL, ""); ok {
+			fmt.Fprintf(out, "  %s\n", formatLabel("mode", "proxy"))
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", canonicalProviderName(route.Provider)))
+			fmt.Fprintf(out, "  %s\n", formatLabel("upstream_protocol", route.UpstreamProtocol))
+			fmt.Fprintf(out, "  %s\n", formatLabel("daemon", proxyDaemonStatusText()))
+			fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
+			if model != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
+			}
 		} else {
 			fmt.Fprintf(out, "  %s\n", formatLabel("provider", providerKey))
+			fmt.Fprintf(out, "  %s\n", formatLabel("mode", "direct"))
 			if baseURL != "" {
 				fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
 			}
@@ -264,6 +281,15 @@ func cmdCurrent(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "  %s\n", formatLabel("config", configPath))
 		if baseURL == "" {
 			fmt.Fprintf(out, "  %s\n", formatLabel("provider", "unknown"))
+		} else if route, ok := proxyRouteForLocalConfig(agentOpencode, baseURL, ""); ok {
+			fmt.Fprintf(out, "  %s\n", formatLabel("mode", "proxy"))
+			fmt.Fprintf(out, "  %s\n", formatLabel("provider", canonicalProviderName(route.Provider)))
+			fmt.Fprintf(out, "  %s\n", formatLabel("upstream_protocol", route.UpstreamProtocol))
+			fmt.Fprintf(out, "  %s\n", formatLabel("daemon", proxyDaemonStatusText()))
+			fmt.Fprintf(out, "  %s\n", formatLabel("base_url", baseURL))
+			if model != "" {
+				fmt.Fprintf(out, "  %s\n", formatLabel("model", model))
+			}
 		} else {
 			displayProvider := providerName
 			if displayProvider == "" {
@@ -282,6 +308,11 @@ func cmdCurrent(args []string, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func stringFromMap(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
 }
 
 func cmdSetKey(args []string, out io.Writer) error {
@@ -303,7 +334,7 @@ func cmdSetKey(args []string, out io.Writer) error {
 	provider := canonicalProviderName(remaining[0])
 
 	if agent == agentCodex {
-		if _, err := codexPresetForProvider(provider); err != nil {
+		if _, err := presetForAgentDirectProtocol(agentCodex, provider); err != nil {
 			return err
 		}
 		cfg, path, unlock, err := loadAppConfigLocked()
@@ -530,6 +561,14 @@ _cs() {
 			;;
 		esac
 		;;
+	*)
+		# --via value completion for: cs switch <provider> --via <TAB>
+		if [ ${words[1]} = switch ] && [ $cword -ge 3 ]; then
+			if [ "${words[cword-1]}" = "--via" ] || [ "${words[cword-1]}" = "-via" ]; then
+				COMPREPLY=($(compgen -W "auto direct proxy" -- "$cur"))
+			fi
+		fi
+		;;
 	esac
 }
 complete -F _cs cs
@@ -538,11 +577,11 @@ complete -F _cs cs
 
 func zshCompletionString() string {
 	var b strings.Builder
-	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'models:list models for a provider'\n\t\t'model:get/set/list the default model for a provider'\n\t\t'model-map:map client model names to upstream provider models'\n\t\t'use-model:set a provider default model and the proxy default mapping in one step'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'default:get/set the default provider'\n\t\t'env:print shell exports for a provider'\n\t\t'token:print raw API token for command-backed auth'\n\t\t'restore:restore official agent config'\n\t\t'diff:preview env changes for a switch'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'backups:list or prune config backups'\n\t\t'doctor:health-check configs and permissions'\n\t\t'export:dump app config to stdout'\n\t\t'import:merge an exported config'\n\t\t'completion:generate shell completion'\n\t\t'run:launch an agent through the local code-switch proxy (MVP: --dry-run only)'\n\t\t'proxy:configure/preview/status/start/stop/serve the local code-switch proxy'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
+	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'models:list models for a provider'\n\t\t'model:get/set/list the default model for a provider'\n\t\t'model-map:map client model names to upstream provider models'\n\t\t'use-model:set a provider default model and the proxy default mapping in one step'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider [--via auto|direct|proxy]'\n\t\t'default:get/set the default provider'\n\t\t'env:print shell exports for a provider'\n\t\t'token:print raw API token for command-backed auth'\n\t\t'restore:restore official agent config'\n\t\t'diff:preview env changes for a switch'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'backups:list or prune config backups'\n\t\t'doctor:health-check configs and permissions'\n\t\t'export:dump app config to stdout'\n\t\t'import:merge an exported config'\n\t\t'completion:generate shell completion'\n\t\t'run:launch an agent through the local code-switch proxy (MVP: --dry-run only)'\n\t\t'proxy:configure/preview/status/start/stop/serve the multi-route code-switch proxy'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(&b, "\t\t'%s'\n", name)
 	}
-	b.WriteString("\t)\n\n\tlocal -a shells\n\tshells=('bash' 'zsh' 'fish')\n\n\tlocal -a proxy_subcommands\n\tproxy_subcommands=(\n\t\t'configure:write a proxy route for an agent'\n\t\t'preview:show the resolved proxy route and codex config'\n\t\t'status:show proxy runtime status'\n\t\t'start:launch the proxy as a background process'\n\t\t'stop:terminate a running proxy'\n\t\t'serve:run the proxy HTTP server in the foreground'\n\t)\n\n\t_arguments \\\n\t\t'--version[show version]' \\\n\t\t'--help[show help]' \\\n\t\t'1:command:_describe command commands' \\\n\t\t'2: :->second' \\\n\t\t'*::arg:->args'\n\n\tcase $state in\n\tsecond)\n\t\tcase ${words[1]} in\n\t\tswitch|set-key|env|token|test|remove|models|default|model-map|use-model|diff)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tmodel)\n\t\t\t_values 'subcommand' 'get' 'set' 'list'\n\t\t\t;;\n\t\tmodel-map)\n\t\t\t_values 'subcommand' 'set' 'get' 'list' 'remove'\n\t\t\t;;\n\t\tcompletion)\n\t\t\t_values 'shell' $shells\n\t\t\t;;\n\t\tproxy)\n\t\t\t_describe 'proxy subcommand' proxy_subcommands\n\t\t\t;;\n\t\tesac\n\t\t;;\n\tesac\n}\n_cs\n")
+	b.WriteString("\t)\n\n\tlocal -a shells\n\tshells=('bash' 'zsh' 'fish')\n\n\tlocal -a proxy_subcommands\n\tproxy_subcommands=(\n\t\t'configure:write a proxy route for an agent (multi-route daemon)'\n\t\t'preview:show the resolved proxy route and codex config for an agent'\n\t\t'status:show proxy daemon runtime status (all configured routes)'\n\t\t'start:launch the multi-route proxy daemon as a background process'\n\t\t'stop:terminate a running proxy daemon'\n\t\t'serve:run the multi-route proxy HTTP daemon in the foreground'\n\t)\n\n\t_arguments \\\n\t\t'--version[show version]' \\\n\t\t'--help[show help]' \\\n\t\t'--via[connection mode for switch]:connection mode:(auto direct proxy)' \\\n\t\t'1:command:_describe command commands' \\\n\t\t'2: :->second' \\\n\t\t'*::arg:->args'\n\n\tcase $state in\n\tsecond)\n\t\tcase ${words[1]} in\n\t\tswitch)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tset-key|env|token|test|remove|models|default|model-map|use-model|diff)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tmodel)\n\t\t\t_values 'subcommand' 'get' 'set' 'list'\n\t\t\t;;\n\t\tmodel-map)\n\t\t\t_values 'subcommand' 'set' 'get' 'list' 'remove'\n\t\t\t;;\n\t\tcompletion)\n\t\t\t_values 'shell' $shells\n\t\t\t;;\n\t\tproxy)\n\t\t\t_describe 'proxy subcommand' proxy_subcommands\n\t\t\t;;\n\t\tesac\n\t\t;;\n\tesac\n}\n_cs\n")
 	return b.String()
 }
 
@@ -558,7 +597,7 @@ complete -c cs -n '__fish_use_subcommand' -a 'use-model' -d 'Set a provider defa
 complete -c cs -n '__fish_use_subcommand' -a 'configure' -d 'Interactive TUI configuration'
 complete -c cs -n '__fish_use_subcommand' -a 'current' -d 'Show current provider'
 complete -c cs -n '__fish_use_subcommand' -a 'set-key' -d 'Save API key for a provider'
-complete -c cs -n '__fish_use_subcommand' -a 'switch' -d 'Switch agent provider'
+complete -c cs -n '__fish_use_subcommand' -a 'switch' -d 'Switch agent provider (--via auto|direct|proxy)'
 complete -c cs -n '__fish_use_subcommand' -a 'default' -d 'Get or set the default provider'
 complete -c cs -n '__fish_use_subcommand' -a 'env' -d 'Print shell exports for a provider'
 complete -c cs -n '__fish_use_subcommand' -a 'token' -d 'Print raw API token for command-backed auth'
@@ -573,10 +612,11 @@ complete -c cs -n '__fish_use_subcommand' -a 'export' -d 'Dump app config to std
 complete -c cs -n '__fish_use_subcommand' -a 'import' -d 'Merge an exported config'
 complete -c cs -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion'
 complete -c cs -n '__fish_use_subcommand' -a 'run' -d 'Launch an agent through the local code-switch proxy (MVP: --dry-run only)'
-complete -c cs -n '__fish_use_subcommand' -a 'proxy' -d 'Configure/control the local code-switch proxy'
+complete -c cs -n '__fish_use_subcommand' -a 'proxy' -d 'Configure/control the multi-route code-switch proxy daemon'
 complete -c cs -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 
 complete -c cs -n '__fish_seen_subcommand_from switch set-key env token test remove models default model model-map use-model diff' -a '%s'
+complete -c cs -n '__fish_seen_subcommand_from switch' -l via -d 'Connection mode' -a 'auto direct proxy' -r
 complete -c cs -n '__fish_seen_subcommand_from model' -a 'get set list'
 complete -c cs -n '__fish_seen_subcommand_from model-map' -a 'set get list remove'
 complete -c cs -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
@@ -631,7 +671,7 @@ func printUsage(out io.Writer) {
 	b.WriteString("  cs configure [--agent claude|codex|opencode] [--dry-run] [--reset-key]\n")
 	b.WriteString("  cs current [--agent claude|codex|opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR]\n")
 	b.WriteString("  cs set-key <provider> <api-key> [--agent claude|codex|opencode]\n")
-	b.WriteString("  cs switch <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR] [--dry-run]\n")
+	b.WriteString("  cs switch <provider> [--agent claude|codex|opencode] [--via auto|direct|proxy] [--api-key sk-xxx] [--model model-id] [--haiku model] [--sonnet model] [--opus model] [--subagent model] [--claude-dir DIR] [--codex-dir DIR] [--opencode-dir DIR] [--dry-run]\n")
 	b.WriteString("  cs default [provider] [--clear]            # get/set the default provider used by bare `cs switch`\n")
 	b.WriteString("  cs env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--shell bash|fish|pwsh]\n")
 	b.WriteString("  cs token <provider> [--agent claude|codex|opencode] [--api-key sk-xxx]\n")
@@ -646,12 +686,12 @@ func printUsage(out io.Writer) {
 	b.WriteString("  cs import <file> [--force]                # merge an exported config into your app config\n")
 	b.WriteString("  cs completion bash|zsh|fish\n")
 	b.WriteString("  cs run <agent> --provider <provider> [--model model-id] [--dry-run]   # MVP: codex --dry-run only\n")
-	b.WriteString("  cs proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port]\n")
-	b.WriteString("  cs proxy preview <agent>                  # show the resolved proxy route + codex config\n")
-	b.WriteString("  cs proxy status                            # show proxy runtime status\n")
-	b.WriteString("  cs proxy start                            # launch the proxy as a background process\n")
-	b.WriteString("  cs proxy stop                             # terminate a running proxy\n")
-	b.WriteString("  cs proxy serve                            # run the proxy HTTP server in the foreground\n")
+	b.WriteString("  cs proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port]   # write one route of the multi-route daemon\n")
+	b.WriteString("  cs proxy preview <agent>                  # show the resolved proxy route + codex config for <agent>\n")
+	b.WriteString("  cs proxy status                            # show proxy runtime status (all configured routes)\n")
+	b.WriteString("  cs proxy start                            # launch the multi-route proxy daemon as a background process\n")
+	b.WriteString("  cs proxy stop                             # terminate a running proxy daemon\n")
+	b.WriteString("  cs proxy serve                            # run the multi-route proxy HTTP daemon in the foreground\n")
 	b.WriteString("\nClaude providers:\n")
 	fmt.Fprint(out, b.String())
 	for _, name := range sortedPresetNames() {

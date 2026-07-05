@@ -16,8 +16,13 @@ type anthropicRequestMessage struct {
 // anthropicRequestContent is a single content block. The MVP only ever
 // emits the "text" type.
 type anthropicRequestContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
 }
 
 // anthropicRequestBody is the wire shape of a non-streaming Anthropic
@@ -30,6 +35,13 @@ type anthropicRequestBody struct {
 	System    string                    `json:"system,omitempty"`
 	Stream    bool                      `json:"stream,omitempty"`
 	Messages  []anthropicRequestMessage `json:"messages,omitempty"`
+	Tools     []anthropicTool           `json:"tools,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type anthropicRawRequest struct {
@@ -38,6 +50,7 @@ type anthropicRawRequest struct {
 	System    string                `json:"system,omitempty"`
 	Stream    bool                  `json:"stream,omitempty"`
 	Messages  []anthropicRawMessage `json:"messages,omitempty"`
+	Tools     []anthropicTool       `json:"tools,omitempty"`
 }
 
 type anthropicRawMessage struct {
@@ -58,9 +71,6 @@ func anthropicRequestToIR(body []byte) (IRRequest, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return IRRequest{}, fmt.Errorf("anthropic request: parse body: %w", err)
 	}
-	if raw.Stream {
-		return IRRequest{}, fmt.Errorf("anthropic request: streaming is not supported in the MVP")
-	}
 	if raw.MaxTokens < 0 {
 		return IRRequest{}, fmt.Errorf("anthropic request: max_tokens must be >= 0 (got %d)", raw.MaxTokens)
 	}
@@ -78,7 +88,11 @@ func anthropicRequestToIR(body []byte) (IRRequest, error) {
 		}
 		messages = append(messages, IRMessage{Role: msg.Role, Parts: parts})
 	}
-	req := IRRequest{Model: raw.Model, Messages: messages, MaxTokens: raw.MaxTokens}
+	tools := make([]IRTool, 0, len(raw.Tools))
+	for _, tool := range raw.Tools {
+		tools = append(tools, IRTool{Name: tool.Name, Description: tool.Description, InputSchema: defaultToolInputSchema(tool.InputSchema)})
+	}
+	req := IRRequest{Model: raw.Model, Messages: messages, Tools: tools, Stream: raw.Stream, MaxTokens: raw.MaxTokens}
 	if err := req.validateTextOnlySkipModel(); err != nil {
 		return IRRequest{}, fmt.Errorf("anthropic request: %w", err)
 	}
@@ -105,13 +119,21 @@ func anthropicContentToIRParts(messageIndex int, content json.RawMessage) ([]IRP
 	}
 	parts := make([]IRPart, 0, len(blocks))
 	for j, part := range blocks {
-		if part.Type != irPartText {
+		switch part.Type {
+		case irPartText:
+			if part.Text == "" {
+				return nil, fmt.Errorf("anthropic request: message %d content block %d text must not be empty", messageIndex, j)
+			}
+			parts = append(parts, IRPart{Type: irPartText, Text: part.Text})
+		case irPartToolUse:
+			parts = append(parts, IRPart{Type: irPartToolUse, ToolCall: &IRToolCall{ID: part.ID, Name: part.Name, Input: part.Input}})
+		case irPartToolResult:
+			parts = append(parts, IRPart{Type: irPartToolResult, ToolResult: &IRToolResult{ToolUseID: part.ToolUseID, Content: part.Content}})
+		case irPartImage:
+			return nil, fmt.Errorf("anthropic request: message %d content block %d has unsupported type %q", messageIndex, j, part.Type)
+		default:
 			return nil, fmt.Errorf("anthropic request: message %d content block %d has unsupported type %q", messageIndex, j, part.Type)
 		}
-		if part.Text == "" {
-			return nil, fmt.Errorf("anthropic request: message %d content block %d text must not be empty", messageIndex, j)
-		}
-		parts = append(parts, IRPart{Type: irPartText, Text: part.Text})
 	}
 	return parts, nil
 }
@@ -149,10 +171,14 @@ func irToAnthropicRequest(req IRRequest) ([]byte, error) {
 		}
 		content := make([]anthropicRequestContent, 0, len(msg.Parts))
 		for _, part := range msg.Parts {
-			content = append(content, anthropicRequestContent{
-				Type: irPartText,
-				Text: part.Text,
-			})
+			switch part.Type {
+			case irPartText:
+				content = append(content, anthropicRequestContent{Type: irPartText, Text: part.Text})
+			case irPartToolUse:
+				content = append(content, anthropicRequestContent{Type: irPartToolUse, ID: part.ToolCall.ID, Name: part.ToolCall.Name, Input: part.ToolCall.Input})
+			case irPartToolResult:
+				content = append(content, anthropicRequestContent{Type: irPartToolResult, ToolUseID: part.ToolResult.ToolUseID, Content: part.ToolResult.Content})
+			}
 		}
 		messages = append(messages, anthropicRequestMessage{
 			Role:    msg.Role,
@@ -160,11 +186,17 @@ func irToAnthropicRequest(req IRRequest) ([]byte, error) {
 		})
 	}
 
+	tools := make([]anthropicTool, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		tools = append(tools, anthropicTool{Name: tool.Name, Description: tool.Description, InputSchema: defaultToolInputSchema(tool.InputSchema)})
+	}
 	body := anthropicRequestBody{
 		Model:     req.Model,
 		MaxTokens: maxTokens,
+		Stream:    req.Stream,
 		System:    strings.Join(systemParts, "\n"),
 		Messages:  messages,
+		Tools:     tools,
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -175,15 +207,24 @@ func irToAnthropicRequest(req IRRequest) ([]byte, error) {
 
 func irToAnthropicResponse(resp IRResponse) ([]byte, error) {
 	stopReason := "end_turn"
-	if resp.StopReason == responsesStopReasonMaxTokens {
+	if resp.StopReason == "tool_use" {
+		stopReason = "tool_use"
+	} else if resp.StopReason == responsesStopReasonMaxTokens {
 		stopReason = "max_tokens"
+	}
+	content := make([]anthropicResponseContent, 0, 1+len(resp.ToolCalls))
+	if resp.Text != "" || len(resp.ToolCalls) == 0 {
+		content = append(content, anthropicResponseContent{Type: irPartText, Text: resp.Text})
+	}
+	for _, call := range resp.ToolCalls {
+		content = append(content, anthropicResponseContent{Type: irPartToolUse, ID: call.ID, Name: call.Name, Input: call.Input})
 	}
 	out := anthropicResponseBody{
 		ID:         responsesMessageID(resp.ID),
 		Type:       "message",
 		Role:       "assistant",
 		Model:      resp.Model,
-		Content:    []anthropicResponseContent{{Type: irPartText, Text: resp.Text}},
+		Content:    content,
 		StopReason: stopReason,
 	}
 	if resp.Usage != nil {
@@ -199,8 +240,11 @@ func irToAnthropicResponse(resp IRResponse) ([]byte, error) {
 // anthropicResponseContent is a single content block inside the Anthropic
 // message response payload.
 type anthropicResponseContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // anthropicResponseUsage is the token accounting reported by the Anthropic
@@ -235,18 +279,28 @@ func anthropicResponseToIR(body []byte) (IRResponse, error) {
 	}
 
 	var b strings.Builder
+	var calls []IRToolCall
 	for i, block := range raw.Content {
-		if block.Type != irPartText {
-			return IRResponse{}, fmt.Errorf("anthropic response: content block %d has unsupported type %q (only %q is supported)", i, block.Type, irPartText)
+		switch block.Type {
+		case irPartText:
+			b.WriteString(block.Text)
+		case irPartToolUse:
+			calls = append(calls, IRToolCall{ID: block.ID, Name: block.Name, Input: block.Input})
+		default:
+			return IRResponse{}, fmt.Errorf("anthropic response: content block %d has unsupported type %q", i, block.Type)
 		}
-		b.WriteString(block.Text)
+	}
+	stopReason := raw.StopReason
+	if stopReason == "end_turn" {
+		stopReason = "stop"
 	}
 
 	resp := IRResponse{
 		ID:         raw.ID,
 		Model:      raw.Model,
 		Text:       b.String(),
-		StopReason: raw.StopReason,
+		ToolCalls:  calls,
+		StopReason: stopReason,
 	}
 	if raw.Usage != nil {
 		resp.Usage = &IRUsage{

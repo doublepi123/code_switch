@@ -162,7 +162,6 @@ func TestCodexSwitchDeepSeekV4SetsReasoningEffortXhigh(t *testing.T) {
 	}
 }
 
-
 func TestCodexSwitchPrintsCommandAuthForSavedKey(t *testing.T) {
 	origNoColor := noColor
 	noColor = true
@@ -486,7 +485,10 @@ func TestCodexProviderTestUsesResponsesEndpoint(t *testing.T) {
 	defer server.Close()
 
 	output := &bytes.Buffer{}
-	preset := codexOllamaCloudPreset()
+	preset, err := presetForAgentDirectProtocol(agentCodex, "ollama-cloud")
+	if err != nil {
+		t.Fatalf("presetForAgentDirectProtocol: %v", err)
+	}
 	preset.BaseURL = server.URL
 	if err := testCodexProviderWithClient(context.Background(), output, preset, "ollama-sk", server.Client()); err != nil {
 		t.Fatalf("testCodexProviderWithClient returned error: %v", err)
@@ -537,7 +539,12 @@ func TestCodexListAndTUIProviderNamesIncludeRestore(t *testing.T) {
 	}
 
 	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
-	if len(names) != 5 || names[0] != "deepseek" || names[1] != "kimi-coding" || names[2] != "ollama-cloud" || names[3] != "openrouter" || names[4] != restoreProviderOption {
+	for _, want := range []string{"deepseek", "minimax-cn", "opencode-go", "volcengine", restoreProviderOption} {
+		if !containsString(names, want) {
+			t.Fatalf("codex TUI provider names missing %q: %v", want, names)
+		}
+	}
+	if names[len(names)-1] != restoreProviderOption {
 		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }
@@ -675,9 +682,9 @@ func TestCodexSwitchRejectsUnsupportedProvider(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	output := &bytes.Buffer{}
-	err := runWithIO([]string{"switch", "minimax-cn", "--agent", "codex"}, strings.NewReader(""), output)
+	err := runWithIO([]string{"switch", "not-a-provider", "--agent", "codex"}, strings.NewReader(""), output)
 	if err == nil {
-		t.Fatalf("expected error for unsupported provider minimax-cn on codex")
+		t.Fatalf("expected error for unknown provider on codex")
 	}
 	if !strings.Contains(err.Error(), "unsupported provider") {
 		t.Fatalf("expected unsupported provider error, got: %v", err)
@@ -693,14 +700,19 @@ func TestCodexListIncludesOpenRouter(t *testing.T) {
 		t.Fatalf("cmdList codex returned error: %v", err)
 	}
 	out := output.String()
-	for _, want := range []string{"deepseek", "kimi-coding", "ollama-cloud", "openrouter"} {
+	for _, want := range []string{"deepseek", "kimi-coding", "ollama", "ollama-cloud", "openrouter"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("codex list missing %q: %q", want, out)
 		}
 	}
 
 	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
-	if len(names) != 5 || names[0] != "deepseek" || names[1] != "kimi-coding" || names[2] != "ollama-cloud" || names[3] != "openrouter" || names[4] != restoreProviderOption {
+	for _, want := range []string{"deepseek", "minimax-cn", "opencode-go", "volcengine", restoreProviderOption} {
+		if !containsString(names, want) {
+			t.Fatalf("codex TUI provider names missing %q: %v", want, names)
+		}
+	}
+	if names[len(names)-1] != restoreProviderOption {
 		t.Fatalf("codex TUI provider names = %v", names)
 	}
 }
@@ -844,18 +856,21 @@ func TestCodexListIncludesDeepSeek(t *testing.T) {
 	}
 }
 
-func TestDeepSeekCodexPresetForcesModelTiers(t *testing.T) {
-	preset := codexDeepSeekPreset()
+func TestDeepSeekCodexDirectPresetForcesModelTiers(t *testing.T) {
+	preset, err := presetForAgentDirectProtocol(agentCodex, "deepseek")
+	if err != nil {
+		t.Fatalf("presetForAgentDirectProtocol: %v", err)
+	}
 	if !preset.ForceModelTiers {
-		t.Fatalf("codexDeepSeekPreset should have ForceModelTiers = true")
+		t.Fatalf("Codex DeepSeek preset should have ForceModelTiers = true")
 	}
 	if preset.BaseURL != "https://api.deepseek.com/v1" {
-		t.Fatalf("codexDeepSeekPreset BaseURL = %q, want https://api.deepseek.com/v1", preset.BaseURL)
+		t.Fatalf("Codex DeepSeek preset BaseURL = %q, want https://api.deepseek.com/v1", preset.BaseURL)
 	}
 	if preset.AuthEnv != "DEEPSEEK_API_KEY" {
-		t.Fatalf("codexDeepSeekPreset AuthEnv = %q, want DEEPSEEK_API_KEY", preset.AuthEnv)
+		t.Fatalf("Codex DeepSeek preset AuthEnv = %q, want DEEPSEEK_API_KEY", preset.AuthEnv)
 	}
 	if preset.ReasoningEffort != "xhigh" {
-		t.Fatalf("codexDeepSeekPreset ReasoningEffort = %q, want xhigh", preset.ReasoningEffort)
+		t.Fatalf("Codex DeepSeek preset ReasoningEffort = %q, want xhigh", preset.ReasoningEffort)
 	}
 }

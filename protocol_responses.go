@@ -63,16 +63,25 @@ type responsesRawRequest struct {
 	Input           json.RawMessage `json:"input"`
 	Instructions    json.RawMessage `json:"instructions"`
 	Reasoning       json.RawMessage `json:"reasoning"`
+	Tools           []responsesTool `json:"tools,omitempty"`
 	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
 	Stream          bool            `json:"stream,omitempty"`
 }
 
 type responsesOutboundRequest struct {
-	Model           string                `json:"model"`
-	Instructions    string                `json:"instructions,omitempty"`
-	Input           []responsesRawMessage `json:"input"`
-	MaxOutputTokens int                   `json:"max_output_tokens,omitempty"`
-	Stream          bool                  `json:"stream,omitempty"`
+	Model           string          `json:"model"`
+	Instructions    string          `json:"instructions,omitempty"`
+	Input           []any           `json:"input"`
+	Tools           []responsesTool `json:"tools,omitempty"`
+	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
+	Stream          bool            `json:"stream,omitempty"`
+}
+
+type responsesTool struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 // responsesAllowedTopLevelFields is the set of top-level OpenAI Responses
@@ -102,8 +111,13 @@ var responsesAllowedTopLevelFields = map[string]bool{
 // type that this adapter does not support; we decode and validate
 // explicitly.
 type responsesRawMessage struct {
+	Type    string          `json:"type,omitempty"`
 	RolePtr *string         `json:"role"`
 	Content json.RawMessage `json:"content"`
+	CallID  string          `json:"call_id,omitempty"`
+	Name    string          `json:"name,omitempty"`
+	Args    string          `json:"arguments,omitempty"`
+	Output  string          `json:"output,omitempty"`
 }
 
 // responsesRawContentPart models a content part inside a message.
@@ -210,6 +224,7 @@ func responsesRequestToIR(body []byte) (IRRequest, error) {
 	req := IRRequest{
 		Model:     raw.Model,
 		Messages:  messages,
+		Tools:     responsesToolsToIR(raw.Tools),
 		Stream:    raw.Stream,
 		MaxTokens: raw.MaxOutputTokens,
 	}
@@ -224,25 +239,61 @@ func irToResponsesRequest(req IRRequest) ([]byte, error) {
 		return nil, fmt.Errorf("responses request: %w", err)
 	}
 	var instructions []string
-	input := make([]responsesRawMessage, 0, len(req.Messages))
+	input := make([]any, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		var b strings.Builder
 		for _, part := range msg.Parts {
-			b.WriteString(part.Text)
+			switch part.Type {
+			case irPartText:
+				b.WriteString(part.Text)
+			case irPartToolUse:
+				input = append(input, map[string]any{"type": "function_call", "call_id": part.ToolCall.ID, "name": part.ToolCall.Name, "arguments": string(part.ToolCall.Input)})
+			case irPartToolResult:
+				input = append(input, map[string]any{"type": "function_call_output", "call_id": part.ToolResult.ToolUseID, "output": part.ToolResult.Content})
+			}
 		}
 		if msg.Role == "system" {
 			instructions = append(instructions, b.String())
 			continue
 		}
-		content, err := json.Marshal([]responsesRawContentPart{{Type: responsesInputTextType, Text: b.String()}})
+		if b.String() == "" {
+			continue
+		}
+		contentType := responsesInputTextType
+		if msg.Role == "assistant" {
+			contentType = responsesOutputTextType
+		}
+		content, err := json.Marshal([]responsesRawContentPart{{Type: contentType, Text: b.String()}})
 		if err != nil {
 			return nil, fmt.Errorf("responses request: marshal content: %w", err)
 		}
 		role := msg.Role
 		input = append(input, responsesRawMessage{RolePtr: &role, Content: content})
 	}
-	out := responsesOutboundRequest{Model: req.Model, Instructions: strings.Join(instructions, "\n"), Input: input, MaxOutputTokens: req.MaxTokens, Stream: req.Stream}
+	out := responsesOutboundRequest{Model: req.Model, Instructions: strings.Join(instructions, "\n"), Input: input, Tools: irToolsToResponses(req.Tools), MaxOutputTokens: req.MaxTokens, Stream: req.Stream}
 	return json.Marshal(out)
+}
+
+func responsesToolsToIR(tools []responsesTool) []IRTool {
+	out := make([]IRTool, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Type == "function" || tool.Type == "" {
+			out = append(out, IRTool{Name: tool.Name, Description: tool.Description, InputSchema: defaultToolInputSchema(tool.Parameters)})
+		}
+	}
+	return out
+}
+
+func irToolsToResponses(tools []IRTool) []responsesTool {
+	out := make([]responsesTool, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, responsesTool{Type: "function", Name: tool.Name, Description: tool.Description, Parameters: defaultToolInputSchema(tool.InputSchema)})
+	}
+	return out
+}
+
+func buildOpenAIResponsesUpstreamRequest(req IRRequest) ([]byte, error) {
+	return irToResponsesRequest(req)
 }
 
 // responsesInputToMessages normalises the Input field (string or array)
@@ -279,6 +330,14 @@ func responsesInputToMessages(input json.RawMessage) ([]IRMessage, error) {
 
 	messages := make([]IRMessage, 0, len(rawMessages))
 	for i, rm := range rawMessages {
+		if rm.Type == "function_call" {
+			messages = append(messages, IRMessage{Role: "assistant", Parts: []IRPart{{Type: irPartToolUse, ToolCall: &IRToolCall{ID: rm.CallID, Name: rm.Name, Input: json.RawMessage(rm.Args)}}}})
+			continue
+		}
+		if rm.Type == "function_call_output" {
+			messages = append(messages, IRMessage{Role: "user", Parts: []IRPart{{Type: irPartToolResult, ToolResult: &IRToolResult{ToolUseID: rm.CallID, Content: rm.Output}}}})
+			continue
+		}
 		if rm.RolePtr == nil || *rm.RolePtr == "" {
 			return nil, fmt.Errorf("input[%d]: role is required (MVP supports only \"developer\", \"user\", and \"assistant\")", i)
 		}
@@ -289,7 +348,7 @@ func responsesInputToMessages(input json.RawMessage) ([]IRMessage, error) {
 		if role == "developer" {
 			role = "system"
 		}
-		parts, err := responsesContentToParts(i, rm.Content)
+		parts, err := responsesContentToParts(i, role, rm.Content)
 		if err != nil {
 			return nil, err
 		}
@@ -301,7 +360,7 @@ func responsesInputToMessages(input json.RawMessage) ([]IRMessage, error) {
 // responsesContentToParts decodes a message's Content field into text
 // IRParts. Content may be either a plain string or an array of typed
 // parts; non-text part types and empty text are rejected.
-func responsesContentToParts(msgIndex int, content json.RawMessage) ([]IRPart, error) {
+func responsesContentToParts(msgIndex int, role string, content json.RawMessage) ([]IRPart, error) {
 	if len(content) == 0 {
 		return nil, fmt.Errorf("message %d has no content", msgIndex)
 	}
@@ -326,8 +385,12 @@ func responsesContentToParts(msgIndex int, content json.RawMessage) ([]IRPart, e
 
 	out := make([]IRPart, 0, len(parts))
 	for j, p := range parts {
-		if p.Type != responsesInputTextType {
-			return nil, fmt.Errorf("message %d part %d has unsupported content type %q (only %q is supported)", msgIndex, j, p.Type, responsesInputTextType)
+		wantType := responsesInputTextType
+		if role == "assistant" {
+			wantType = responsesOutputTextType
+		}
+		if p.Type != wantType {
+			return nil, fmt.Errorf("message %d part %d has unsupported content type %q (only %q is supported)", msgIndex, j, p.Type, wantType)
 		}
 		if p.Text == "" {
 			return nil, fmt.Errorf("message %d part %d has empty text (input_text.text is required and must be non-empty)", msgIndex, j)
@@ -346,6 +409,9 @@ type responsesMessageOutput struct {
 	Status  string                    `json:"status"`
 	ID      string                    `json:"id"`
 	Content []responsesMessageContent `json:"content"`
+	CallID  string                    `json:"call_id,omitempty"`
+	Name    string                    `json:"name,omitempty"`
+	Args    string                    `json:"arguments,omitempty"`
 }
 
 // responsesMessageContent is a single content part inside the message
@@ -381,12 +447,9 @@ type responsesRawResponse struct {
 // the emitted message id to the "msg_" namespace; when resp.Usage is nil
 // the usage field is omitted entirely.
 func irToResponsesResponse(resp IRResponse) ([]byte, error) {
-	out := responsesRawResponse{
-		ID:     responsesResponseID(resp.ID),
-		Object: "response",
-		Status: responsesStatusFor(resp.StopReason),
-		Model:  resp.Model,
-		Output: []responsesMessageOutput{{
+	output := make([]responsesMessageOutput, 0, 1+len(resp.ToolCalls))
+	if resp.Text != "" || len(resp.ToolCalls) == 0 {
+		output = append(output, responsesMessageOutput{
 			Type:   "message",
 			Role:   "assistant",
 			Status: "completed",
@@ -395,7 +458,17 @@ func irToResponsesResponse(resp IRResponse) ([]byte, error) {
 				Type: responsesOutputTextType,
 				Text: resp.Text,
 			}},
-		}},
+		})
+	}
+	for _, call := range resp.ToolCalls {
+		output = append(output, responsesMessageOutput{Type: "function_call", Status: "completed", CallID: call.ID, Name: call.Name, Args: string(call.Input)})
+	}
+	out := responsesRawResponse{
+		ID:         responsesResponseID(resp.ID),
+		Object:     "response",
+		Status:     responsesStatusFor(resp.StopReason),
+		Model:      resp.Model,
+		Output:     output,
 		OutputText: resp.Text,
 	}
 	if resp.Usage != nil {
@@ -418,9 +491,14 @@ func responsesResponseToIR(body []byte) (IRResponse, error) {
 		return IRResponse{}, fmt.Errorf("responses response: parse body: %w", err)
 	}
 	text := raw.OutputText
-	if text == "" {
-		var b strings.Builder
-		for _, item := range raw.Output {
+	var calls []IRToolCall
+	var b strings.Builder
+	for _, item := range raw.Output {
+		if item.Type == "function_call" {
+			calls = append(calls, IRToolCall{ID: item.CallID, Name: item.Name, Input: json.RawMessage(item.Args)})
+			continue
+		}
+		if text == "" {
 			for _, part := range item.Content {
 				if part.Type != responsesOutputTextType {
 					return IRResponse{}, fmt.Errorf("responses response: unsupported output content type %q", part.Type)
@@ -428,20 +506,33 @@ func responsesResponseToIR(body []byte) (IRResponse, error) {
 				b.WriteString(part.Text)
 			}
 		}
+	}
+	if text == "" {
 		text = b.String()
 	}
-	resp := IRResponse{ID: raw.ID, Model: raw.Model, Text: text, StopReason: responsesStatusToIRStopReason(raw.Status)}
+	stopReason := responsesStatusToIRStopReason(raw.Status)
+	if len(calls) > 0 {
+		stopReason = "tool_use"
+	}
+	resp := IRResponse{ID: raw.ID, Model: raw.Model, Text: text, ToolCalls: calls, StopReason: stopReason}
 	if raw.Usage != nil {
 		resp.Usage = &IRUsage{InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens, TotalTokens: raw.Usage.TotalTokens}
 	}
 	return resp, nil
 }
 
+func parseOpenAIResponsesUpstreamResponse(body []byte, contentType string) (IRResponse, error) {
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		return responsesStreamToIR(body)
+	}
+	return responsesResponseToIR(body)
+}
+
 func responsesStatusToIRStopReason(status string) string {
 	if status == responsesStatusIncomplete {
 		return responsesStopReasonMaxTokens
 	}
-	return "end_turn"
+	return "stop"
 }
 
 func responsesStreamToIR(body []byte) (IRResponse, error) {
@@ -503,7 +594,7 @@ func responsesStreamToIR(body []byte) (IRResponse, error) {
 	if text.Len() == 0 {
 		return IRResponse{}, fmt.Errorf("responses stream: no completed response or text delta")
 	}
-	return IRResponse{Text: text.String(), StopReason: "end_turn"}, nil
+	return IRResponse{Text: text.String(), StopReason: "stop"}, nil
 }
 
 // responsesResponseID normalises the top-level response identifier so it

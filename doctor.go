@@ -75,11 +75,27 @@ func runDoctor(claudeDir, codexDir, opencodeDir string) []checkResult {
 	results = append(results, checkClaudeFile(claudeSettingsPath(claudeDir)))
 	results = append(results, checkCodexFile(codexConfigPath(codexDir)))
 	results = append(results, checkOpencodeFile(opencodeConfigPath(opencodeDir)))
+	results = append(results, checkProxyDaemon())
 	if cfg, _, err := loadAppConfig(); err == nil {
 		results = append(results, checkClaudeDrift(claudeDir, cfg))
 	}
 	results = append(results, checkOrphanedTempFiles(claudeDir, codexDir, opencodeDir))
 	return results
+}
+
+func checkProxyDaemon() checkResult {
+	cfg, _, err := loadAppConfig()
+	if err != nil {
+		return warnResult("proxy daemon", "app config unavailable: "+err.Error())
+	}
+	if cfg.Proxy == nil || len(cfg.Proxy.Routes) == 0 {
+		return okResult("proxy daemon", "no proxy routes configured")
+	}
+	status := proxyDaemonStatusText()
+	if strings.HasPrefix(status, "running") {
+		return okResult("proxy daemon", status)
+	}
+	return warnResult("proxy daemon", status)
 }
 
 func printDoctor(out io.Writer, results []checkResult) {

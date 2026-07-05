@@ -26,6 +26,9 @@ func cmdProxy(args []string, out io.Writer) error {
 		return errors.New("usage: code-switch proxy <configure|start|stop|status|preview|serve> ...")
 	}
 	switch args[0] {
+	case "-h", "--help", "help":
+		printProxyUsage(out)
+		return nil
 	case "configure":
 		return cmdProxyConfigure(args[1:], out)
 	case "preview":
@@ -41,6 +44,25 @@ func cmdProxy(args []string, out io.Writer) error {
 	default:
 		return fmt.Errorf("unknown proxy subcommand %q (supported: configure, start, stop, status, preview, serve)", args[0])
 	}
+}
+
+func printProxyUsage(out io.Writer) {
+	fmt.Fprint(out, `code-switch proxy
+
+Usage:
+  cs proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port]
+      write one route of the multi-route proxy daemon
+  cs proxy preview <agent>
+      show the resolved proxy route for one agent
+  cs proxy status
+      show proxy runtime status for all configured routes
+  cs proxy start
+      launch the multi-route proxy daemon as a background process
+  cs proxy stop
+      terminate a running proxy daemon
+  cs proxy serve
+      run the multi-route proxy HTTP daemon in the foreground
+`)
 }
 
 // proxyConfigureUsage is the canonical usage string for `cs proxy configure`.
@@ -241,11 +263,24 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 	cfg.Proxy.Host = normalized.Host
 	cfg.Proxy.Port = normalized.Port
 
+	routeToken := ""
+	if existing, ok := cfg.Proxy.Routes[agent]; ok {
+		routeToken = strings.TrimSpace(existing.Token)
+	}
+	if routeToken == "" {
+		generated, err := randomProxyRouteToken()
+		if err != nil {
+			return err
+		}
+		routeToken = generated
+	}
+
 	cfg.Proxy.Routes[agent] = ProxyRouteConfig{
 		Agent:            agent,
 		Provider:         provider,
 		Model:            strings.TrimSpace(*modelFlag),
 		UpstreamProtocol: string(protocolResolved),
+		Token:            routeToken,
 	}
 
 	if err := writeJSONAtomic(path, cfg); err != nil {

@@ -229,11 +229,11 @@ func TestValidateProxyAgentProtocol(t *testing.T) {
 		// codex (Responses client)
 		{"codex anthropic ok", "codex", protocolAnthropicMessages, false},
 		{"codex openai-chat ok", "codex", protocolOpenAIChat, false},
-		{"codex openai-responses rejected", "codex", protocolOpenAIResponses, true},
+		{"codex openai-responses ok", "codex", protocolOpenAIResponses, false},
 		// claude (Anthropic Messages client)
 		{"claude openai-responses ok", "claude", protocolOpenAIResponses, false},
 		{"claude openai-chat ok", "claude", protocolOpenAIChat, false},
-		{"claude anthropic-messages rejected", "claude", protocolAnthropicMessages, true},
+		{"claude anthropic-messages ok", "claude", protocolAnthropicMessages, false},
 		// unknown agent
 		{"unknown agent rejected", "unknown-agent", protocolOpenAIChat, true},
 		{"empty agent rejected", "", protocolOpenAIChat, true},
@@ -251,7 +251,7 @@ func TestValidateProxyAgentProtocol(t *testing.T) {
 	}
 }
 
-func TestProxyConfigureRejectsBadAgentProtocolCombo(t *testing.T) {
+func TestProxyConfigureAcceptsCodexSameProtocolPassthrough(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
@@ -259,14 +259,13 @@ func TestProxyConfigureRejectsBadAgentProtocolCombo(t *testing.T) {
 		t.Fatalf("set-key: %v", err)
 	}
 	out.Reset()
-	// codex is a Responses client; openai-responses upstream is not allowed for it.
 	err := runWithIO([]string{
 		"proxy", "configure", "codex",
 		"--provider", "zhipu-cn",
 		"--protocol", string(protocolOpenAIResponses),
 	}, nil, &out)
-	if err == nil {
-		t.Fatalf("expected error for codex + openai-responses")
+	if err != nil {
+		t.Fatalf("proxy configure codex + openai-responses: %v\nout=%s", err, out.String())
 	}
 }
 

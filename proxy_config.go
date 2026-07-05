@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -28,6 +31,69 @@ type ProxyRouteConfig struct {
 	Model            string            `json:"model,omitempty"`
 	UpstreamProtocol string            `json:"upstreamProtocol,omitempty"`
 	ModelMappings    map[string]string `json:"modelMappings,omitempty"`
+	Token            string            `json:"token,omitempty"`
+}
+
+func randomProxyRouteToken() (string, error) {
+	var buf [32]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return "csproxy-route-" + hex.EncodeToString(buf[:]), nil
+}
+
+func ensureProxyRouteTokens(cfg *AppConfig) (bool, error) {
+	if cfg == nil || cfg.Proxy == nil || len(cfg.Proxy.Routes) == 0 {
+		return false, nil
+	}
+	agents := make([]string, 0, len(cfg.Proxy.Routes))
+	for agent := range cfg.Proxy.Routes {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+	changed := false
+	seen := map[string]struct{}{}
+	for _, agent := range agents {
+		route := cfg.Proxy.Routes[agent]
+		token := strings.TrimSpace(route.Token)
+		if token == "" {
+			generated, err := randomProxyRouteToken()
+			if err != nil {
+				return false, err
+			}
+			route.Token = generated
+			changed = true
+			token = generated
+		}
+		if _, ok := seen[token]; ok {
+			generated, err := randomProxyRouteToken()
+			if err != nil {
+				return false, err
+			}
+			route.Token = generated
+			changed = true
+			token = generated
+		}
+		seen[token] = struct{}{}
+		cfg.Proxy.Routes[agent] = route
+	}
+	return changed, nil
+}
+
+func (rc ProxyRouteConfig) ResolveProtocol(reg *ProtocolRegistry) (ProviderProtocol, error) {
+	agent := strings.TrimSpace(rc.Agent)
+	if strings.TrimSpace(rc.UpstreamProtocol) == "" {
+		return defaultProxyProtocolForAgent(agent), nil
+	}
+	return resolveProxyProtocolWithRegistry(rc.UpstreamProtocol, reg)
+}
+
+func (rc ProxyRouteConfig) ValidateProtocol(reg *ProtocolRegistry) error {
+	protocol, err := rc.ResolveProtocol(reg)
+	if err != nil {
+		return err
+	}
+	return validateProxyAgentProtocol(rc.Agent, protocol)
 }
 
 // defaultProxyConfig returns the zero state used when no proxy block has
@@ -186,7 +252,8 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	if mappings == nil {
 		mappings = copyStringMap(cfg.ModelMappings[provider])
 	}
-	// Protocol resolution precedence:
+	// Protocol resolution uses one registry instance for both parsing and
+	// compatibility validation:
 	//   - empty/whitespace UpstreamProtocol -> agent-specific default via
 	//     defaultProxyProtocolForAgent(agent). This MUST be the
 	//     agent-specific default (not a global constant) so a hand-edited
@@ -197,19 +264,18 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	//     openai-responses keeps hand-edited and configured routes identical.
 	//   - non-empty but unrecognized value -> error (no silent downgrade),
 	//     via resolveProxyProtocol.
-	protocol := defaultProxyProtocolForAgent(agent)
-	if strings.TrimSpace(rc.UpstreamProtocol) != "" {
-		resolved, err := resolveProxyProtocol(rc.UpstreamProtocol)
-		if err != nil {
-			return ProxyRoute{}, err
-		}
-		protocol = resolved
+	routeForValidation := rc
+	routeForValidation.Agent = agent
+	registry := defaultProtocolRegistry()
+	protocol, err := routeForValidation.ResolveProtocol(registry)
+	if err != nil {
+		return ProxyRoute{}, err
 	}
 	// Enforce the agent/protocol compatibility matrix at route-build time
 	// too, so a stale/hand-edited config (or a configure that pre-dated this
 	// check) surfaces loudly at preview rather than silently producing a
 	// route the proxy would reject at request time.
-	if err := validateProxyAgentProtocol(agent, protocol); err != nil {
+	if err := routeForValidation.ValidateProtocol(registry); err != nil {
 		return ProxyRoute{}, err
 	}
 	return buildProxyRoute(provider, preset, protocol, localToken, mappings), nil
@@ -222,79 +288,67 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 // descriptive failure rather than silently producing a route with the wrong
 // protocol.
 func resolveProxyProtocol(raw string) (ProviderProtocol, error) {
+	return resolveProxyProtocolWithRegistry(raw, defaultProtocolRegistry())
+}
+
+func resolveProxyProtocolWithRegistry(raw string, reg *ProtocolRegistry) (ProviderProtocol, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return protocolAnthropicMessages, nil
 	}
-	switch ProviderProtocol(trimmed) {
-	case protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses:
-		return ProviderProtocol(trimmed), nil
-	default:
-		return "", fmt.Errorf("unknown upstream protocol %q (supported: %q, %q, %q)",
-			raw, protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses)
+	adapter, ok := reg.Find(trimmed)
+	if !ok {
+		return "", fmt.Errorf("unknown upstream protocol %q (supported: %s)",
+			raw, strings.Join(reg.SupportedNames(), ", "))
 	}
+	return adapter.Name(), nil
 }
 
 // supportedProxyAgents is the allow-list of agents the proxy MVP supports.
 // Only codex (a Responses API client) and claude (an Anthropic Messages
 // client) are wired in; opencode is intentionally excluded for the MVP.
 var supportedProxyAgents = map[string]struct{}{
-	"codex":  {},
-	"claude": {},
+	"codex":    {},
+	"claude":   {},
+	"opencode": {},
 }
 
 // supportedProxyAgentList is the ordered, human-readable companion to
 // supportedProxyAgents used for error messages and the configure-time agent
 // check. It is kept as a slice (not derived from the map at call time) so
 // the ordering in error messages is deterministic.
-var supportedProxyAgentList = []string{"codex", "claude"}
+var supportedProxyAgentList = []string{"codex", "claude", "opencode"}
 
 // validateProxyAgentProtocol enforces the agent/upstream-protocol
-// compatibility matrix for the proxy MVP. The inbound client shape depends
-// on the agent (codex speaks the OpenAI Responses API, claude speaks the
-// Anthropic Messages API), and not every upstream protocol is legal for
-// every client shape.
-//
-// Matrix (see proxy_server.go dispatch):
-//   - codex (Responses client): allows anthropic-messages and openai-chat;
-//     rejects openai-responses (a Responses client cannot usefully talk to
-//     a Responses upstream — that path is not implemented in the MVP).
-//   - claude (Anthropic Messages client): allows openai-responses and
-//     openai-chat; rejects anthropic-messages passthrough, which the proxy
-//     server explicitly does not implement for /v1/messages clients.
-//   - unknown agents are rejected; the MVP only supports codex/claude.
-//
-// The function returns a descriptive error for any disallowed combination
-// so configure/preview failures surface loudly rather than silently
-// producing a route the proxy would reject at request time anyway.
+// compatibility matrix through agentProfiles and ProtocolAdapter.CanProxyFrom.
+// The function returns a descriptive error for any disallowed combination so
+// configure/preview failures surface loudly rather than silently producing a
+// route the proxy would reject at request time anyway.
 func validateProxyAgentProtocol(agent string, protocol ProviderProtocol) error {
 	agent = strings.TrimSpace(strings.ToLower(agent))
 	if _, ok := supportedProxyAgents[agent]; !ok {
 		return fmt.Errorf("unsupported agent %q for proxy (MVP supports: %s)", agent, strings.Join(supportedProxyAgentList, ", "))
 	}
-	switch agent {
-	case "codex":
-		switch protocol {
-		case protocolAnthropicMessages, protocolOpenAIChat:
-			return nil
-		case protocolOpenAIResponses:
-			return fmt.Errorf("upstream protocol %q is not supported for agent %q (use %q or %q)",
-				protocol, agent, protocolAnthropicMessages, protocolOpenAIChat)
-		default:
-			return fmt.Errorf("unknown upstream protocol %q for agent %q", protocol, agent)
-		}
-	case "claude":
-		switch protocol {
-		case protocolOpenAIResponses, protocolOpenAIChat:
-			return nil
-		case protocolAnthropicMessages:
-			return fmt.Errorf("upstream protocol %q passthrough is not supported for agent %q (use %q or %q)",
-				protocol, agent, protocolOpenAIResponses, protocolOpenAIChat)
-		default:
-			return fmt.Errorf("unknown upstream protocol %q for agent %q", protocol, agent)
-		}
+	profile, ok := agentProfiles[AgentName(agent)]
+	if !ok {
+		return fmt.Errorf("unsupported agent %q for proxy", agent)
 	}
-	return fmt.Errorf("unsupported agent %q for proxy", agent)
+	reg := defaultProtocolRegistry()
+	upstream, ok := reg.Find(string(protocol))
+	if !ok {
+		return fmt.Errorf("unknown upstream protocol %q for agent %q", protocol, agent)
+	}
+	inbound, ok := reg.Find(string(profile.ClientProtocol))
+	if !ok {
+		return fmt.Errorf("unknown client protocol %q for agent %q", profile.ClientProtocol, agent)
+	}
+	if ok, reason := upstream.CanProxyFrom(inbound); !ok {
+		if reason != "" {
+			return fmt.Errorf("%s", reason)
+		}
+		return fmt.Errorf("upstream protocol %q is not supported for agent %q", protocol, agent)
+	}
+	return nil
 }
 
 // defaultProxyProtocolForAgent returns the upstream protocol the proxy
@@ -316,17 +370,16 @@ func validateProxyAgentProtocol(agent string, protocol ProviderProtocol) error {
 //     subsequent validateProxyAgentProtocol call will reject it anyway.
 func defaultProxyProtocolForAgent(agent string) ProviderProtocol {
 	agent = strings.TrimSpace(strings.ToLower(agent))
-	switch agent {
-	case "codex":
-		return protocolAnthropicMessages
-	case "claude":
-		return protocolOpenAIResponses
-	default:
-		// A sensible, conservative default; validateProxyAgentProtocol
-		// will reject unknown agents, so returning a real protocol here
-		// is safe and keeps the function total.
+	profile, ok := agentProfiles[AgentName(agent)]
+	if !ok {
 		return protocolAnthropicMessages
 	}
+	for _, protocol := range profile.ProxyUpstreamPreference {
+		if err := validateProxyAgentProtocol(agent, protocol); err == nil {
+			return protocol
+		}
+	}
+	return protocolAnthropicMessages
 }
 
 // rejectControlChars validates that value does not contain Unicode

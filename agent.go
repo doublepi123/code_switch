@@ -90,64 +90,21 @@ func storedAPIKeyForAgent(cfg *AppConfig, agent AgentName, provider string) stri
 	return strings.TrimSpace(cfg.Providers[provider].APIKey)
 }
 
-func codexOllamaCloudPreset() ProviderPreset {
-	preset := providerPresets["ollama-cloud"]
-	preset.BaseURL = "https://ollama.com/v1"
-	preset.AuthEnv = "OLLAMA_API_KEY"
-	return preset
-}
-
-func codexOpenRouterPreset() ProviderPreset {
-	preset := providerPresets["openrouter"]
-	preset.BaseURL = "https://openrouter.ai/api/v1"
-	preset.AuthEnv = "OPENROUTER_API_KEY"
-	preset.ForceModelTiers = true
-	return preset
-}
-
-func codexDeepSeekPreset() ProviderPreset {
-	preset := providerPresets["deepseek"]
-	preset.BaseURL = "https://api.deepseek.com/v1"
-	preset.AuthEnv = "DEEPSEEK_API_KEY"
-	preset.ForceModelTiers = true
-	preset.ReasoningEffort = "xhigh"
-	return preset
-}
-
-func codexKimiCodingPreset() ProviderPreset {
-	preset := providerPresets["kimi-coding"]
-	preset.BaseURL = "https://api.kimi.com/coding/v1"
-	preset.AuthEnv = "KIMI_API_KEY"
-	preset.ForceModelTiers = true
-	return preset
-}
-
-func codexPresetForProvider(provider string) (ProviderPreset, error) {
-	switch provider {
-	case "deepseek":
-		return codexDeepSeekPreset(), nil
-	case "ollama-cloud":
-		return codexOllamaCloudPreset(), nil
-	case "openrouter":
-		return codexOpenRouterPreset(), nil
-	case "kimi-coding":
-		return codexKimiCodingPreset(), nil
-	default:
-		return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent codex", provider)
-	}
-}
-
 func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig) (ProviderPreset, error) {
 	switch agent {
 	case agentCodex:
 		provider = canonicalProviderName(provider)
-		preset, err := codexPresetForProvider(provider)
+		preset, err := presetForAgentDirectProtocol(agent, provider)
 		if err != nil {
-			return ProviderPreset{}, err
+			preset, err = resolveProviderPreset(provider, cfg)
+			if err != nil {
+				return ProviderPreset{}, err
+			}
 		}
 		if stored := codexProviderConfig(cfg, provider); strings.TrimSpace(stored.Model) != "" {
 			preset = withSelectedModel(preset, stored.Model)
 		}
+		preset.ForceModelTiers = true
 		return preset, nil
 	case agentOpencode:
 		return resolveProviderPreset(provider, cfg)
@@ -160,15 +117,22 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 	switch agent {
 	case agentCodex:
 		provider = canonicalProviderName(provider)
-		preset, err := codexPresetForProvider(provider)
+		preset, err := presetForAgentDirectProtocol(agent, provider)
 		if err != nil {
-			return ProviderPreset{}, err
+			preset, err = resolveSwitchPreset(provider, cfg, modelOverride)
+			if err != nil {
+				return ProviderPreset{}, err
+			}
+		} else if strings.TrimSpace(modelOverride) != "" {
+			preset = withSelectedModel(preset, modelOverride)
 		}
-		model := strings.TrimSpace(modelOverride)
-		if model == "" {
-			model = strings.TrimSpace(codexProviderConfig(cfg, provider).Model)
+		if strings.TrimSpace(modelOverride) == "" {
+			if model := strings.TrimSpace(codexProviderConfig(cfg, provider).Model); model != "" {
+				preset = withSelectedModel(preset, model)
+			}
 		}
-		return withSelectedModel(preset, model), nil
+		preset.ForceModelTiers = true
+		return preset, nil
 	case agentOpencode:
 		return resolveSwitchPreset(provider, cfg, modelOverride)
 	default:
@@ -177,18 +141,61 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 }
 
 func providerNamesForAgent(agent AgentName, cfg *AppConfig, includeCustomOption bool, includeRestoreOption bool) []string {
-	var names []string
-	switch agent {
-	case agentCodex:
-		names = []string{"deepseek", "kimi-coding", "ollama-cloud", "openrouter"}
-	case agentOpencode:
-		names = sortedProviderNames(cfg, includeCustomOption)
-	default:
-		names = sortedProviderNames(cfg, includeCustomOption)
+	if cfg == nil {
+		cfg = &AppConfig{Providers: map[string]StoredProvider{}}
 	}
+	names := sortedProviderNames(cfg, includeCustomOption)
 	if includeRestoreOption {
 		names = append(names, restoreProviderOption)
 	}
+	return names
+}
+
+func presetForAgentDirectProtocol(agent AgentName, provider string) (ProviderPreset, error) {
+	provider = canonicalProviderName(provider)
+	preset, ok := providerPresets[provider]
+	if !ok {
+		return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent %s", provider, agent)
+	}
+	profile, ok := agentProfiles[agent]
+	if !ok {
+		return ProviderPreset{}, fmt.Errorf("unsupported agent %q", agent)
+	}
+	for _, protocol := range profile.DirectProtocols {
+		endpoint, ok := preset.presetEndpoint(protocol)
+		if !ok {
+			continue
+		}
+		preset.BaseURL = endpoint.BaseURL
+		preset.AuthEnv = endpoint.AuthEnv
+		if preset.ReasoningEffort == "" {
+			if effort, ok := preset.ExtraEnv["CLAUDE_CODE_EFFORT_LEVEL"].(string); ok {
+				preset.ReasoningEffort = effort
+			}
+		}
+		if agent == agentCodex {
+			preset.ForceModelTiers = true
+		}
+		return preset, nil
+	}
+	return ProviderPreset{}, fmt.Errorf("unsupported provider %q for agent %s", provider, agent)
+}
+
+func presetNamesForAgentDirectProtocols(agent AgentName) []string {
+	profile, ok := agentProfiles[agent]
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(providerPresets))
+	for name, preset := range providerPresets {
+		for _, protocol := range profile.DirectProtocols {
+			if _, ok := preset.presetEndpoint(protocol); ok {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
 	return names
 }
 

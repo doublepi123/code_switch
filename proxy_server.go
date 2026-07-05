@@ -41,19 +41,6 @@ const proxyAnthropicVersionHeader = "anthropic-version"
 // behaviour deterministic as Anthropic publishes new versions.
 const proxyAnthropicVersionValue = "2023-06-01"
 
-// ProviderProtocol identifies the wire protocol spoken by an upstream
-// provider. The MVP proxy only implements the Anthropic Messages API as
-// an upstream protocol; the OpenAI constants are declared so ProxyRoute
-// values can carry them and future tasks can extend the dispatch in
-// newProxyHandler without re-shaping the struct.
-type ProviderProtocol string
-
-const (
-	protocolAnthropicMessages ProviderProtocol = "anthropic-messages"
-	protocolOpenAIChat        ProviderProtocol = "openai-chat"
-	protocolOpenAIResponses   ProviderProtocol = "openai-responses"
-)
-
 // ProxyRoute describes a single local -> upstream mapping served by the
 // proxy. Provider is the configured provider name (informational), Model
 // overrides the model in the incoming request so the upstream always
@@ -73,22 +60,36 @@ type ProxyRoute struct {
 	LocalToken       string
 }
 
+type proxyServedRoute struct {
+	Agent          string
+	ClientProtocol ProviderProtocol
+	Route          ProxyRoute
+	ProviderKey    string
+}
+
 // newProxyHandler returns an http.Handler that translates OpenAI
 // Responses API requests on POST /v1/responses or Anthropic Messages API
 // requests on POST /v1/messages into the route's upstream protocol.
 func newProxyHandler(route ProxyRoute, providerKey string) http.Handler {
+	return newProxyHandlerWithRegistry(route, providerKey, defaultProtocolRegistry())
+}
+
+func newProxyHandlerWithRegistry(route ProxyRoute, providerKey string, registry *ProtocolRegistry) http.Handler {
+	if registry == nil {
+		registry = defaultProtocolRegistry()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The MVP only serves POST /v1/responses and POST /v1/messages. Method and path are
-		// checked before auth so a misconfigured client surfaces the
-		// routing error rather than a misleading 401.
+		// Method and path are checked before auth so a misconfigured client
+		// surfaces the routing error rather than a misleading 401.
 		if r.Method != http.MethodPost {
 			writeProxyError(w, http.StatusMethodNotAllowed,
-				fmt.Sprintf("method %q is not supported (MVP serves POST /v1/responses or /v1/messages)", r.Method))
+				fmt.Sprintf("method %q is not supported (MVP serves POST %s)", r.Method, strings.Join(registry.SupportedInboundPaths(), " or ")))
 			return
 		}
-		if r.URL.Path != "/v1/responses" && r.URL.Path != "/v1/messages" {
+		inboundAdapter, ok := registry.FindInbound(r.Method, r.URL.Path)
+		if !ok {
 			writeProxyError(w, http.StatusNotFound,
-				fmt.Sprintf("path %q is not supported (MVP serves POST /v1/responses or /v1/messages)", r.URL.Path))
+				fmt.Sprintf("path %q is not supported (MVP serves POST %s)", r.URL.Path, strings.Join(registry.SupportedInboundPaths(), " or ")))
 			return
 		}
 
@@ -121,12 +122,20 @@ func newProxyHandler(route ProxyRoute, providerKey string) http.Handler {
 			return
 		}
 
-		var ir IRRequest
-		if r.URL.Path == "/v1/responses" {
-			ir, err = responsesRequestToIR(body)
-		} else {
-			ir, err = anthropicRequestToIR(body)
+		upstreamAdapter, ok := registry.Find(string(route.UpstreamProtocol))
+		if !ok {
+			writeProxyError(w, http.StatusBadRequest,
+				fmt.Sprintf("upstream protocol %q is not supported in the MVP (supported: %s)",
+					route.UpstreamProtocol, strings.Join(registry.SupportedNames(), ", ")))
+			return
 		}
+		if inboundAdapter.Name() == upstreamAdapter.Name() && supportsSameProtocolPassthrough(inboundAdapter.Name()) {
+			if handled := serveSameProtocolPassthrough(w, r, route, providerKey, body, inboundAdapter, upstreamAdapter); handled {
+				return
+			}
+		}
+
+		ir, err := inboundAdapter.ParseInboundRequest(body)
 		if err != nil {
 			writeProxyError(w, http.StatusBadRequest, err.Error())
 			return
@@ -159,48 +168,200 @@ func newProxyHandler(route ProxyRoute, providerKey string) http.Handler {
 			return
 		}
 
-		// Dispatch on upstream protocol. Only Anthropic Messages is
-		// wired up in the MVP.
-		switch route.UpstreamProtocol {
-		case protocolAnthropicMessages:
-			if r.URL.Path == "/v1/messages" {
-				writeProxyError(w, http.StatusBadRequest, "anthropic messages inbound to anthropic upstream passthrough is not implemented in the MVP")
-				return
-			}
-			serveAnthropicUpstream(w, r, route, providerKey, ir)
-		case protocolOpenAIChat:
-			serveOpenAIChatUpstream(w, r, route, providerKey, ir)
-		case protocolOpenAIResponses:
-			if r.URL.Path != "/v1/messages" {
-				writeProxyError(w, http.StatusBadRequest, fmt.Sprintf("upstream protocol %q is supported for /v1/messages clients only in the MVP (supported for /v1/responses: %q, %q)", protocolOpenAIResponses, protocolAnthropicMessages, protocolOpenAIChat))
-				return
-			}
-			serveOpenAIResponsesUpstream(w, r, route, providerKey, ir)
-		default:
-			writeProxyError(w, http.StatusBadRequest,
-				fmt.Sprintf("upstream protocol %q is not supported in the MVP (supported: %q, %q)",
-					route.UpstreamProtocol, protocolAnthropicMessages, protocolOpenAIChat))
+		if ok, message := upstreamAdapter.CanProxyFrom(inboundAdapter); !ok {
+			writeProxyError(w, http.StatusBadRequest, message)
+			return
 		}
+		serveProtocolUpstream(w, r, route, providerKey, ir, inboundAdapter, upstreamAdapter)
 	})
 }
 
-func serveOpenAIChatUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest) {
-	upstreamBody, err := irToOpenAIChatRequest(ir)
-	if err != nil {
-		writeProxyError(w, http.StatusBadRequest,
-			fmt.Sprintf("translate to openai chat request: %v", err))
-		return
+func newProxyMultiRouteHandler(routes []proxyServedRoute, registry *ProtocolRegistry) http.Handler {
+	if registry == nil {
+		registry = defaultProtocolRegistry()
 	}
-	upstreamURL := openAIChatCompletionsURL(route.UpstreamBaseURL)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		selected, ok := findProxyRouteByBearerToken(r, routes)
+		if !ok {
+			writeProxyError(w, http.StatusUnauthorized, "unauthorized: missing or invalid local token")
+			return
+		}
+		clientAdapter, ok := registry.Find(string(selected.ClientProtocol))
+		if !ok || clientAdapter.InboundPath() == "" || r.URL.Path != clientAdapter.InboundPath() {
+			writeProxyError(w, http.StatusNotFound,
+				fmt.Sprintf("path %q is not supported for agent %q", r.URL.Path, selected.Agent))
+			return
+		}
+		newProxyHandlerWithRegistry(selected.Route, selected.ProviderKey, registry).ServeHTTP(w, r)
+	})
+}
+
+func findProxyRouteByBearerToken(r *http.Request, routes []proxyServedRoute) (proxyServedRoute, bool) {
+	token := bearerTokenFromRequest(r)
+	if token == "" {
+		return proxyServedRoute{}, false
+	}
+	match := -1
+	for i, route := range routes {
+		expected := route.Route.LocalToken
+		if expected == "" || len(token) != len(expected) {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1 {
+			match = i
+		}
+	}
+	if match < 0 {
+		return proxyServedRoute{}, false
+	}
+	return routes[match], true
+}
+
+func bearerTokenFromRequest(r *http.Request) string {
+	parts := strings.Fields(r.Header.Get("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
+}
+
+func supportsSameProtocolPassthrough(protocol ProviderProtocol) bool {
+	switch protocol {
+	case protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses:
+		return true
+	default:
+		return false
+	}
+}
+
+func serveSameProtocolPassthrough(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, body []byte, inboundAdapter, upstreamAdapter ProtocolAdapter) bool {
+	model, stream, err := passthroughRequestModelAndStream(body)
+	if err != nil {
+		writeProxyError(w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	if stream {
+		return false
+	}
+	upstreamModel, ok := resolveProxyModel(model, route)
+	if !ok {
+		upstreamModel = route.Model
+	}
+	if upstreamModel == "" {
+		writeProxyError(w, http.StatusBadRequest, "model must not be empty and no route model or \"default\" mapping is configured")
+		return true
+	}
+	upstreamBody, err := rewritePassthroughModel(body, upstreamModel)
+	if err != nil {
+		writeProxyError(w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	serveRawProtocolUpstream(w, r, route, providerKey, upstreamBody, upstreamAdapter)
+	_ = inboundAdapter
+	return true
+}
+
+func passthroughRequestModelAndStream(body []byte) (string, bool, error) {
+	var raw struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return "", false, fmt.Errorf("passthrough request: parse body: %w", err)
+	}
+	return raw.Model, raw.Stream, nil
+}
+
+func rewritePassthroughModel(body []byte, model string) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("passthrough request: parse body object: %w", err)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("passthrough request: body must be a JSON object")
+	}
+	modelJSON, err := json.Marshal(model)
+	if err != nil {
+		return nil, fmt.Errorf("passthrough request: marshal model: %w", err)
+	}
+	raw["model"] = modelJSON
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("passthrough request: marshal body: %w", err)
+	}
+	return out, nil
+}
+
+func serveRawProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, upstreamBody []byte, upstreamAdapter ProtocolAdapter) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL(route.UpstreamBaseURL, upstreamAdapter.UpstreamPath()), bytes.NewReader(upstreamBody))
 	if err != nil {
 		writeProxyError(w, http.StatusInternalServerError,
 			fmt.Sprintf("build upstream request: %v", err))
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if providerKey != "" {
-		req.Header.Set("Authorization", "Bearer "+providerKey)
+	upstreamAdapter.ConfigureUpstreamRequest(req, providerKey)
+	resp, err := proxyHTTPClient.Do(req)
+	if err != nil {
+		writeProxyError(w, http.StatusBadGateway,
+			fmt.Sprintf("upstream request: %v", err))
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	limitedUpstream := io.LimitReader(resp.Body, proxyMaxUpstreamBodyBytes+1)
+	respBody, err := io.ReadAll(limitedUpstream)
+	if err != nil {
+		writeProxyError(w, http.StatusBadGateway,
+			fmt.Sprintf("read upstream response: %v", err))
+		return
+	}
+	if int64(len(respBody)) > proxyMaxUpstreamBodyBytes {
+		writeProxyError(w, http.StatusBadGateway,
+			fmt.Sprintf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes))
+		return
+	}
+	copyProxyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(respBody)
+}
+
+func copyProxyResponseHeaders(dst, src http.Header) {
+	for key, values := range src {
+		if isHopByHopHeader(key) {
+			continue
+		}
+		dst.Del(key)
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func isHopByHopHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
+}
+
+func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest, inboundAdapter, upstreamAdapter ProtocolAdapter) {
+	upstreamBody, err := upstreamAdapter.BuildUpstreamRequest(ir)
+	if err != nil {
+		writeProxyError(w, http.StatusBadRequest,
+			fmt.Sprintf("translate to %s request: %v", upstreamAdapter.Name(), err))
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL(route.UpstreamBaseURL, upstreamAdapter.UpstreamPath()), bytes.NewReader(upstreamBody))
+	if err != nil {
+		writeProxyError(w, http.StatusInternalServerError,
+			fmt.Sprintf("build upstream request: %v", err))
+		return
+	}
+	upstreamAdapter.ConfigureUpstreamRequest(req, providerKey)
+	if ir.Stream {
+		serveStreamingProtocolUpstream(w, r, req, inboundAdapter, upstreamAdapter)
+		return
 	}
 	resp, err := proxyHTTPClient.Do(req)
 	if err != nil {
@@ -227,133 +388,65 @@ func serveOpenAIChatUpstream(w http.ResponseWriter, r *http.Request, route Proxy
 		_, _ = w.Write(respBody)
 		return
 	}
-	irResp, err := openAIChatResponseToIR(respBody)
+	irResp, err := upstreamAdapter.ParseUpstreamResponse(respBody, resp.Header.Get("Content-Type"))
 	if err != nil {
 		writeProxyError(w, http.StatusBadGateway,
 			fmt.Sprintf("parse upstream response: %v", err))
 		return
 	}
-	// The response is rendered back to the client in the SAME protocol family
-	// as the inbound request: a /v1/messages (Anthropic) client gets an
-	// Anthropic Messages payload, a /v1/responses (OpenAI Responses) client
-	// gets an OpenAI Responses payload (JSON or SSE). This keeps the response
-	// shape consistent with what the client sent rather than always forcing
-	// the OpenAI Responses shape onto Anthropic callers.
-	if r.URL.Path == "/v1/messages" {
-		// Anthropic SSE upstream is not implemented in the MVP, and the
-		// Anthropic inbound adapter already rejects stream:true requests,
-		// so ir.Stream is always false here. Render the non-streaming
-		// Anthropic Messages payload.
-		out, err := irToAnthropicResponse(irResp)
-		if err != nil {
-			writeProxyError(w, http.StatusInternalServerError, err.Error())
+	inboundAdapter.WriteClientResponse(w, irResp, ir.Stream)
+}
+
+func serveStreamingProtocolUpstream(w http.ResponseWriter, r *http.Request, req *http.Request, inboundAdapter, upstreamAdapter ProtocolAdapter) {
+	resp, err := proxyHTTPClient.Do(req)
+	if err != nil {
+		writeProxyError(w, http.StatusBadGateway,
+			fmt.Sprintf("upstream request: %v", err))
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limitedUpstream := io.LimitReader(resp.Body, proxyMaxUpstreamBodyBytes+1)
+		respBody, readErr := io.ReadAll(limitedUpstream)
+		if readErr != nil {
+			writeProxyError(w, http.StatusBadGateway,
+				fmt.Sprintf("read upstream response: %v", readErr))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(out)
-		return
-	}
-	if ir.Stream {
-		writeResponsesSSE(w, irResp)
-		return
-	}
-	out, err := irToResponsesResponse(irResp)
-	if err != nil {
-		writeProxyError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(out)
-}
-
-func serveOpenAIResponsesUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest) {
-	upstreamIR := ir
-	// Some Responses-compatible upstreams (including the new_api_gpt
-	// endpoint used by OpenCode here) require stream=true. The proxy still
-	// returns a non-streaming Anthropic response to the Claude client by
-	// aggregating the upstream Responses SSE stream below.
-	upstreamIR.Stream = true
-	upstreamBody, err := irToResponsesRequest(upstreamIR)
-	if err != nil {
-		writeProxyError(w, http.StatusBadRequest,
-			fmt.Sprintf("translate to responses request: %v", err))
-		return
-	}
-	upstreamURL := openAIResponsesURL(route.UpstreamBaseURL)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
-	if err != nil {
-		writeProxyError(w, http.StatusInternalServerError,
-			fmt.Sprintf("build upstream request: %v", err))
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if providerKey != "" {
-		req.Header.Set("Authorization", "Bearer "+providerKey)
-	}
-	resp, err := proxyHTTPClient.Do(req)
-	if err != nil {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("upstream request: %v", err))
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	limitedUpstream := io.LimitReader(resp.Body, proxyMaxUpstreamBodyBytes+1)
-	respBody, err := io.ReadAll(limitedUpstream)
-	if err != nil {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("read upstream response: %v", err))
-		return
-	}
-	if int64(len(respBody)) > proxyMaxUpstreamBodyBytes {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes))
-		return
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(respBody)
 		return
 	}
-	var irResp IRResponse
-	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		irResp, err = responsesStreamToIR(respBody)
-	} else {
-		irResp, err = responsesResponseToIR(respBody)
-	}
+	decoder, err := streamDecoderForProtocol(upstreamAdapter.Name())
 	if err != nil {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("parse upstream response: %v", err))
+		writeProxyError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	out, err := irToAnthropicResponse(irResp)
+	encoder, err := streamEncoderForProtocol(inboundAdapter.Name())
 	if err != nil {
-		writeProxyError(w, http.StatusInternalServerError, err.Error())
+		writeProxyError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(out)
+	_ = r
+	if err := decoder.DecodeStream(resp.Body, func(event StreamEvent) error {
+		return encoder.EncodeStreamEvent(w, event)
+	}); err != nil && r.Context().Err() == nil {
+		_ = encoder.EncodeStreamEvent(w, StreamEvent{Type: streamEventError, Err: err.Error()})
+	}
 }
 
-func openAIResponsesURL(baseURL string) string {
+func upstreamURL(baseURL, path string) string {
 	base := strings.TrimRight(baseURL, "/")
 	lower := strings.ToLower(base)
-	if strings.HasSuffix(lower, "/v1") || strings.HasSuffix(lower, "/v4") {
-		return base + "/responses"
+	if path != "/v1/messages" && (strings.HasSuffix(lower, "/v1") || strings.HasSuffix(lower, "/v4")) {
+		return base + strings.TrimPrefix(path, "/v1")
 	}
-	return base + "/v1/responses"
-}
-
-func openAIChatCompletionsURL(baseURL string) string {
-	base := strings.TrimRight(baseURL, "/")
-	lower := strings.ToLower(base)
-	if strings.HasSuffix(lower, "/v1") || strings.HasSuffix(lower, "/v4") {
-		return base + "/chat/completions"
-	}
-	return base + "/v1/chat/completions"
+	return base + path
 }
 
 // resolveProxyModel applies the route's ModelMappings to the incoming
@@ -411,106 +504,6 @@ func verifyBearerToken(r *http.Request, want string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(fields[1]), []byte(want)) == 1
-}
-
-// serveAnthropicUpstream translates the IR into an Anthropic Messages
-// API request, forwards it to the upstream, and renders the upstream
-// response back as an OpenAI Responses payload. Upstream non-2xx
-// responses are passed through verbatim (status + body) so the client
-// sees the provider's native error shape rather than a generic one.
-func serveAnthropicUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest) {
-	upstreamBody, err := irToAnthropicRequest(ir)
-	if err != nil {
-		// Should not happen after responsesRequestToIR validation, but
-		// surface it as a 400 rather than panicking: the IR content is
-		// derived from client input and must never crash the proxy.
-		writeProxyError(w, http.StatusBadRequest,
-			fmt.Sprintf("translate to anthropic request: %v", err))
-		return
-	}
-
-	// Trim any trailing slash(es) so the route may be configured with
-	// or without one and still produce a clean upstream URL.
-	upstreamURL := strings.TrimRight(route.UpstreamBaseURL, "/") + "/v1/messages"
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
-	if err != nil {
-		writeProxyError(w, http.StatusInternalServerError,
-			fmt.Sprintf("build upstream request: %v", err))
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// Anthropic Messages API rejects requests that omit the
-	// anthropic-version header. Sending it explicitly here keeps the
-	// proxy behaviour deterministic rather than depending on the
-	// upstream's default and avoids opaque upstream 400s.
-	req.Header.Set(proxyAnthropicVersionHeader, proxyAnthropicVersionValue)
-	if providerKey != "" {
-		req.Header.Set("Authorization", "Bearer "+providerKey)
-	}
-
-	resp, err := proxyHTTPClient.Do(req)
-	if err != nil {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("upstream request: %v", err))
-		return
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	// Cap the upstream response body so a runaway upstream cannot
-	// exhaust memory. A normal Responses/Anthropic payload is far
-	// smaller than proxyMaxUpstreamBodyBytes; exceeding it surfaces as
-	// an explicit 502 rather than an OOM.
-	limitedUpstream := io.LimitReader(resp.Body, proxyMaxUpstreamBodyBytes+1)
-	respBody, err := io.ReadAll(limitedUpstream)
-	if err != nil {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("read upstream response: %v", err))
-		return
-	}
-	if int64(len(respBody)) > proxyMaxUpstreamBodyBytes {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes))
-		return
-	}
-
-	// Non-2xx: pass the upstream status and body through verbatim so
-	// the client sees the provider's error shape (e.g. Anthropic's
-	// {"type":"error",...}) rather than a generic proxy error.
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(respBody)
-		return
-	}
-
-	irResp, err := anthropicResponseToIR(respBody)
-	if err != nil {
-		writeProxyError(w, http.StatusBadGateway,
-			fmt.Sprintf("parse upstream response: %v", err))
-		return
-	}
-
-	// Streaming clients: the proxy still calls the upstream
-	// non-streaming (it does not implement Anthropic SSE) and then
-	// wraps the completed IRResponse as a minimal OpenAI Responses
-	// SSE event stream. Non-streaming clients get the standard JSON
-	// payload.
-	if ir.Stream {
-		writeResponsesSSE(w, irResp)
-		return
-	}
-
-	out, err := irToResponsesResponse(irResp)
-	if err != nil {
-		writeProxyError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(out)
 }
 
 // writeProxyError emits a small JSON error object. Proxy error bodies

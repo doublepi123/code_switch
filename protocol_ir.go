@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Part types for the typed IR. These string constants mirror the Anthropic
 // content-block naming where applicable so adapters can map them directly.
@@ -18,8 +21,26 @@ const (
 type IRRequest struct {
 	Model     string
 	Messages  []IRMessage
+	Tools     []IRTool
 	Stream    bool
 	MaxTokens int
+}
+
+type IRTool struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+}
+
+type IRToolCall struct {
+	ID    string
+	Name  string
+	Input json.RawMessage
+}
+
+type IRToolResult struct {
+	ToolUseID string
+	Content   string
 }
 
 // IRMessage is a single conversation turn. Role is one of "system", "user",
@@ -29,11 +50,12 @@ type IRMessage struct {
 	Parts []IRPart
 }
 
-// IRPart is a single content block. Only text is modelled in Task 1; later
-// tasks will extend this with tool-use / image fields as needed.
+// IRPart is a single content block.
 type IRPart struct {
-	Type string
-	Text string
+	Type       string
+	Text       string
+	ToolCall   *IRToolCall
+	ToolResult *IRToolResult
 }
 
 // IRResponse is the provider-agnostic intermediate representation of a
@@ -42,6 +64,7 @@ type IRResponse struct {
 	ID         string
 	Model      string
 	Text       string
+	ToolCalls  []IRToolCall
 	StopReason string
 	Usage      *IRUsage
 }
@@ -51,6 +74,13 @@ type IRUsage struct {
 	InputTokens  int
 	OutputTokens int
 	TotalTokens  int
+}
+
+func defaultToolInputSchema(schema json.RawMessage) json.RawMessage {
+	if len(schema) == 0 || string(schema) == "null" {
+		return json.RawMessage(`{"type":"object","properties":{}}`)
+	}
+	return schema
 }
 
 // ValidateTextOnly verifies that the request is well-formed and contains only
@@ -90,8 +120,20 @@ func (req IRRequest) validateTextOnlySkipModel() error {
 			return fmt.Errorf("ir request: message %d (role %q) has no parts", i, msg.Role)
 		}
 		for j, part := range msg.Parts {
-			if part.Type != irPartText {
-				return fmt.Errorf("ir request: message %d part %d has unsupported type %q (text-only target requires %q)", i, j, part.Type, irPartText)
+			switch part.Type {
+			case irPartText:
+			case irPartToolUse:
+				if part.ToolCall == nil || part.ToolCall.ID == "" || part.ToolCall.Name == "" {
+					return fmt.Errorf("ir request: message %d part %d has invalid tool_use part", i, j)
+				}
+			case irPartToolResult:
+				if part.ToolResult == nil || part.ToolResult.ToolUseID == "" {
+					return fmt.Errorf("ir request: message %d part %d has invalid tool_result part", i, j)
+				}
+			case irPartImage:
+				return fmt.Errorf("ir request: message %d part %d has unsupported type %q (images are not supported)", i, j, part.Type)
+			default:
+				return fmt.Errorf("ir request: message %d part %d has unsupported type %q", i, j, part.Type)
 			}
 		}
 	}

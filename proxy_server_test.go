@@ -233,7 +233,7 @@ func TestProxyHandlerClaudeMessagesToOpenAIResponsesUpstream(t *testing.T) {
 	}
 }
 
-func TestProxyHandlerClaudeMessagesToOpenAIResponsesStreamingUpstream(t *testing.T) {
+func TestProxyHandlerClaudeMessagesToOpenAIResponsesNonStreamingUpstream(t *testing.T) {
 	cap := &upstreamCapture{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
@@ -264,8 +264,8 @@ func TestProxyHandlerClaudeMessagesToOpenAIResponsesStreamingUpstream(t *testing
 	if err := json.Unmarshal(cap.body, &upstreamBody); err != nil {
 		t.Fatalf("unmarshal upstream body: %v\nbody: %s", err, string(cap.body))
 	}
-	if upstreamBody["stream"] != true {
-		t.Fatalf("upstream stream = %v, want true; body=%s", upstreamBody["stream"], string(cap.body))
+	if _, ok := upstreamBody["stream"]; ok {
+		t.Fatalf("upstream stream field present, want non-streaming request; body=%s", string(cap.body))
 	}
 	if !strings.Contains(rec.Body.String(), `"text":"ok"`) {
 		t.Fatalf("anthropic response body = %s", rec.Body.String())
@@ -399,7 +399,7 @@ func TestProxyHandlerRejectsUnsupportedPath(t *testing.T) {
 		LocalToken:       "local-token",
 	}, "provider-key")
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+	req := httptest.NewRequest(http.MethodPost, "/v1/not-supported",
 		strings.NewReader(`{"model":"m","input":"hi"}`))
 	req.Header.Set("Authorization", "Bearer local-token")
 	rec := httptest.NewRecorder()
@@ -433,15 +433,19 @@ func TestProxyHandlerRejectsWrongMethod(t *testing.T) {
 	}
 }
 
-// TestProxyHandlerStreamTrueReturnsSSE verifies that a stream:true
-// request is accepted and the response is rendered as an OpenAI
-// Responses SSE event stream (Content-Type text/event-stream) wrapping
-// the completed upstream text. The proxy still calls the upstream
-// non-streaming; it synthesises the SSE envelope client-side. The
-// minimal event sequence must include response.created, the output
-// text delta carrying the upstream text, and response.completed.
+// TestProxyHandlerStreamTrueReturnsSSE verifies that a stream:true request is
+// forwarded upstream as streaming SSE and converted back to the inbound OpenAI
+// Responses SSE shape one event at a time.
 func TestProxyHandlerStreamTrueReturnsSSE(t *testing.T) {
-	upstream, cap := startAnthropicUpstream(t, 0, "")
+	cap := &upstreamCapture{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.path = r.URL.Path
+		cap.body, _ = io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, anthropicStreamFixture)
+	}))
+	t.Cleanup(upstream.Close)
 	handler := newProxyHandler(ProxyRoute{
 		Provider:         "minimax-cn",
 		Model:            "MiniMax-M3",
@@ -465,25 +469,21 @@ func TestProxyHandlerStreamTrueReturnsSSE(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"event: response.created",
-		"event: response.output_item.added",
-		"event: response.content_part.added",
 		"event: response.output_text.delta",
-		"event: response.output_text.done",
-		"event: response.output_item.done",
 		"event: response.completed",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("SSE body missing %q\nbody:\n%s", want, body)
 		}
 	}
-	// The upstream text must appear inside the delta event.
-	if !strings.Contains(body, `"delta":"Hi"`) {
+	// The upstream text deltas must appear in the converted stream.
+	if !strings.Contains(body, `"delta":"Hel"`) || !strings.Contains(body, `"delta":"lo"`) {
 		t.Fatalf("SSE body missing upstream text in delta\nbody:\n%s", body)
 	}
-	// The upstream must NOT have received stream:true (proxy calls
-	// non-streaming even for stream:true client requests).
-	if strings.Contains(string(cap.body), `"stream"`) {
-		t.Fatalf("upstream body should not carry stream field: %s", string(cap.body))
+	// Stage 3 forwards stream:true to the upstream instead of buffering a
+	// non-streaming response client-side.
+	if !strings.Contains(string(cap.body), `"stream":true`) {
+		t.Fatalf("upstream body should carry stream:true: %s", string(cap.body))
 	}
 }
 
@@ -570,7 +570,7 @@ func TestProxyHandlerRejectsUnsupportedUpstreamProtocol(t *testing.T) {
 	handler := newProxyHandler(ProxyRoute{
 		Provider:         "minimax-cn",
 		Model:            "MiniMax-M3",
-		UpstreamProtocol: protocolOpenAIResponses,
+		UpstreamProtocol: "totally-bogus",
 		UpstreamBaseURL:  "http://example.invalid",
 		LocalToken:       "local-token",
 	}, "provider-key")
@@ -584,8 +584,8 @@ func TestProxyHandlerRejectsUnsupportedUpstreamProtocol(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for unsupported upstream protocol", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), string(protocolOpenAIResponses)) {
-		t.Fatalf("error body = %q, want mention protocol %s", rec.Body.String(), protocolOpenAIResponses)
+	if !strings.Contains(rec.Body.String(), "totally-bogus") {
+		t.Fatalf("error body = %q, want mention bogus protocol", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), string(protocolAnthropicMessages)) || !strings.Contains(rec.Body.String(), string(protocolOpenAIChat)) {
 		t.Fatalf("error body = %q, want mention supported protocols", rec.Body.String())

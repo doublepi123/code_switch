@@ -75,6 +75,26 @@ func TestPrintUsageIncludesAllProxySubcommandsTask6(t *testing.T) {
 	}
 }
 
+func TestRunProxyHelpShowsMultiRouteUsageTask6(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var out bytes.Buffer
+	err := runWithIO([]string{"proxy", "--help"}, strings.NewReader(""), &out)
+	if err != nil {
+		t.Fatalf("proxy --help returned error: %v\noutput:\n%s", err, out.String())
+	}
+	s := out.String()
+	for _, want := range []string{
+		"cs proxy configure <agent>",
+		"multi-route proxy daemon",
+		"cs proxy preview <agent>",
+		"cs proxy status",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("proxy --help missing %q\noutput:\n%s", want, s)
+		}
+	}
+}
+
 // ---- completion: top-level + second-level proxy entries ----
 
 func TestBashCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {

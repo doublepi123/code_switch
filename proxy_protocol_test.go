@@ -18,18 +18,14 @@ func TestIRRequestValidateTextOnlyAcceptsPlainText(t *testing.T) {
 	}
 }
 
-func TestIRRequestValidateTextOnlyRejectsToolUse(t *testing.T) {
+func TestIRRequestValidateTextOnlyAcceptsToolUse(t *testing.T) {
 	req := IRRequest{
 		Model:     "MiniMax-M3",
-		Messages:  []IRMessage{{Role: "user", Parts: []IRPart{{Type: irPartToolUse}}}},
+		Messages:  []IRMessage{{Role: "assistant", Parts: []IRPart{{Type: irPartToolUse, ToolCall: &IRToolCall{ID: "call_1", Name: "lookup", Input: json.RawMessage(`{"q":"hi"}`)}}}}},
 		MaxTokens: 32,
 	}
-	err := req.ValidateTextOnly()
-	if err == nil {
-		t.Fatal("ValidateTextOnly returned nil, want error")
-	}
-	if !strings.Contains(err.Error(), "tool_use") {
-		t.Fatalf("error = %q, want mention tool_use", err.Error())
+	if err := req.ValidateTextOnly(); err != nil {
+		t.Fatalf("ValidateTextOnly returned error: %v", err)
 	}
 }
 
@@ -89,8 +85,18 @@ func TestIRRequestValidateTextOnlyRejectsEmptyParts(t *testing.T) {
 	}
 }
 
-func TestIRRequestValidateTextOnlyRejectsNonTextPart(t *testing.T) {
-	for _, pt := range []string{irPartToolUse, irPartToolResult, irPartImage, irPartReasoning, "unknown"} {
+func TestIRRequestValidateTextOnlyAllowsToolsButRejectsImageAndUnknownParts(t *testing.T) {
+	validToolParts := []IRPart{
+		{Type: irPartToolUse, ToolCall: &IRToolCall{ID: "call_1", Name: "lookup", Input: json.RawMessage(`{}`)}},
+		{Type: irPartToolResult, ToolResult: &IRToolResult{ToolUseID: "call_1", Content: "ok"}},
+	}
+	for _, part := range validToolParts {
+		req := IRRequest{Model: "MiniMax-M3", Messages: []IRMessage{{Role: "user", Parts: []IRPart{part}}}}
+		if err := req.ValidateTextOnly(); err != nil {
+			t.Fatalf("ValidateTextOnly returned error for %q: %v", part.Type, err)
+		}
+	}
+	for _, pt := range []string{irPartImage, irPartReasoning, "unknown"} {
 		t.Run(pt, func(t *testing.T) {
 			req := IRRequest{
 				Model:    "MiniMax-M3",
@@ -104,6 +110,163 @@ func TestIRRequestValidateTextOnlyRejectsNonTextPart(t *testing.T) {
 				t.Fatalf("error = %q, want mention part type %q", err.Error(), pt)
 			}
 		})
+	}
+}
+
+func TestAnthropicToolsAndToolBlocksRoundTripIR(t *testing.T) {
+	body := []byte(`{"model":"claude-model","max_tokens":32,"tools":[{"name":"lookup","description":"Lookup data","input_schema":{"type":"object","properties":{"q":{"type":"string"}}}}],"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"hi"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"result"}]}]}`)
+	req, err := anthropicRequestToIR(body)
+	if err != nil {
+		t.Fatalf("anthropicRequestToIR returned error: %v", err)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "lookup" || !strings.Contains(string(req.Tools[0].InputSchema), `"q"`) {
+		t.Fatalf("tools = %#v", req.Tools)
+	}
+	call := req.Messages[0].Parts[0].ToolCall
+	if call == nil || call.ID != "call_1" || call.Name != "lookup" || string(call.Input) != `{"q":"hi"}` {
+		t.Fatalf("tool call = %#v", call)
+	}
+	result := req.Messages[1].Parts[0].ToolResult
+	if result == nil || result.ToolUseID != "call_1" || result.Content != "result" {
+		t.Fatalf("tool result = %#v", result)
+	}
+	out, err := irToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("irToAnthropicRequest returned error: %v", err)
+	}
+	for _, want := range []string{`"tools":[`, `"input_schema":{"type":"object"`, `"type":"tool_use"`, `"id":"call_1"`, `"type":"tool_result"`, `"tool_use_id":"call_1"`} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("anthropic request missing %s: %s", want, out)
+		}
+	}
+}
+
+func TestOpenAIChatToolsCallsAndResultsRoundTripIR(t *testing.T) {
+	body := []byte(`{"model":"gpt","tools":[{"type":"function","function":{"name":"lookup","description":"Lookup data","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"hi\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"result"}]}`)
+	req, err := openAIChatRequestToIR(body)
+	if err != nil {
+		t.Fatalf("openAIChatRequestToIR returned error: %v", err)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "lookup" || !strings.Contains(string(req.Tools[0].InputSchema), `"q"`) {
+		t.Fatalf("tools = %#v", req.Tools)
+	}
+	call := req.Messages[1].Parts[0].ToolCall
+	if call == nil || call.ID != "call_1" || call.Name != "lookup" || string(call.Input) != `{"q":"hi"}` {
+		t.Fatalf("tool call = %#v", call)
+	}
+	result := req.Messages[2].Parts[0].ToolResult
+	if result == nil || result.ToolUseID != "call_1" || result.Content != "result" {
+		t.Fatalf("tool result = %#v", result)
+	}
+	out, err := irToOpenAIChatRequest(req)
+	if err != nil {
+		t.Fatalf("irToOpenAIChatRequest returned error: %v", err)
+	}
+	for _, want := range []string{`"tools":[`, `"type":"function"`, `"tool_calls":[`, `"arguments":"{\"q\":\"hi\"}"`, `"role":"tool"`, `"tool_call_id":"call_1"`} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("chat request missing %s: %s", want, out)
+		}
+	}
+}
+
+func TestResponsesToolsAndFunctionCallsRoundTripIR(t *testing.T) {
+	body := []byte(`{"model":"gpt","tools":[{"type":"function","name":"lookup","description":"Lookup data","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}],"input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"hi\"}"}]}`)
+	req, err := responsesRequestToIR(body)
+	if err != nil {
+		t.Fatalf("responsesRequestToIR returned error: %v", err)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "lookup" || !strings.Contains(string(req.Tools[0].InputSchema), `"q"`) {
+		t.Fatalf("tools = %#v", req.Tools)
+	}
+	call := req.Messages[1].Parts[0].ToolCall
+	if call == nil || call.ID != "call_1" || call.Name != "lookup" || string(call.Input) != `{"q":"hi"}` {
+		t.Fatalf("tool call = %#v", call)
+	}
+	out, err := irToResponsesRequest(req)
+	if err != nil {
+		t.Fatalf("irToResponsesRequest returned error: %v", err)
+	}
+	for _, want := range []string{`"tools":[`, `"type":"function"`, `"parameters":{"type":"object"`, `"type":"function_call"`, `"call_id":"call_1"`, `"arguments":"{\"q\":\"hi\"}"`} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("responses request missing %s: %s", want, out)
+		}
+	}
+}
+
+func TestResponsesAssistantOutputTextHistoryRoundTripIR(t *testing.T) {
+	body := []byte(`{"model":"gpt","input":[{"role":"assistant","content":[{"type":"output_text","text":"previous"}]},{"role":"user","content":[{"type":"input_text","text":"next"}]}]}`)
+	req, err := responsesRequestToIR(body)
+	if err != nil {
+		t.Fatalf("responsesRequestToIR returned error: %v", err)
+	}
+	if got := req.Messages[0].Parts[0].Text; got != "previous" {
+		t.Fatalf("assistant history text = %q", got)
+	}
+	out, err := irToResponsesRequest(req)
+	if err != nil {
+		t.Fatalf("irToResponsesRequest returned error: %v", err)
+	}
+	if !strings.Contains(string(out), `"type":"output_text"`) {
+		t.Fatalf("responses request missing output_text for assistant history: %s", out)
+	}
+}
+
+func TestMixedTextAndToolResponsePreservesBoth(t *testing.T) {
+	resp := IRResponse{ID: "resp_1", Model: "m", Text: "checking", StopReason: "tool_use", ToolCalls: []IRToolCall{{ID: "call_1", Name: "lookup", Input: json.RawMessage(`{"q":"hi"}`)}}}
+	anthropic, err := irToAnthropicResponse(resp)
+	if err != nil {
+		t.Fatalf("irToAnthropicResponse returned error: %v", err)
+	}
+	for _, want := range []string{`"type":"text"`, `"text":"checking"`, `"type":"tool_use"`, `"id":"call_1"`} {
+		if !strings.Contains(string(anthropic), want) {
+			t.Fatalf("anthropic mixed response missing %s: %s", want, anthropic)
+		}
+	}
+	responses, err := irToResponsesResponse(resp)
+	if err != nil {
+		t.Fatalf("irToResponsesResponse returned error: %v", err)
+	}
+	for _, want := range []string{`"output_text":"checking"`, `"type":"message"`, `"type":"function_call"`, `"call_id":"call_1"`} {
+		if !strings.Contains(string(responses), want) {
+			t.Fatalf("responses mixed response missing %s: %s", want, responses)
+		}
+	}
+	parsed, err := responsesResponseToIR(responses)
+	if err != nil {
+		t.Fatalf("responsesResponseToIR returned error: %v", err)
+	}
+	if parsed.Text != "checking" || len(parsed.ToolCalls) != 1 || parsed.ToolCalls[0].ID != "call_1" {
+		t.Fatalf("parsed mixed response = %#v", parsed)
+	}
+}
+
+func TestToolCallResponsesAndStopReasonsMapToIR(t *testing.T) {
+	anthropicResp, err := anthropicResponseToIR([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"hi"}}],"stop_reason":"tool_use"}`))
+	if err != nil {
+		t.Fatalf("anthropicResponseToIR returned error: %v", err)
+	}
+	if anthropicResp.StopReason != "tool_use" || len(anthropicResp.ToolCalls) != 1 || anthropicResp.ToolCalls[0].Name != "lookup" {
+		t.Fatalf("anthropic resp = %#v", anthropicResp)
+	}
+	chatResp, err := openAIChatResponseToIR([]byte(`{"id":"chat_1","model":"gpt","choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"hi\"}"}}]},"finish_reason":"tool_calls"}]}`))
+	if err != nil {
+		t.Fatalf("openAIChatResponseToIR returned error: %v", err)
+	}
+	if chatResp.StopReason != "tool_use" || len(chatResp.ToolCalls) != 1 || chatResp.ToolCalls[0].Name != "lookup" {
+		t.Fatalf("chat resp = %#v", chatResp)
+	}
+	responsesResp, err := responsesResponseToIR([]byte(`{"id":"resp_1","object":"response","status":"completed","model":"gpt","output":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"hi\"}"}],"output_text":""}`))
+	if err != nil {
+		t.Fatalf("responsesResponseToIR returned error: %v", err)
+	}
+	if responsesResp.StopReason != "tool_use" || len(responsesResp.ToolCalls) != 1 || responsesResp.ToolCalls[0].Name != "lookup" {
+		t.Fatalf("responses resp = %#v", responsesResp)
+	}
+	if got := openAIChatStopReasonToIR("stop"); got != "stop" {
+		t.Fatalf("chat stop = %q, want stop", got)
+	}
+	if got := responsesStatusToIRStopReason(responsesStatusCompleted); got != "stop" {
+		t.Fatalf("responses completed = %q, want stop", got)
 	}
 }
 
@@ -698,7 +861,7 @@ func TestAnthropicResponseToIR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("anthropicResponseToIR returned error: %v", err)
 	}
-	if resp.ID != "msg_1" || resp.Model != "MiniMax-M3" || resp.Text != "Hi" || resp.StopReason != "end_turn" {
+	if resp.ID != "msg_1" || resp.Model != "MiniMax-M3" || resp.Text != "Hi" || resp.StopReason != "stop" {
 		t.Fatalf("unexpected IR response: %+v", resp)
 	}
 	if resp.Usage == nil || resp.Usage.TotalTokens != 5 {
@@ -729,19 +892,25 @@ func TestAnthropicRequestToIRText(t *testing.T) {
 	}
 }
 
-func TestAnthropicRequestToIRRejectsStream(t *testing.T) {
+func TestAnthropicRequestToIRPreservesStream(t *testing.T) {
 	body := []byte(`{"model":"claude-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	_, err := anthropicRequestToIR(body)
-	if err == nil || !strings.Contains(err.Error(), "stream") {
-		t.Fatalf("error = %v, want stream error", err)
+	req, err := anthropicRequestToIR(body)
+	if err != nil {
+		t.Fatalf("anthropicRequestToIR returned error: %v", err)
+	}
+	if !req.Stream {
+		t.Fatalf("Stream = false, want true")
 	}
 }
 
-func TestAnthropicRequestToIRRejectsNonTextContent(t *testing.T) {
+func TestAnthropicRequestToIRAcceptsToolUseContent(t *testing.T) {
 	body := []byte(`{"model":"claude-model","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]}]}`)
-	_, err := anthropicRequestToIR(body)
-	if err == nil || !strings.Contains(err.Error(), "tool_use") {
-		t.Fatalf("error = %v, want tool_use error", err)
+	req, err := anthropicRequestToIR(body)
+	if err != nil {
+		t.Fatalf("anthropicRequestToIR returned error: %v", err)
+	}
+	if got := req.Messages[0].Parts[0].ToolCall; got == nil || got.ID != "t1" || got.Name != "x" {
+		t.Fatalf("tool call = %#v", got)
 	}
 }
 
@@ -898,32 +1067,29 @@ func TestIRToAnthropicRequestMapsSystemToTopLevel(t *testing.T) {
 // TestIRToAnthropicRequestRejectsNonTextPart verifies that the text-only
 // validation surfaces an actionable error when the IR carries an
 // unsupported part type.
-func TestIRToAnthropicRequestRejectsNonTextPart(t *testing.T) {
+func TestIRToAnthropicRequestRejectsImagePart(t *testing.T) {
 	req := IRRequest{
 		Model:     "m",
 		MaxTokens: 16,
-		Messages:  []IRMessage{{Role: "user", Parts: []IRPart{{Type: irPartToolUse}}}},
+		Messages:  []IRMessage{{Role: "user", Parts: []IRPart{{Type: irPartImage}}}},
 	}
 	_, err := irToAnthropicRequest(req)
 	if err == nil {
-		t.Fatal("irToAnthropicRequest returned nil, want error for tool_use part")
+		t.Fatal("irToAnthropicRequest returned nil, want error for image part")
 	}
-	if !strings.Contains(err.Error(), "tool_use") {
-		t.Fatalf("error = %q, want mention tool_use", err.Error())
+	if !strings.Contains(err.Error(), "image") {
+		t.Fatalf("error = %q, want mention image", err.Error())
 	}
 }
 
-// TestAnthropicResponseToIRRejectsNonTextContent verifies that a content
-// block with an unsupported type (e.g. tool_use) surfaces as an error
-// naming the offending type rather than being silently dropped.
-func TestAnthropicResponseToIRRejectsNonTextContent(t *testing.T) {
+func TestAnthropicResponseToIRAcceptsToolUseContent(t *testing.T) {
 	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"MiniMax-M3","content":[{"type":"tool_use","id":"x","name":"n","input":{}}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`)
-	_, err := anthropicResponseToIR(body)
-	if err == nil {
-		t.Fatal("anthropicResponseToIR returned nil, want error for non-text content")
+	resp, err := anthropicResponseToIR(body)
+	if err != nil {
+		t.Fatalf("anthropicResponseToIR returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "tool_use") {
-		t.Fatalf("error = %q, want mention tool_use", err.Error())
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "x" || resp.ToolCalls[0].Name != "n" {
+		t.Fatalf("tool calls = %#v", resp.ToolCalls)
 	}
 }
 

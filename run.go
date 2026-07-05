@@ -189,11 +189,15 @@ func renderProxyCodexConfigForBaseURL(model, baseURL string) string {
 // the helper low-coupling and prevents callers from assuming it reads other
 // fields from cfg.
 func buildProxyRoute(provider string, preset ProviderPreset, upstreamProtocol ProviderProtocol, localToken string, mappings map[string]string) ProxyRoute {
+	upstreamBaseURL := preset.BaseURL
+	if endpoint, ok := preset.presetEndpoint(upstreamProtocol); ok {
+		upstreamBaseURL = endpoint.BaseURL
+	}
 	route := ProxyRoute{
 		Provider:         provider,
 		Model:            preset.Model,
 		UpstreamProtocol: upstreamProtocol,
-		UpstreamBaseURL:  preset.BaseURL,
+		UpstreamBaseURL:  upstreamBaseURL,
 		LocalToken:       localToken,
 		ModelMappings:    copyStringMap(mappings),
 	}

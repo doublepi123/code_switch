@@ -100,6 +100,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	codexDir := fs.String("codex-dir", "", "override Codex config dir")
 	opencodeDir := fs.String("opencode-dir", "", "override OpenCode config dir")
 	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
+	viaFlag := fs.String("via", "auto", "connection mode: auto, direct, or proxy")
 	haikuFlag := fs.String("haiku", "", "override haiku tier model")
 	sonnetFlag := fs.String("sonnet", "", "override sonnet tier model")
 	opusFlag := fs.String("opus", "", "override opus tier model")
@@ -178,6 +179,18 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return writeJSONAtomic(configPath, cfg)
 	}
 
+	presetForPlan, err := resolveAgentSwitchPreset(agent, pa.Provider, cfg, pa.Model)
+	if err != nil {
+		return err
+	}
+	plan, err := resolveConnection(agent, pa.Provider, presetForPlan, *viaFlag)
+	if err != nil {
+		return err
+	}
+	if plan.Mode == connectionModeProxy {
+		return switchProxyProvider(pa, cfg, configPath, persistAppConfig, plan, *claudeDir, *codexDir, *opencodeDir, out, *dryRun)
+	}
+
 	if agent == agentCodex {
 		// switchCodexProvider resolves the model and updates cfg in memory (setting stored.APIKey
 		// and stored.Model via setAgentProviderConfig), so we only need to persist cfg afterwards.
@@ -187,6 +200,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, out, *dryRun); err != nil {
 			return err
 		}
+		fmt.Fprintf(out, "%s\n", formatLabel("mode", string(connectionModeDirect)))
 		if !*dryRun {
 			if err := persistAppConfig(); err != nil {
 				return err
@@ -200,6 +214,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		if err := switchOpencodeProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *opencodeDir, out, *dryRun); err != nil {
 			return err
 		}
+		fmt.Fprintf(out, "%s\n", formatLabel("mode", string(connectionModeDirect)))
 		if !*dryRun {
 			if err := persistAppConfig(); err != nil {
 				return err
@@ -210,6 +225,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	if err := switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent}); err != nil {
 		return err
 	}
+	fmt.Fprintf(out, "%s\n", formatLabel("mode", string(connectionModeDirect)))
 	if shouldPersistTierOverrides && !*dryRun {
 		if err := persistAppConfig(); err != nil {
 			return err
@@ -241,7 +257,7 @@ func switchFlagNeedsValue(arg string) bool {
 		return false
 	}
 	switch arg {
-	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-opencode-dir", "--opencode-dir", "-agent", "--agent", "-haiku", "--haiku", "-sonnet", "--sonnet", "-opus", "--opus", "-subagent", "--subagent", "-shell", "--shell":
+	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-opencode-dir", "--opencode-dir", "-agent", "--agent", "-via", "--via", "-haiku", "--haiku", "-sonnet", "--sonnet", "-opus", "--opus", "-subagent", "--subagent", "-shell", "--shell":
 		return true
 	default:
 		return false

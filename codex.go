@@ -329,7 +329,7 @@ func removeCodexManagedTOML(existing string, removeTopLevelModel bool, removeTop
 		if name, ok := tomlSectionName(line); ok {
 			section = name
 			skipSection = false
-			for _, p := range []string{"ollama-cloud", "openrouter", "deepseek", "kimi-coding"} {
+			for _, p := range providerNamesForAgent(agentCodex, cfg, false, false) {
 				pName := codexTOMLProviderName(p)
 				if name == "model_providers."+pName || strings.HasPrefix(name, "model_providers."+pName+".") {
 					skipSection = true
@@ -374,14 +374,17 @@ func isManagedCodexModel(model string, cfg *AppConfig) bool {
 	if model == "" {
 		return false
 	}
-	for _, fn := range []func() ProviderPreset{codexDeepSeekPreset, codexOllamaCloudPreset, codexOpenRouterPreset, codexKimiCodingPreset} {
-		preset := fn()
+	for _, p := range providerNamesForAgent(agentCodex, cfg, false, false) {
+		preset, err := presetForAgentDirectProtocol(agentCodex, p)
+		if err != nil {
+			continue
+		}
 		if model == preset.Model || containsString(preset.Models, model) {
 			return true
 		}
 	}
 	if cfg != nil {
-		for _, p := range []string{"ollama-cloud", "openrouter", "deepseek", "kimi-coding"} {
+		for _, p := range providerNamesForAgent(agentCodex, cfg, false, false) {
 			if strings.TrimSpace(codexProviderConfig(cfg, p).Model) == model {
 				return true
 			}
