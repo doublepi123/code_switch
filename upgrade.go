@@ -552,7 +552,7 @@ func writeExtractedBinary(src io.Reader, dest string) error {
 		file.Close()
 		return err
 	}
-	if written >= maxExtractedBinarySize {
+	if written > maxExtractedBinarySize {
 		file.Close()
 		return fmt.Errorf("extracted binary exceeds maximum size of %d bytes; possible decompression bomb", maxExtractedBinarySize)
 	}
