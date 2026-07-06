@@ -195,6 +195,13 @@ func configureTemporaryProxyRoute(agent AgentName, provider, model string, plan 
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return "", ProxyRuntimeState{}, nil, readErr
 	}
+	// Save the original codex config before ensureProxyDaemon may trigger
+	// refreshProxyClientConfigs which writes to the real ~/.codex/config.toml.
+	originalCodexBytes, codexReadErr := os.ReadFile(codexConfigPath(""))
+	originalCodexExists := codexReadErr == nil
+	if codexReadErr != nil && !os.IsNotExist(codexReadErr) {
+		return "", ProxyRuntimeState{}, nil, codexReadErr
+	}
 	if cfg.Proxy.Routes == nil {
 		cfg.Proxy.Routes = map[string]ProxyRouteConfig{}
 	}
@@ -228,15 +235,41 @@ func configureTemporaryProxyRoute(agent AgentName, provider, model string, plan 
 			}
 			restored = &AppConfig{Providers: map[string]StoredProvider{}}
 		}
+		var proxyErr error
 		if wasRunning {
-			_, err := ensureProxyDaemon(restored)
-			return err
+			_, proxyErr = ensureProxyDaemon(restored)
+		} else {
+			proxyErr = stopProxyDaemon()
 		}
-		return stopProxyDaemon()
+		// Restore the original codex config AFTER proxy operations.
+		// ensureProxyDaemon may trigger refreshProxyClientConfigs which
+		// writes to the real ~/.codex/config.toml, so we must restore
+		// the original content last.
+		codexCfgPath := codexConfigPath("")
+		if originalCodexExists {
+			if err := writeTextAtomic(codexCfgPath, string(originalCodexBytes), 0o644); err != nil && proxyErr == nil {
+				return err
+			}
+		} else {
+			if err := os.Remove(codexCfgPath); err != nil && !os.IsNotExist(err) && proxyErr == nil {
+				return err
+			}
+		}
+		return proxyErr
 	}
 	if _, err := ensureProxyDaemon(cfg); err != nil {
 		_ = cleanup()
 		return "", ProxyRuntimeState{}, nil, err
+	}
+	// Restore the original codex config immediately after ensureProxyDaemon.
+	// The proxy daemon does not need ~/.codex/config.toml — it only reads
+	// the route table from the app config. Restoring here prevents the
+	// launch from modifying the user's local codex config even temporarily.
+	codexCfgPath := codexConfigPath("")
+	if originalCodexExists {
+		_ = writeTextAtomic(codexCfgPath, string(originalCodexBytes), 0o644)
+	} else {
+		_ = os.Remove(codexCfgPath)
 	}
 	state, err := readProxyRuntimeState()
 	if err != nil {
