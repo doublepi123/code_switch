@@ -57,6 +57,7 @@ type ProxyRoute struct {
 	ModelMappings    map[string]string
 	UpstreamProtocol ProviderProtocol
 	UpstreamBaseURL  string
+	UpstreamAuthEnv  string
 	LocalToken       string
 }
 
@@ -252,6 +253,10 @@ func serveSameProtocolPassthrough(w http.ResponseWriter, r *http.Request, route 
 		writeProxyError(w, http.StatusBadRequest, "model must not be empty and no route model or \"default\" mapping is configured")
 		return true
 	}
+	if err := validatePassthroughTools(upstreamAdapter.Name(), body); err != nil {
+		writeProxyError(w, http.StatusBadRequest, err.Error())
+		return true
+	}
 	upstreamBody, err := rewritePassthroughModel(body, upstreamModel)
 	if err != nil {
 		writeProxyError(w, http.StatusBadRequest, err.Error())
@@ -259,6 +264,46 @@ func serveSameProtocolPassthrough(w http.ResponseWriter, r *http.Request, route 
 	}
 	serveRawProtocolUpstream(w, r, route, providerKey, upstreamBody, upstreamAdapter)
 	return true
+}
+
+func validatePassthroughTools(protocol ProviderProtocol, body []byte) error {
+	switch protocol {
+	case protocolOpenAIChat:
+		var raw struct {
+			Tools []struct {
+				Type     string `json:"type"`
+				Function *struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return fmt.Errorf("passthrough request: parse tools: %w", err)
+		}
+		for i, tool := range raw.Tools {
+			if tool.Type != "" && tool.Type != "function" {
+				continue
+			}
+			if tool.Function == nil || strings.TrimSpace(tool.Function.Name) == "" {
+				return fmt.Errorf("passthrough request: tool %d function.name must not be empty", i)
+			}
+		}
+	case protocolAnthropicMessages:
+		var raw struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return fmt.Errorf("passthrough request: parse tools: %w", err)
+		}
+		for i, tool := range raw.Tools {
+			if strings.TrimSpace(tool.Name) == "" {
+				return fmt.Errorf("passthrough request: tool %d name must not be empty", i)
+			}
+		}
+	}
+	return nil
 }
 
 func passthroughRequestModelAndStream(body []byte) (string, bool, error) {
@@ -300,6 +345,7 @@ func serveRawProtocolUpstream(w http.ResponseWriter, r *http.Request, route Prox
 		return
 	}
 	upstreamAdapter.ConfigureUpstreamRequest(req, providerKey)
+	configureProxyUpstreamAuth(req, route, upstreamAdapter.Name(), providerKey)
 	resp, err := proxyHTTPClient.Do(req)
 	if err != nil {
 		writeProxyError(w, http.StatusBadGateway,
@@ -359,6 +405,7 @@ func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRo
 		return
 	}
 	upstreamAdapter.ConfigureUpstreamRequest(req, providerKey)
+	configureProxyUpstreamAuth(req, route, upstreamAdapter.Name(), providerKey)
 	if ir.Stream {
 		serveStreamingProtocolUpstream(w, r, req, inboundAdapter, upstreamAdapter)
 		return
@@ -395,6 +442,38 @@ func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRo
 		return
 	}
 	inboundAdapter.WriteClientResponse(w, irResp, ir.Stream)
+}
+
+func configureProxyUpstreamAuth(req *http.Request, route ProxyRoute, protocol ProviderProtocol, providerKey string) {
+	if strings.TrimSpace(providerKey) == "" {
+		return
+	}
+	if protocol == protocolAnthropicMessages {
+		if proxyRouteAuthEnv(route) == "" {
+			req.Header.Set("x-api-key", providerKey)
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+providerKey)
+		return
+	}
+	if req.Header.Get("Authorization") == "" {
+		req.Header.Del("Authorization")
+		req.Header.Set("Authorization", "Bearer "+providerKey)
+	}
+}
+
+func proxyRouteAuthEnv(route ProxyRoute) string {
+	if authEnv := strings.TrimSpace(route.UpstreamAuthEnv); authEnv != "" {
+		return authEnv
+	}
+	preset, ok := providerPresets[canonicalProviderName(route.Provider)]
+	if !ok {
+		return "ANTHROPIC_AUTH_TOKEN"
+	}
+	if endpoint, ok := preset.presetEndpoint(route.UpstreamProtocol); ok && strings.TrimSpace(endpoint.AuthEnv) != "" {
+		return strings.TrimSpace(endpoint.AuthEnv)
+	}
+	return strings.TrimSpace(preset.AuthEnv)
 }
 
 func serveStreamingProtocolUpstream(w http.ResponseWriter, r *http.Request, req *http.Request, inboundAdapter, upstreamAdapter ProtocolAdapter) {

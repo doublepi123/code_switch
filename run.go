@@ -222,14 +222,17 @@ func renderProxyCodexConfigForBaseURLWithCatalogProtocol(model, baseURL, catalog
 // fields from cfg.
 func buildProxyRoute(provider string, preset ProviderPreset, upstreamProtocol ProviderProtocol, localToken string, mappings map[string]string) ProxyRoute {
 	upstreamBaseURL := preset.BaseURL
+	upstreamAuthEnv := preset.AuthEnv
 	if endpoint, ok := preset.presetEndpoint(upstreamProtocol); ok {
 		upstreamBaseURL = endpoint.BaseURL
+		upstreamAuthEnv = endpoint.AuthEnv
 	}
 	route := ProxyRoute{
 		Provider:         provider,
 		Model:            preset.Model,
 		UpstreamProtocol: upstreamProtocol,
 		UpstreamBaseURL:  upstreamBaseURL,
+		UpstreamAuthEnv:  upstreamAuthEnv,
 		LocalToken:       localToken,
 		ModelMappings:    copyStringMap(mappings),
 	}

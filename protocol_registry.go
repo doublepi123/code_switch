@@ -139,9 +139,6 @@ func (anthropicMessagesAdapter) WriteClientResponse(w http.ResponseWriter, resp 
 func (anthropicMessagesAdapter) ConfigureUpstreamRequest(req *http.Request, providerKey string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(proxyAnthropicVersionHeader, proxyAnthropicVersionValue)
-	if providerKey != "" {
-		req.Header.Set("Authorization", "Bearer "+providerKey)
-	}
 }
 func (anthropicMessagesAdapter) CanProxyFrom(inbound ProtocolAdapter) (bool, string) {
 	return true, ""

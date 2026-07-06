@@ -153,6 +153,57 @@ func TestAnthropicRequestToIRRejectsToolDefinitionMissingName(t *testing.T) {
 	}
 }
 
+func TestAnthropicToolsToOpenAIChatPreservesFunctionName(t *testing.T) {
+	body := []byte(`{"model":"claude-model","max_tokens":32,"tools":[{"name":"lookup","description":"Lookup data","input_schema":{"type":"object","properties":{"q":{"type":"string"}}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	req, err := anthropicRequestToIR(body)
+	if err != nil {
+		t.Fatalf("anthropicRequestToIR returned error: %v", err)
+	}
+	req.Model = "deepseek-chat"
+	out, err := irToOpenAIChatRequest(req)
+	if err != nil {
+		t.Fatalf("irToOpenAIChatRequest returned error: %v", err)
+	}
+
+	var got openAIChatRequest
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal openai chat request: %v\nbody: %s", err, out)
+	}
+	if len(got.Tools) != 1 {
+		t.Fatalf("tools len = %d, want 1\nbody: %s", len(got.Tools), out)
+	}
+	if got.Tools[0].Function.Name != "lookup" {
+		t.Fatalf("tools[0].function.name = %q, want lookup\nbody: %s", got.Tools[0].Function.Name, out)
+	}
+}
+
+func TestAnthropicBuiltInToolToOpenAIChatPreservesFunctionName(t *testing.T) {
+	body := []byte(`{"model":"claude-model","max_tokens":32,"tools":[{"type":"text_editor_20250124","name":"str_replace_editor"}],"messages":[{"role":"user","content":"edit file"}]}`)
+	req, err := anthropicRequestToIR(body)
+	if err != nil {
+		t.Fatalf("anthropicRequestToIR returned error: %v", err)
+	}
+	req.Model = "deepseek-chat"
+	out, err := irToOpenAIChatRequest(req)
+	if err != nil {
+		t.Fatalf("irToOpenAIChatRequest returned error: %v", err)
+	}
+
+	var got openAIChatRequest
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal openai chat request: %v\nbody: %s", err, out)
+	}
+	if len(got.Tools) != 1 {
+		t.Fatalf("tools len = %d, want 1\nbody: %s", len(got.Tools), out)
+	}
+	if got.Tools[0].Function.Name != "str_replace_editor" {
+		t.Fatalf("tools[0].function.name = %q, want str_replace_editor\nbody: %s", got.Tools[0].Function.Name, out)
+	}
+	if len(got.Tools[0].Function.Parameters) == 0 {
+		t.Fatalf("tools[0].function.parameters missing\nbody: %s", out)
+	}
+}
+
 func TestOpenAIChatToolsCallsAndResultsRoundTripIR(t *testing.T) {
 	body := []byte(`{"model":"gpt","tools":[{"type":"function","function":{"name":"lookup","description":"Lookup data","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"hi\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"result"}]}`)
 	req, err := openAIChatRequestToIR(body)

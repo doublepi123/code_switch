@@ -28,6 +28,7 @@ func startAnthropicUpstream(t *testing.T, wantStatus int, respBody string) (*htt
 		cap.path = r.URL.Path
 		cap.method = r.Method
 		cap.auth = r.Header.Get("Authorization")
+		cap.xAPIKey = r.Header.Get("x-api-key")
 		cap.contentType = r.Header.Get("Content-Type")
 		cap.anthropicVersion = r.Header.Get(proxyAnthropicVersionHeader)
 		cap.body, _ = io.ReadAll(r.Body)
@@ -70,9 +71,36 @@ type upstreamCapture struct {
 	path             string
 	method           string
 	auth             string
+	xAPIKey          string
 	contentType      string
 	anthropicVersion string
 	body             []byte
+}
+
+func TestProxyHandlerAnthropicUpstreamUsesXAPIKeyWhenProviderHasNoAuthEnv(t *testing.T) {
+	upstream, cap := startAnthropicUpstream(t, 0, "")
+	handler := newProxyHandler(ProxyRoute{
+		Provider:         "opencode-go",
+		Model:            "minimax-m2.7",
+		UpstreamProtocol: protocolAnthropicMessages,
+		UpstreamBaseURL:  upstream.URL,
+		LocalToken:       "local-token",
+	}, "provider-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude","max_tokens":16,"messages":[{"role":"user","content":"Say hi"}]}`))
+	req.Header.Set("Authorization", "Bearer local-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200\nbody: %s", rec.Code, rec.Body.String())
+	}
+	if cap.auth != "" {
+		t.Fatalf("upstream authorization = %q, want empty", cap.auth)
+	}
+	if cap.xAPIKey != "provider-key" {
+		t.Fatalf("upstream x-api-key = %q, want provider-key", cap.xAPIKey)
+	}
 }
 
 func TestProxyHandlerHappyPath(t *testing.T) {

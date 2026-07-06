@@ -156,6 +156,32 @@ func TestProxySameProtocolPassthroughRewritesOnlyModelAndAuth(t *testing.T) {
 	}
 }
 
+func TestProxySameProtocolPassthroughRejectsOpenAIChatToolMissingFunctionName(t *testing.T) {
+	upstreamCalled := false
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"unexpected"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler := newProxyHandler(ProxyRoute{Provider: "chat-upstream", Model: "upstream-model", UpstreamProtocol: protocolOpenAIChat, UpstreamBaseURL: upstream.URL, LocalToken: "local-token"}, "provider-key")
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"client-model","tools":[{"type":"function","function":{"description":"Lookup","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"Say hi"}]}`))
+	req.Header.Set("Authorization", "Bearer local-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400\nbody: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamCalled {
+		t.Fatal("upstream was called; invalid passthrough request should be rejected locally")
+	}
+	if !strings.Contains(rec.Body.String(), "tool") || !strings.Contains(rec.Body.String(), "name") {
+		t.Fatalf("error body = %q, want mention tool name", rec.Body.String())
+	}
+}
+
 func TestProxySameProtocolPassthroughResponsesAndAnthropic(t *testing.T) {
 	for _, tt := range []struct {
 		name             string
