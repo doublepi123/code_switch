@@ -117,7 +117,7 @@ func TestProxyHandlerOpenAIChatInboundToAnthropicUpstream(t *testing.T) {
 
 func TestProxySameProtocolPassthroughRewritesOnlyModelAndAuth(t *testing.T) {
 	cap := &upstreamCapture{}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.auth = r.Header.Get("Authorization")
 		cap.contentType = r.Header.Get("Content-Type")
@@ -181,7 +181,7 @@ func TestProxySameProtocolPassthroughResponsesAndAnthropic(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cap := &upstreamCapture{}
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				cap.path = r.URL.Path
 				cap.auth = r.Header.Get("Authorization")
 				cap.anthropicVersion = r.Header.Get(proxyAnthropicVersionHeader)

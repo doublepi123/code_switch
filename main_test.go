@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -48,6 +49,19 @@ func testHTTPResponse(req *http.Request, statusCode int, body []byte) *http.Resp
 		Body:       io.NopCloser(bytes.NewReader(body)),
 		Request:    req,
 	}
+}
+
+func newHTTPTestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skipping test: cannot listen on localhost: %v", err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+	return server
 }
 
 func TestRunVersion(t *testing.T) {
@@ -203,7 +217,7 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 	// (performUpgrade now fails closed when no checksum is available).
 	archiveChecksum := sha256Sum(t, archiveBytes)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v9.9.9", http.StatusFound)
 			return
@@ -334,7 +348,7 @@ func TestPerformUpgradeSkipsWhenAlreadyLatest(t *testing.T) {
 	})
 
 	assetRequested := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v2.0.0", http.StatusFound)
 			return
@@ -3357,7 +3371,7 @@ func makeZipArchive(t *testing.T, name, content string) []byte {
 }
 
 func TestTestProviderOK(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("expected POST, got %s", r.Method)
 		}
@@ -3392,7 +3406,7 @@ func TestTestProviderOK(t *testing.T) {
 }
 
 func TestTestProviderAuthError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":{"type":"AuthError","message":"Invalid API key"}}`))
@@ -3418,7 +3432,7 @@ func TestTestProviderAuthError(t *testing.T) {
 }
 
 func TestTestProviderNotFound(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -3442,7 +3456,7 @@ func TestTestProviderNotFound(t *testing.T) {
 }
 
 func TestTestProviderServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`internal error`))
 	}))
@@ -3467,7 +3481,7 @@ func TestTestProviderServerError(t *testing.T) {
 }
 
 func TestTestProviderNetworkError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	}))
 	serverURL := server.URL
 	server.Close()
@@ -3491,7 +3505,7 @@ func TestTestProviderNetworkError(t *testing.T) {
 }
 
 func TestTestProviderBearerAuth(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if auth != "Bearer sk-deepseek" {
 			t.Fatalf("expected Authorization: Bearer header, got %q", auth)
@@ -3519,7 +3533,7 @@ func TestTestProviderBearerAuth(t *testing.T) {
 }
 
 func TestTestProviderReadErrorHandled(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "100")
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte(`{"error":"partial`))
@@ -3559,7 +3573,7 @@ func TestCmdTestMissingKeyError(t *testing.T) {
 }
 
 func TestProbeOneForAllOK(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -3715,7 +3729,7 @@ func TestCmdTestIntegration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -3750,7 +3764,7 @@ func TestCmdTestWithStoredKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -3928,7 +3942,7 @@ func TestCmdTestCustomPath(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	customPathRequested := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/v1/messages") {
 			t.Fatal("expected custom path, not /v1/messages")
 		}
@@ -4076,7 +4090,7 @@ func TestValidateSHA256FileNotFound(t *testing.T) {
 
 func TestDownloadChecksumContentOK(t *testing.T) {
 	expectedContent := "abc123def456  code-switch-linux-amd64.tar.gz\n"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(expectedContent))
 	}))
 	defer server.Close()
@@ -4091,7 +4105,7 @@ func TestDownloadChecksumContentOK(t *testing.T) {
 }
 
 func TestDownloadChecksumContentHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -4103,7 +4117,7 @@ func TestDownloadChecksumContentHTTPError(t *testing.T) {
 }
 
 func TestVerifyAssetChecksumNoFiles(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -4125,7 +4139,7 @@ func TestVerifyAssetChecksumNoFiles(t *testing.T) {
 
 func TestVerifyAssetChecksumWithSha256File(t *testing.T) {
 	shaHash := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, ".sha256") {
 			_, _ = w.Write([]byte(shaHash + "\n"))
 			return
@@ -4150,7 +4164,7 @@ func TestVerifyAssetChecksumWithSha256File(t *testing.T) {
 
 func TestVerifyAssetChecksumWithChecksumsTxt(t *testing.T) {
 	shaHash := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "checksums.txt") {
 			fmt.Fprintf(w, "%s  test.tar.gz\n1234567890abcdef  other.file\n", shaHash)
 			return
@@ -4174,7 +4188,7 @@ func TestVerifyAssetChecksumWithChecksumsTxt(t *testing.T) {
 }
 
 func TestVerifyAssetChecksumMismatch(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, ".sha256") {
 			_, _ = w.Write([]byte("0000000000000000000000000000000000000000000000000000000000000000\n"))
 			return
@@ -4199,7 +4213,7 @@ func TestVerifyAssetChecksumMismatch(t *testing.T) {
 }
 
 func TestVerifyAssetChecksumAssetNotFoundInChecksumsTxt(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "checksums.txt") {
 			_, _ = w.Write([]byte("abc123  other-file.tar.gz\n"))
 			return
@@ -4380,7 +4394,7 @@ func TestCurrentModelLabel(t *testing.T) {
 // ---- cmdUpgrade tests ----
 
 func TestCmdUpgradeNoArgs(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
 			return
@@ -4415,7 +4429,7 @@ func TestCmdUpgradeExtraArgs(t *testing.T) {
 }
 
 func TestCmdUpgradeDryRun(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
 			return
@@ -4447,7 +4461,7 @@ func TestCmdUpgradeDryRun(t *testing.T) {
 // ---- latestReleaseTag tests ----
 
 func TestLatestReleaseTag(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v3.0.0", http.StatusFound)
 			return
@@ -4469,7 +4483,7 @@ func TestLatestReleaseTag(t *testing.T) {
 }
 
 func TestLatestReleaseTagHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
@@ -4481,7 +4495,7 @@ func TestLatestReleaseTagHTTPError(t *testing.T) {
 }
 
 func TestLatestReleaseTagNoTagInURL(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/latest", http.StatusFound)
 			return
@@ -4515,7 +4529,7 @@ func TestTagFromReleaseURLNoTag(t *testing.T) {
 
 func TestDownloadFileSuccess(t *testing.T) {
 	expected := "test-file-content"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(expected))
 	}))
 	defer server.Close()
@@ -4535,7 +4549,7 @@ func TestDownloadFileSuccess(t *testing.T) {
 }
 
 func TestDownloadFileHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -4582,7 +4596,7 @@ func TestPerformUpgradeDryRun(t *testing.T) {
 	version = "dev"
 	t.Cleanup(func() { version = oldVersion })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v1.0.0", http.StatusFound)
 			return
@@ -4899,7 +4913,7 @@ func TestRunWithIOTest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -4966,7 +4980,7 @@ func TestPerformUpgradeWithTag(t *testing.T) {
 	archiveBytes := makeTarGzArchive(t, "cs", "tagged-binary")
 	archiveChecksum := sha256Sum(t, archiveBytes)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/"+asset+".sha256") {
 			fmt.Fprintf(w, "%s\n", archiveChecksum)
 			return
@@ -5088,7 +5102,7 @@ func TestCurrentConfiguredProviderCorruptSettings(t *testing.T) {
 
 func TestTestProviderDefaultPath(t *testing.T) {
 	var requestedPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestedPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -5216,7 +5230,7 @@ func TestCmdTestExtraArgs(t *testing.T) {
 // ---- cmdUpgrade with custom repo ----
 
 func TestCmdUpgradeCustomRepo(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/other/repo/releases/tag/v99.0.0", http.StatusFound)
 			return
@@ -5257,7 +5271,7 @@ func TestDownloadChecksumContentNetworkError(t *testing.T) {
 
 func TestVerifyAssetChecksumDotPrefix(t *testing.T) {
 	shaHash := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "checksums.txt") {
 			fmt.Fprintf(w, "%s  ./test.tar.gz\n", shaHash)
 			return
@@ -5284,7 +5298,7 @@ func TestVerifyAssetChecksumDotPrefix(t *testing.T) {
 
 func TestTestProviderCustomExactPath(t *testing.T) {
 	var receivedPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -5511,7 +5525,7 @@ func (e *errorReader) Read(p []byte) (int, error) {
 // ---- downloadFile error paths ----
 
 func TestDownloadFileMkdirError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -5534,7 +5548,7 @@ func TestDownloadFileLocalhostRefused(t *testing.T) {
 // ---- downloadChecksumContent read error ----
 
 func TestDownloadChecksumContentReadError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "100")
 		// Write less than Content-Length so the client hits EOF before the
 		// declared length, yielding io.ErrUnexpectedEOF from io.ReadAll.
@@ -5552,7 +5566,7 @@ func TestDownloadChecksumContentReadError(t *testing.T) {
 }
 
 func TestDownloadChecksumContent500(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
@@ -5566,7 +5580,7 @@ func TestDownloadChecksumContent500(t *testing.T) {
 // ---- latestReleaseTag errors ----
 
 func TestLatestReleaseTag404(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -5584,7 +5598,7 @@ func TestPerformUpgradeDefaultValues(t *testing.T) {
 	version = "v2.0.0"
 	t.Cleanup(func() { version = oldVersion })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/doublepi123/code_switch/releases/tag/v2.0.0", http.StatusFound)
 			return
@@ -5628,7 +5642,7 @@ func TestPerformUpgradeNilClient(t *testing.T) {
 	version = "v2.0.0"
 	t.Cleanup(func() { version = oldVersion })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v2.0.0", http.StatusFound)
 			return
@@ -5658,7 +5672,7 @@ func TestPerformUpgradeNilOut(t *testing.T) {
 	version = "v2.0.0"
 	t.Cleanup(func() { version = oldVersion })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v2.0.0", http.StatusFound)
 			return
@@ -5687,7 +5701,7 @@ func TestPerformUpgradeLatestReleaseTagError(t *testing.T) {
 	version = "dev"
 	t.Cleanup(func() { version = oldVersion })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
@@ -5718,7 +5732,7 @@ func TestPerformUpgradeWithVersion(t *testing.T) {
 	archiveBytes := makeTarGzArchive(t, "cs", "v1-binary")
 	archiveChecksum := sha256Sum(t, archiveBytes)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/"+asset+".sha256") {
 			fmt.Fprintf(w, "%s\n", archiveChecksum)
 			return
@@ -6289,7 +6303,7 @@ func TestShouldSkipUpgradeSame(t *testing.T) {
 // ---- cmdUpgrade with default repo ----
 
 func TestCmdUpgradeDefaultRepo(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
 			return
@@ -6357,7 +6371,7 @@ func TestResolveProviderAndKeyStoredKey(t *testing.T) {
 // ---- cmdUpgrade with install path ----
 
 func TestCmdUpgradeInstallPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			http.Redirect(w, r, "/owner/repo/releases/tag/v99.0.0", http.StatusFound)
 			return
@@ -6402,7 +6416,7 @@ func TestPerformUpgradeBinaryNameCs(t *testing.T) {
 	archiveBytes := makeTarGzArchive(t, "cs", "correct-binary-name")
 	archiveChecksum := sha256Sum(t, archiveBytes)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/"+asset+".sha256") {
 			fmt.Fprintf(w, "%s\n", archiveChecksum)
 			return
@@ -7510,7 +7524,7 @@ func TestRestoreCodexConfigDryRun(t *testing.T) {
 }
 
 func TestTestCodexProviderHTTPTest(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"id":"resp_test"}`))
 	}))
@@ -7531,7 +7545,7 @@ func TestTestCodexProviderHTTPTest(t *testing.T) {
 }
 
 func TestTestCodexProviderHTTPTestFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid key"}`))
 	}))

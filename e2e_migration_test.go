@@ -60,7 +60,7 @@ func startResponsesUpstream(t *testing.T, respBody string) (*httptest.Server, *e
 		respBody = `{"id":"resp_1","object":"response","status":"completed","model":"gpt-test","output_text":"Hi","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`
 	}
 	cap := &e2eMigrationCapture{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.method = r.Method
 		cap.auth = r.Header.Get("Authorization")
@@ -81,7 +81,7 @@ func startResponsesUpstream(t *testing.T, respBody string) (*httptest.Server, *e
 func startStreamingUpstream(t *testing.T, contentType, fixture string) (*httptest.Server, *e2eMigrationCapture) {
 	t.Helper()
 	cap := &e2eMigrationCapture{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.method = r.Method
 		cap.auth = r.Header.Get("Authorization")

@@ -24,7 +24,7 @@ func startAnthropicUpstream(t *testing.T, wantStatus int, respBody string) (*htt
 		respBody = `{"id":"msg_1","type":"message","role":"assistant","model":"MiniMax-M3","content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`
 	}
 	cap := &upstreamCapture{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.method = r.Method
 		cap.auth = r.Header.Get("Authorization")
@@ -49,7 +49,7 @@ func startOpenAIChatUpstream(t *testing.T, wantStatus int, respBody string) (*ht
 		respBody = `{"id":"chatcmpl_1","object":"chat.completion","model":"glm-5.2","choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`
 	}
 	cap := &upstreamCapture{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.method = r.Method
 		cap.auth = r.Header.Get("Authorization")
@@ -191,7 +191,7 @@ func TestProxyHandlerOpenAIChatUpstream(t *testing.T) {
 
 func TestProxyHandlerClaudeMessagesToOpenAIResponsesUpstream(t *testing.T) {
 	cap := &upstreamCapture{}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.method = r.Method
 		cap.auth = r.Header.Get("Authorization")
@@ -235,7 +235,7 @@ func TestProxyHandlerClaudeMessagesToOpenAIResponsesUpstream(t *testing.T) {
 
 func TestProxyHandlerClaudeMessagesToOpenAIResponsesNonStreamingUpstream(t *testing.T) {
 	cap := &upstreamCapture{}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.body, _ = io.ReadAll(r.Body)
 		_ = r.Body.Close()
@@ -274,7 +274,7 @@ func TestProxyHandlerClaudeMessagesToOpenAIResponsesNonStreamingUpstream(t *test
 
 func TestProxyHandlerClaudeMessagesRejectsUnsupportedResponsesUpstreamPathVersion(t *testing.T) {
 	cap := &upstreamCapture{}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.body, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -438,7 +438,7 @@ func TestProxyHandlerRejectsWrongMethod(t *testing.T) {
 // Responses SSE shape one event at a time.
 func TestProxyHandlerStreamTrueReturnsSSE(t *testing.T) {
 	cap := &upstreamCapture{}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.path = r.URL.Path
 		cap.body, _ = io.ReadAll(r.Body)
 		_ = r.Body.Close()
