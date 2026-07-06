@@ -234,7 +234,7 @@ func TestSSEReaderRejectsOversizedEvent(t *testing.T) {
 }
 
 func TestProxyHandlerStreamsUpstreamSSEToClientProtocol(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body anthropicRequestBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode upstream body: %v", err)
@@ -328,7 +328,7 @@ func TestOpenAIChatStreamUsageOnlyChunkEncodesUsageBeforeStop(t *testing.T) {
 
 func TestProxyStreamingRequestContextCancelsUpstream(t *testing.T) {
 	cancelled := make(chan struct{})
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		if f, ok := w.(http.Flusher); ok {

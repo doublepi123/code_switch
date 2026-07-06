@@ -91,7 +91,7 @@ func TestOpenAIChatAdapterWriteClientResponseReturnsChatCompletion(t *testing.T)
 }
 
 func TestProxyHandlerUsesInjectedRegistryForInboundAndUpstreamDiscovery(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/custom" {
 			t.Fatalf("upstream path = %q, want /v1/custom", r.URL.Path)
 		}

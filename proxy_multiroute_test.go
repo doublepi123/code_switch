@@ -100,7 +100,7 @@ func TestPrepareProxyServeGeneratesAndPersistsMissingRouteTokens(t *testing.T) {
 func TestProxyMultiRouteHandlerBearerTokenDispatch(t *testing.T) {
 	codexUpstream, codexCap := startAnthropicUpstream(t, 0, "")
 	claudeCap := &upstreamCapture{}
-	claudeUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	claudeUpstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claudeCap.path = r.URL.Path
 		claudeCap.auth = r.Header.Get("Authorization")
 		claudeCap.body, _ = io.ReadAll(r.Body)
