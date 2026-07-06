@@ -760,21 +760,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			}
 			modelName := model
 			modelList.AddItem(label, "", 0, func() {
-				preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
-				if err != nil {
-					ts.resultErr = err
-					ts.app.Stop()
-					return
-				}
-				if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
-					ts.showKeyFormWithCancel(provider, backPage, func() {
-						ts.finishSelection(provider, modelName)
-					}, func() {
-						ts.showModels(provider, backPage)
-					})
-					return
-				}
-				ts.finishSelection(provider, modelName)
+				ts.selectModelForAction(provider, backPage, modelName)
 			})
 		}
 		modelList.AddItem("Custom model...", "", 0, func() {
@@ -851,7 +837,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 				} else {
 					model = model + "[1m]"
 				}
-				ts.finishSelection(provider, model)
+				ts.selectModelForAction(provider, backPage, model)
 			}
 			return nil
 		}
@@ -880,7 +866,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	})
 
 	help := tview.NewTextView()
-	help.SetText("Enter apply   / filter   c custom   k edit key   1 toggle 1m   r refresh   q/esc/← back")
+	help.SetText("Enter actions   / filter   c custom   k edit key   1 toggle 1m   r refresh   q/esc/← back")
 
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
@@ -890,6 +876,114 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	page.AddItem(help, 1, 0, false)
 	ts.pages.AddAndSwitchToPage("models", page, true)
 	ts.app.SetFocus(modelList)
+}
+
+type modelSelectionActionSpec struct {
+	Label    string
+	Shortcut rune
+}
+
+func modelSelectionActionSpecs() []modelSelectionActionSpec {
+	return []modelSelectionActionSpec{
+		{Label: actionLabelLaunch, Shortcut: 'l'},
+		{Label: actionLabelSetDefault, Shortcut: 's'},
+		{Label: actionLabelBack, Shortcut: 'b'},
+	}
+}
+
+func modelSelectionActionSpecsForAgent(agent AgentName) []modelSelectionActionSpec {
+	if agent == agentClaude {
+		return []modelSelectionActionSpec{
+			{Label: actionLabelSetDefault, Shortcut: 's'},
+			{Label: actionLabelBack, Shortcut: 'b'},
+		}
+	}
+	return modelSelectionActionSpecs()
+}
+
+func modelSelectionActionLabels() []string {
+	specs := modelSelectionActionSpecs()
+	labels := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		labels = append(labels, spec.Label)
+	}
+	return labels
+}
+
+func (ts *tuiState) selectModelForAction(provider, backPage, model string) {
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+	if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
+		ts.showKeyFormWithCancel(provider, backPage, func() {
+			ts.showModelActions(provider, model, backPage)
+		}, func() {
+			ts.showModels(provider, backPage)
+		})
+		return
+	}
+	ts.showModelActions(provider, model, backPage)
+}
+
+func (ts *tuiState) showModelActions(provider, model, backPage string) {
+	actions := tview.NewList()
+	actions.ShowSecondaryText(false)
+	actions.SetBorder(true)
+	actions.SetTitle(" Model Actions ")
+	for _, spec := range modelSelectionActionSpecsForAgent(ts.agent) {
+		spec := spec
+		actions.AddItem(spec.Label, "", spec.Shortcut, func() {
+			ts.runModelSelectionAction(spec.Label, provider, model, backPage)
+		})
+	}
+	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+			ts.runModelSelectionAction(actionLabelBack, provider, model, backPage)
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q':
+			ts.runModelSelectionAction(actionLabelBack, provider, model, backPage)
+			return nil
+		case ts.agent != agentClaude && (event.Rune() == 'l' || event.Rune() == 'L'):
+			ts.runModelSelectionAction(actionLabelLaunch, provider, model, backPage)
+			return nil
+		case event.Rune() == 's' || event.Rune() == 'S':
+			ts.runModelSelectionAction(actionLabelSetDefault, provider, model, backPage)
+			return nil
+		}
+		return event
+	})
+
+	help := tview.NewTextView()
+	helpText := "s set as default   b/esc/q back"
+	if ts.agent != agentClaude {
+		helpText = "l launch   " + helpText
+	}
+	help.SetText(fmt.Sprintf("Provider: %s  |  Model: %s  |  %s", providerTitle(provider, ts.cfg), model, helpText))
+
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(help, 1, 0, false)
+	page.AddItem(actions, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("model-actions", page, true)
+	ts.app.SetFocus(actions)
+}
+
+func (ts *tuiState) runModelSelectionAction(actionLabel, provider, model, backPage string) {
+	switch actionLabel {
+	case actionLabelLaunch:
+		if ts.agent == agentClaude {
+			return
+		}
+		ts.finishLaunch(provider, model)
+	case actionLabelSetDefault:
+		ts.finishSelection(provider, model)
+	case actionLabelBack:
+		ts.showModels(provider, backPage)
+	}
 }
 
 func (ts *tuiState) showKeyForm(provider, backPage string, onSave func()) {
