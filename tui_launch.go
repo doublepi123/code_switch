@@ -49,37 +49,39 @@ func launchAgentWithConfig(agent AgentName, provider, modelOverride, apiKey stri
 		return err
 	}
 	plan = adjustLaunchConnectionPlan(agent, plan, preset)
-	pairs, cleanup, err := launchEnvPairsForPlan(agent, provider, preset, plan, apiKey, cfg, configPath)
+	pairs, state, cleanup, err := launchEnvPairsForPlan(agent, provider, preset, plan, apiKey, cfg, configPath)
 	if err != nil {
 		return err
 	}
 	var cleanups []func() error
+	runCleanups := func(runErr error) error {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			if err := cleanups[i](); err != nil && runErr == nil {
+				runErr = err
+			}
+		}
+		return runErr
+	}
 	if cleanup != nil {
 		cleanups = append(cleanups, cleanup)
 	}
 	if agent == agentCodex {
-		codexHome, codexCleanup, err := prepareTemporaryCodexHome(provider, preset, plan, cfg)
+		codexHome, codexCleanup, err := prepareTemporaryCodexHome(provider, preset, plan, state, cfg)
 		if err != nil {
-			return err
+			return runCleanups(err)
 		}
 		cleanups = append(cleanups, func() error { codexCleanup(); return nil })
 		pairs = append(pairs, envPair{Key: "CODEX_HOME", Value: codexHome})
 	}
 	bin, err := lookPath(string(agent))
 	if err != nil {
-		return fmt.Errorf("find %s in PATH: %w", agent, err)
+		return runCleanups(fmt.Errorf("find %s in PATH: %w", agent, err))
 	}
 	inv := launchInvocation{Agent: agent, Path: bin, Env: mergeEnv(os.Environ(), pairs)}
 	if out != nil {
 		fmt.Fprintf(out, "launching %s with %s (temporary)\n", agent, provider)
 	}
-	runErr := launchCommand(inv)
-	for i := len(cleanups) - 1; i >= 0; i-- {
-		if err := cleanups[i](); err != nil && runErr == nil {
-			runErr = err
-		}
-	}
-	return runErr
+	return runCleanups(launchCommand(inv))
 }
 
 func adjustLaunchConnectionPlan(agent AgentName, plan ConnectionPlan, preset ProviderPreset) ConnectionPlan {
@@ -144,14 +146,14 @@ func launchEnvPairs(agent AgentName, preset ProviderPreset, plan ConnectionPlan,
 	}
 }
 
-func launchEnvPairsForPlan(agent AgentName, provider string, preset ProviderPreset, plan ConnectionPlan, apiKey string, cfg *AppConfig, configPath string) ([]envPair, func() error, error) {
+func launchEnvPairsForPlan(agent AgentName, provider string, preset ProviderPreset, plan ConnectionPlan, apiKey string, cfg *AppConfig, configPath string) ([]envPair, ProxyRuntimeState, func() error, error) {
 	if plan.Mode == connectionModeDirect {
 		pairs, err := launchEnvPairs(agent, preset, plan, apiKey)
-		return pairs, nil, err
+		return pairs, ProxyRuntimeState{}, nil, err
 	}
 	token, state, cleanup, err := configureTemporaryProxyRoute(agent, provider, preset.Model, plan, apiKey, cfg, configPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, ProxyRuntimeState{}, nil, err
 	}
 	proxyPreset := preset
 	proxyPreset.BaseURL = proxyBaseURL(state.Port, agent != agentClaude)
@@ -164,9 +166,9 @@ func launchEnvPairsForPlan(agent AgentName, provider string, preset ProviderPres
 	pairs, err := launchEnvPairs(agent, proxyPreset, proxyPlan, token)
 	if err != nil {
 		_ = cleanup()
-		return nil, nil, err
+		return nil, ProxyRuntimeState{}, nil, err
 	}
-	return pairs, cleanup, nil
+	return pairs, state, cleanup, nil
 }
 
 func configureTemporaryProxyRoute(agent AgentName, provider, model string, plan ConnectionPlan, apiKey string, cfg *AppConfig, configPath string) (string, ProxyRuntimeState, func() error, error) {
@@ -244,7 +246,7 @@ func configureTemporaryProxyRoute(agent AgentName, provider, model string, plan 
 	return route.Token, state, cleanup, nil
 }
 
-func prepareTemporaryCodexHome(provider string, preset ProviderPreset, plan ConnectionPlan, cfg *AppConfig) (string, func(), error) {
+func prepareTemporaryCodexHome(provider string, preset ProviderPreset, plan ConnectionPlan, state ProxyRuntimeState, cfg *AppConfig) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "code-switch-codex-*")
 	if err != nil {
 		return "", nil, err
@@ -257,10 +259,7 @@ func prepareTemporaryCodexHome(provider string, preset ProviderPreset, plan Conn
 	}
 	var rendered string
 	if plan.Mode == connectionModeProxy {
-		baseURL := strings.TrimSpace(plan.Endpoint.BaseURL)
-		if baseURL == "" {
-			baseURL = proxyBaseURLPlaceholder(true)
-		}
+		baseURL := proxyBaseURL(state.Port, true)
 		rendered = renderProxyCodexConfigForBaseURLWithCatalogProtocol(preset.Model, baseURL, "", plan.UpstreamProtocol)
 	} else {
 		rendered = applyCodexPresetTOMLWithProtocol("", preset, provider, plan.UpstreamProtocol)

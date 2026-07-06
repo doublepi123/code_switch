@@ -105,9 +105,16 @@ func TestLaunchAgentProxyRouteIsStartedAndCleanedUp(t *testing.T) {
 	defer func() { lookPath = oldLookPath }()
 
 	var launched launchInvocation
+	var codexConfig string
 	oldLaunch := launchCommand
 	launchCommand = func(inv launchInvocation) error {
 		launched = inv
+		env := envSliceToMap(inv.Env)
+		data, err := os.ReadFile(codexConfigPath(env["CODEX_HOME"]))
+		if err != nil {
+			return err
+		}
+		codexConfig = string(data)
 		return nil
 	}
 	defer func() { launchCommand = oldLaunch }()
@@ -125,6 +132,12 @@ func TestLaunchAgentProxyRouteIsStartedAndCleanedUp(t *testing.T) {
 	if !strings.HasPrefix(env["OPENAI_API_KEY"], "csproxy-route-") {
 		t.Fatalf("OPENAI_API_KEY should be route token, got %q", env["OPENAI_API_KEY"])
 	}
+	if !strings.Contains(codexConfig, `base_url = "http://127.0.0.1:18080/v1"`) {
+		t.Fatalf("temporary codex config should use local proxy base_url, got:\n%s", codexConfig)
+	}
+	if strings.Contains(codexConfig, "https://api.minimaxi.com") {
+		t.Fatalf("temporary codex config should not use upstream base_url, got:\n%s", codexConfig)
+	}
 
 	reloaded, _, err := loadAppConfig()
 	if err != nil {
@@ -134,6 +147,57 @@ func TestLaunchAgentProxyRouteIsStartedAndCleanedUp(t *testing.T) {
 		if _, ok := reloaded.Proxy.Routes[string(agentCodex)]; ok {
 			t.Fatalf("temporary codex route was not cleaned up: %#v", reloaded.Proxy.Routes)
 		}
+	}
+}
+
+func TestLaunchAgentCleansProxyRouteWhenLookPathFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{"minimax-cn": {APIKey: "sk-secret"}}}
+	configPath := filepath.Join(home, ".code-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	oldRunning, oldStart, oldStop := proxyDaemonIsRunning, startProxyDaemon, stopProxyDaemon
+	proxyDaemonIsRunning = func(cfg *AppConfig) (bool, bool, error) { return false, false, nil }
+	startProxyDaemon = func(cfg *AppConfig) error {
+		return writeProxyRuntimeState(ProxyRuntimeState{Host: "127.0.0.1", Port: 18080, PID: os.Getpid(), InstanceID: "test", RoutesHash: proxyRoutesHash(cfg)})
+	}
+	stopProxyDaemon = func() error { return removeProxyRuntimeState() }
+	defer func() {
+		proxyDaemonIsRunning = oldRunning
+		startProxyDaemon = oldStart
+		stopProxyDaemon = oldStop
+		_ = removeProxyRuntimeState()
+	}()
+
+	oldLookPath := lookPath
+	lookPath = func(name string) (string, error) { return "", os.ErrNotExist }
+	defer func() { lookPath = oldLookPath }()
+
+	oldLaunch := launchCommand
+	launchCommand = func(inv launchInvocation) error {
+		t.Fatalf("launchCommand should not be called after lookPath fails")
+		return nil
+	}
+	defer func() { launchCommand = oldLaunch }()
+
+	if err := launchAgent(agentCodex, "minimax-cn", "", "", &bytes.Buffer{}); err == nil {
+		t.Fatalf("launchAgent should fail when lookPath fails")
+	}
+
+	reloaded, _, err := loadAppConfig()
+	if err != nil {
+		t.Fatalf("reload app config: %v", err)
+	}
+	if reloaded.Proxy != nil && reloaded.Proxy.Routes != nil {
+		if _, ok := reloaded.Proxy.Routes[string(agentCodex)]; ok {
+			t.Fatalf("temporary codex route was not cleaned up after lookPath failure: %#v", reloaded.Proxy.Routes)
+		}
+	}
+	if _, err := readProxyRuntimeState(); !os.IsNotExist(err) {
+		t.Fatalf("proxy runtime state should be removed after lookPath failure, got %v", err)
 	}
 }
 
