@@ -141,6 +141,18 @@ func TestAnthropicToolsAndToolBlocksRoundTripIR(t *testing.T) {
 	}
 }
 
+func TestAnthropicRequestToIRRejectsToolDefinitionMissingName(t *testing.T) {
+	body := []byte(`{"model":"claude-model","max_tokens":32,"tools":[{"description":"Lookup data","input_schema":{"type":"object","properties":{"q":{"type":"string"}}}}],"messages":[{"role":"user","content":"hi"}]}`)
+
+	_, err := anthropicRequestToIR(body)
+	if err == nil {
+		t.Fatal("anthropicRequestToIR returned nil, want error for tool definition without name")
+	}
+	if !strings.Contains(err.Error(), "tool 0") || !strings.Contains(err.Error(), "name") {
+		t.Fatalf("error = %q, want mention tool index and name", err.Error())
+	}
+}
+
 func TestOpenAIChatToolsCallsAndResultsRoundTripIR(t *testing.T) {
 	body := []byte(`{"model":"gpt","tools":[{"type":"function","function":{"name":"lookup","description":"Lookup data","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"hi\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"result"}]}`)
 	req, err := openAIChatRequestToIR(body)

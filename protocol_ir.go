@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Part types for the typed IR. These string constants mirror the Anthropic
@@ -135,6 +136,11 @@ func (req IRRequest) validateTextOnlySkipModel() error {
 			default:
 				return fmt.Errorf("ir request: message %d part %d has unsupported type %q", i, j, part.Type)
 			}
+		}
+	}
+	for i, tool := range req.Tools {
+		if strings.TrimSpace(tool.Name) == "" {
+			return fmt.Errorf("ir request: tool %d has invalid name", i)
 		}
 	}
 	return nil
