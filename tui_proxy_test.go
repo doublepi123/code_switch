@@ -36,6 +36,31 @@ func TestUseModelForProviderUpdatesModelAndDefaultMapping(t *testing.T) {
 	}
 }
 
+func TestProviderDetailActionLabelsIncludeLaunchBeforeDefault(t *testing.T) {
+	labels := providerDetailActionLabels(false)
+	launchIdx := -1
+	defaultIdx := -1
+	for i, label := range labels {
+		switch label {
+		case actionLabelLaunch:
+			launchIdx = i
+		case actionLabelSetDefault:
+			defaultIdx = i
+		case "Switch (default)":
+			t.Fatalf("legacy action label %q should not appear in detail actions", label)
+		}
+	}
+	if launchIdx < 0 {
+		t.Fatalf("Launch action missing from labels: %#v", labels)
+	}
+	if defaultIdx < 0 {
+		t.Fatalf("Set as default action missing from labels: %#v", labels)
+	}
+	if launchIdx > defaultIdx {
+		t.Fatalf("Launch should appear before Set as default: %#v", labels)
+	}
+}
+
 func TestUseModelForProviderCanonicalizesAlias(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "sk-test"}},

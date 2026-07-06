@@ -62,13 +62,13 @@ func TestShowProxyRouteFormBuildsWithoutPanic(t *testing.T) {
 	}()
 	cfg := &AppConfig{Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "sk-test", Model: "glm-5.2"}}}
 	ts := &tuiState{
-		app:             tview.NewApplication(),
-		pages:           tview.NewPages(),
-		cfg:             cfg,
-		agent:           agentCodex,
-		typedAPIKeys:    map[string]string{},
-		resetKeys:       map[string]bool{},
-		customModels:    map[string]string{},
+		app:          tview.NewApplication(),
+		pages:        tview.NewPages(),
+		cfg:          cfg,
+		agent:        agentCodex,
+		typedAPIKeys: map[string]string{},
+		resetKeys:    map[string]bool{},
+		customModels: map[string]string{},
 	}
 	// showProxyRouteForm adds a page to ts.pages and switches to it. We
 	// never call app.Run(), so no rendering happens — but the form is
@@ -101,51 +101,41 @@ func TestShowProxyRouteFormBuildsForClaudeAgentWithoutPanic(t *testing.T) {
 	ts.showProxyRouteForm("zhipu-cn", "claude")
 }
 
-// ---- Issue 2: providerDetailActionLabels must include Switch (default) ----
-//
-// The doc comment on providerDetailActionLabels explicitly says it is
-// the "ordered superset" of action labels and lists "Switch (default)"
-// among the labels it surfaces. showDetail renders "Switch (default)"
-// (actionLabelSwitchDefault) between "Proxy Manager" and "Edit API Key"
-// when canSwitch is true. A test that asserts Switch (default) is part
-// of the superset therefore pins down the contract the comment makes.
-//
-// This is a RED test: the current helper body omits
-// actionLabelSwitchDefault, so this assertion fails today.
-func TestProviderDetailActionLabelsIncludesSwitchDefault(t *testing.T) {
-	// Non-NoModel provider: Switch (default) must be present.
+func TestProviderDetailActionLabelsIncludesSetDefault(t *testing.T) {
+	// Non-NoModel provider: Set as default must be present.
 	labels := providerDetailActionLabels(false)
-	if indexOf(labels, actionLabelSwitchDefault) < 0 {
-		t.Fatalf("actionLabelSwitchDefault %q missing from non-NoModel superset %#v", actionLabelSwitchDefault, labels)
+	if indexOf(labels, actionLabelSetDefault) < 0 {
+		t.Fatalf("actionLabelSetDefault %q missing from non-NoModel superset %#v", actionLabelSetDefault, labels)
 	}
 	// NoModel providers can also be switched (NoAPIKey presets, or
-	// hasConfigurableKey), so Switch (default) must be present in the
+	// hasConfigurableKey), so Set as default must be present in the
 	// NoModel superset too. showDetail's canSwitch is independent of
 	// NoModel (it depends on NoAPIKey / configurable key), so the
-	// superset must always advertise Switch (default).
+	// superset must always advertise Set as default.
 	labelsNoModel := providerDetailActionLabels(true)
-	if indexOf(labelsNoModel, actionLabelSwitchDefault) < 0 {
-		t.Fatalf("actionLabelSwitchDefault %q missing from NoModel superset %#v", actionLabelSwitchDefault, labelsNoModel)
+	if indexOf(labelsNoModel, actionLabelSetDefault) < 0 {
+		t.Fatalf("actionLabelSetDefault %q missing from NoModel superset %#v", actionLabelSetDefault, labelsNoModel)
 	}
 }
 
 // The relative order showDetail renders is:
 //
 //	Choose Model, Use Model, Manage Model Mappings, Proxy Manager,
-//	Switch (default), Edit API Key, Edit Tiers, Back
+//	Launch, Set as default, Edit API Key, Edit Tiers, Back
 //
 // providerDetailActionLabels must keep that relative order so a test
 // that drives the helper stays aligned with what showDetail actually
 // renders. This is the order-pinning regression for the Switch (default)
 // insertion point.
-func TestProviderDetailActionLabelsSwitchDefaultOrder(t *testing.T) {
+func TestProviderDetailActionLabelsSetDefaultOrder(t *testing.T) {
 	labels := providerDetailActionLabels(false)
 	wantOrder := []string{
 		actionLabelChooseModel,
 		actionLabelUseModel,
 		actionLabelManageMappings,
 		actionLabelProxyManager,
-		actionLabelSwitchDefault,
+		actionLabelLaunch,
+		actionLabelSetDefault,
 		actionLabelEditAPIKey,
 		actionLabelEditTiers,
 		actionLabelBack,

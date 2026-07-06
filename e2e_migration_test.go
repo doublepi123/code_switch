@@ -936,8 +936,8 @@ func TestE2EMigration_CodexDirectOpenAIChatWritesChatWireAPI(t *testing.T) {
 	if !strings.Contains(string(config), `base_url = "https://api.deepseek.com/v1"`) {
 		t.Fatalf("codex config missing chat endpoint base_url:\n%s", config)
 	}
-	if !strings.Contains(string(config), `wire_api = "chat"`) {
-		t.Fatalf("codex config wire_api should be chat for direct openai-chat endpoint:\n%s", config)
+	if !strings.Contains(string(config), `wire_api = "responses"`) {
+		t.Fatalf("codex config wire_api should be responses (codex deprecated chat wire_api):\n%s", config)
 	}
 }
 

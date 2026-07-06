@@ -112,17 +112,23 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	} else {
 		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
-
 	if *dryRun {
 		preset, err := resolveAgentSwitchPreset(agent, provider, cfg, selection.Model)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "[dry-run] would save provider config for %s in %s\n", provider, configPath)
-		fmt.Fprintf(out, "[dry-run] would switch %s to %s\n", agentDisplayName(agent), preset.Name)
+		if selection.Launch {
+			fmt.Fprintf(out, "[dry-run] would launch %s with %s temporarily\n", agentDisplayName(agent), preset.Name)
+		} else {
+			fmt.Fprintf(out, "[dry-run] would save provider config for %s in %s\n", provider, configPath)
+			fmt.Fprintf(out, "[dry-run] would switch %s to %s\n", agentDisplayName(agent), preset.Name)
+		}
 		fmt.Fprintf(out, "[dry-run] base_url: %s\n", preset.BaseURL)
 		fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
 		return nil
+	}
+	if selection.Launch {
+		return launchAgentWithConfig(agent, provider, selection.Model, apiKey, cfg, configPath, out)
 	}
 
 	cf := newConfigFile(configPath)
@@ -287,6 +293,11 @@ func (ts *tuiState) finishSelection(provider, model string) {
 	}
 	ts.resultErr = nil
 	ts.app.Stop()
+}
+
+func (ts *tuiState) finishLaunch(provider, model string) {
+	ts.finishSelection(provider, model)
+	ts.result.Launch = true
 }
 
 func (ts *tuiState) showProviders() {
@@ -455,7 +466,10 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	})
 	canSwitch := preset.NoAPIKey || hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider])
 	if canSwitch {
-		actions.AddItem(actionLabelSwitchDefault, "", 's', func() {
+		actions.AddItem(actionLabelLaunch, "", 'l', func() {
+			ts.finishLaunch(provider, preset.Model)
+		})
+		actions.AddItem(actionLabelSetDefault, "", 's', func() {
 			ts.finishSelection(provider, preset.Model)
 		})
 	}
@@ -489,6 +503,9 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			ts.showKeyForm(provider, backPage, func() {
 				ts.showDetail(provider, backPage)
 			})
+			return nil
+		case canSwitch && (event.Rune() == 'l' || event.Rune() == 'L'):
+			ts.finishLaunch(provider, preset.Model)
 			return nil
 		case canSwitch && (event.Rune() == 's' || event.Rune() == 'S'):
 			ts.finishSelection(provider, preset.Model)

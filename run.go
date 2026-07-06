@@ -19,15 +19,8 @@ import (
 // keeps the command predictable for shell completion. `cs run --provider X codex`
 // is rejected as a usage error rather than silently re-interpreted.
 //
-// MVP scope:
-//   - Only agent=codex is supported; other agents return an error.
-//   - --provider is required.
-//   - Only --dry-run is implemented; a real launch returns errNotImplemented.
-//
-// The provider/model/key are resolved through the Claude resolver so every
-// Claude preset is selectable; the upstream provider key is NEVER printed.
-// Dry-run emits the proxy plan (agent/provider/model/protocol/urls/auth) and
-// the rendered codex config.toml.
+// The upstream provider key is NEVER printed. Dry-run emits the temporary
+// environment that would be injected into the selected agent process.
 func cmdRun(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: code-switch run <agent> --provider <provider> [--model model-id] [--dry-run]")
@@ -56,62 +49,81 @@ func cmdRun(args []string, out io.Writer) error {
 	if fs.NArg() != 0 {
 		return errors.New("usage: code-switch run <agent> --provider <provider> [--model model-id] [--dry-run]")
 	}
-	if agent != agentCodex {
-		return fmt.Errorf("unsupported agent %q (MVP supports only %q)", agent, agentCodex)
-	}
 	if strings.TrimSpace(*providerFlag) == "" {
 		return errors.New("--provider is required (usage: code-switch run <agent> --provider <provider> [--dry-run])")
 	}
 	if !*dryRun {
-		return errors.New("only --dry-run is implemented in the MVP; real agent launch is not yet supported")
+		return launchAgent(agent, *providerFlag, *modelFlag, "", out)
 	}
 
-	// Resolve provider/model/key via the Claude resolver so every Claude preset
-	// is selectable. The resolved key is forwarded to the proxy internally and
-	// must never appear in the dry-run output.
-	pa, cfg, _, err := resolveProviderAndKeyForAgent(agentClaude, *providerFlag, "", *modelFlag)
+	pa, cfg, _, err := resolveProviderAndKeyForAgent(agent, *providerFlag, "", *modelFlag)
 	if err != nil {
 		return err
 	}
-
-	// pa.Model is only the raw --model input (empty when omitted); derive the
-	// final model the same way `switch` does so dry-run reflects what would
-	// actually be used: preset default, stored model, or --model override.
-	preset, err := resolveSwitchPreset(pa.Provider, cfg, *modelFlag)
+	preset, err := resolveAgentSwitchPreset(agent, pa.Provider, cfg, *modelFlag)
 	if err != nil {
 		return err
 	}
-
-	codexHome := filepath.Join(os.TempDir(), fmt.Sprintf("code-switch-codex-%d", os.Getpid()))
-
-	// MVP only supports the Anthropic Messages upstream protocol (see
-	// proxy_server.go); surface it explicitly so users know which adapter
-	// their provider will be routed through.
-	const upstreamProtocol = string(protocolAnthropicMessages)
-	const proxyBaseURL = "http://127.0.0.1:<port>/v1"
-
-	// Build the proxy route via the shared helper so the dry-run preview
-	// reflects exactly what the (future) real launch path would install —
-	// including any persisted cfg.ModelMappings for this provider. The
-	// route's Model and ModelMappings are derived here rather than read
-	// ad-hoc from the preset/config, keeping a single source of truth.
-	route := buildProxyRoute(pa.Provider, preset, protocolAnthropicMessages, "<token>", cfg.ModelMappings[pa.Provider])
-	model := route.Model
+	plan, err := resolveConnection(agent, pa.Provider, preset, "auto")
+	if err != nil {
+		return err
+	}
+	plan = adjustLaunchConnectionPlan(agent, plan, preset)
+	pairs, err := launchEnvPairs(agent, preset, plan, "<redacted>")
+	if err != nil {
+		return err
+	}
+	if plan.Mode == connectionModeProxy {
+		proxyPreset := preset
+		proxyPreset.BaseURL = proxyBaseURLPlaceholder(agent != agentClaude)
+		proxyPreset.AuthEnv = ""
+		proxyPlan := plan
+		proxyPlan.Endpoint = ProtocolEndpoint{BaseURL: proxyPreset.BaseURL}
+		if agent == agentClaude {
+			proxyPlan.Endpoint.AuthEnv = "ANTHROPIC_AUTH_TOKEN"
+		}
+		pairs, err = launchEnvPairs(agent, proxyPreset, proxyPlan, "<proxy-token>")
+		if err != nil {
+			return err
+		}
+	}
 
 	fmt.Fprintf(out, "agent: %s\n", agent)
 	fmt.Fprintf(out, "provider: %s\n", pa.Provider)
-	fmt.Fprintf(out, "model: %s\n", model)
-	fmt.Fprintf(out, "upstream_protocol: %s\n", upstreamProtocol)
-	fmt.Fprintf(out, "proxy_base_url: %s\n", proxyBaseURL)
-	if len(route.ModelMappings) > 0 {
-		fmt.Fprintf(out, "model_mappings: %d\n", len(route.ModelMappings))
+	fmt.Fprintf(out, "model: %s\n", preset.Model)
+	fmt.Fprintf(out, "mode: %s\n", plan.Mode)
+	fmt.Fprintf(out, "upstream_protocol: %s\n", plan.UpstreamProtocol)
+	if plan.Mode == connectionModeProxy {
+		fmt.Fprintf(out, "proxy_base_url: %s\n", proxyBaseURLPlaceholder(agent != agentClaude))
+		if len(cfg.ModelMappings[pa.Provider]) > 0 {
+			fmt.Fprintf(out, "model_mappings: %d\n", len(cfg.ModelMappings[pa.Provider]))
+		}
 	}
-	fmt.Fprintf(out, "CODEX_HOME=%s\n", codexHome)
-	fmt.Fprintln(out, "auth: command-backed (cs token code-switch-proxy --agent codex)")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "codex config.toml:")
-	fmt.Fprint(out, renderProxyCodexConfig(model))
+	for _, pair := range pairs {
+		if strings.Contains(pair.Key, "KEY") || strings.Contains(pair.Key, "TOKEN") {
+			fmt.Fprintf(out, "%s=<redacted>\n", pair.Key)
+			continue
+		}
+		fmt.Fprintf(out, "%s=%s\n", pair.Key, pair.Value)
+	}
+	if agent == agentCodex {
+		codexHome := filepath.Join(os.TempDir(), fmt.Sprintf("code-switch-codex-%d", os.Getpid()))
+		fmt.Fprintf(out, "CODEX_HOME=%s\n", codexHome)
+		if plan.Mode == connectionModeProxy {
+			fmt.Fprintln(out, "auth: command-backed (cs token code-switch-proxy --agent codex)")
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "codex config.toml:")
+			fmt.Fprint(out, renderProxyCodexConfig(preset.Model))
+		}
+	}
 	return nil
+}
+
+func proxyBaseURLPlaceholder(v1 bool) string {
+	if v1 {
+		return "http://127.0.0.1:<port>/v1"
+	}
+	return "http://127.0.0.1:<port>"
 }
 
 // randomProxyToken returns a random opaque token of the form
@@ -163,7 +175,6 @@ func renderProxyCodexConfigForBaseURLWithCatalog(model, baseURL, catalogPath str
 	b.WriteString("args = [\"token\", \"code-switch-proxy\", \"--agent\", \"codex\"]\n")
 	return b.String()
 }
-
 
 // renderProxyCodexConfigForBaseURLWithCatalogProtocol is the protocol-aware
 // version of renderProxyCodexConfigForBaseURLWithCatalog. It uses the upstream

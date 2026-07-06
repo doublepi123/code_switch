@@ -292,9 +292,8 @@ func applyCodexPresetTOMLWithProtocol(existing string, preset ProviderPreset, pr
 }
 
 func codexWireAPIForProtocol(protocol ProviderProtocol) string {
-	if protocol == protocolOpenAIChat {
-		return "chat"
-	}
+	// Codex has deprecated wire_api="chat" (see openai/codex#7782).
+	// Always use "responses" regardless of upstream protocol.
 	return "responses"
 }
 

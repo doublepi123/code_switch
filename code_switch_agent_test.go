@@ -101,7 +101,7 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 		`[model_providers.ollama-cloud]`,
 		`name = "Ollama Cloud"`,
 		`base_url = "https://ollama.com/v1"`,
-		`wire_api = "chat"`,
+		`wire_api = "responses"`,
 		`[model_providers.ollama-cloud.auth]`,
 		`command = "cs"`,
 		`args = ["token", "ollama-cloud", "--agent", "codex"]`,
@@ -122,8 +122,8 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	if strings.Contains(config, "ollama-sk") {
 		t.Fatalf("codex config must not contain plaintext api key:\n%s", config)
 	}
-	if strings.Contains(config, `wire_api = "responses"`) {
-		t.Fatalf("codex config should use chat wire api for direct openai-chat endpoint:\n%s", config)
+	if !strings.Contains(config, `wire_api = "responses"`) {
+		t.Fatalf("codex config should use responses wire api (codex deprecated chat):\\n%s", config)
 	}
 
 	appBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
@@ -571,7 +571,7 @@ func TestCodexSwitchOpenRouterWritesCorrectTOML(t *testing.T) {
 		`[model_providers.OpenRouter]`,
 		`name = "OpenRouter"`,
 		`base_url = "https://openrouter.ai/api/v1"`,
-		`wire_api = "chat"`,
+		`wire_api = "responses"`,
 		`[model_providers.OpenRouter.auth]`,
 		`command = "cs"`,
 		`args = ["token", "openrouter", "--agent", "codex"]`,
@@ -826,7 +826,7 @@ func TestCodexSwitchDeepSeekWritesCorrectTOML(t *testing.T) {
 		`[model_providers.DeepSeek]`,
 		`name = "DeepSeek"`,
 		`base_url = "https://api.deepseek.com/v1"`,
-		`wire_api = "chat"`,
+		`wire_api = "responses"`,
 		`[model_providers.DeepSeek.auth]`,
 		`command = "cs"`,
 		`args = ["token", "deepseek", "--agent", "codex"]`,

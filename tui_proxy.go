@@ -27,11 +27,11 @@ import (
 //     NoModel. The operator may still inspect/clear mappings and configure
 //     proxy routes for NoModel providers — the proxy uses its own model
 //     resolution and does not depend on the provider preset's NoModel flag.
-//   - Switch (default), Edit API Key, Edit Tiers, and Back preserve
+//   - Launch, Set as default, Edit API Key, Edit Tiers, and Back preserve
 //     their existing semantics and are surfaced here in the relative
-//     order showDetail renders them (Switch between Proxy Manager and
-//     Edit API Key, Edit Tiers after Edit API Key, Back last). The
-//     actual visibility of Switch, Edit API Key, and Edit Tiers is
+//     order showDetail renders them (Launch/Set as default between Proxy
+//     Manager and Edit API Key, Edit Tiers after Edit API Key, Back last). The
+//     actual visibility of Launch, Set as default, Edit API Key, and Edit Tiers is
 //     still refined inside showDetail based on preset flags (canSwitch,
 //     NoAPIKey, agent != opencode, NoModel). The labels list is the
 //     superset; showDetail filters at rendering time.
@@ -42,15 +42,16 @@ import (
 // New actions should be added here, referenced from
 // providerDetailActionLabels, and rendered in showDetail.
 const (
-	actionLabelChooseModel    = "Choose Model"
-	actionLabelUseModel       = "Use Model"
-	actionLabelManageMappings = "Manage Model Mappings"
-	actionLabelProxyManager   = "Proxy Manager"
-	actionLabelEditAPIKey     = "Edit API Key"
+	actionLabelChooseModel       = "Choose Model"
+	actionLabelUseModel          = "Use Model"
+	actionLabelManageMappings    = "Manage Model Mappings"
+	actionLabelProxyManager      = "Proxy Manager"
+	actionLabelEditAPIKey        = "Edit API Key"
 	actionLabelEditTiers         = "Edit Tiers"
 	actionLabelEditContextWindow = "Edit Context Window"
-	actionLabelSwitchDefault  = "Switch (default)"
-	actionLabelBack           = "Back"
+	actionLabelLaunch            = "Launch"
+	actionLabelSetDefault        = "Set as default"
+	actionLabelBack              = "Back"
 )
 
 func providerDetailActionLabels(noModel bool) []string {
@@ -61,7 +62,8 @@ func providerDetailActionLabels(noModel bool) []string {
 	labels = append(labels,
 		actionLabelManageMappings,
 		actionLabelProxyManager,
-		actionLabelSwitchDefault,
+		actionLabelLaunch,
+		actionLabelSetDefault,
 		actionLabelEditAPIKey,
 		actionLabelEditContextWindow,
 		actionLabelEditTiers,

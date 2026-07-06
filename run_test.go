@@ -54,25 +54,75 @@ func TestRunCodexDryRun(t *testing.T) {
 	}
 }
 
-func TestRunCodexNonDryRunNotImplemented(t *testing.T) {
+func TestRunCodexNonDryRunLaunchesAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{
+		"openrouter": {APIKey: "sk-secret"},
+	}}
+	configPath := filepath.Join(home, ".code-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
+
+	oldLookPath := lookPath
+	lookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	defer func() { lookPath = oldLookPath }()
+
+	var launched launchInvocation
+	oldLaunch := launchCommand
+	launchCommand = func(inv launchInvocation) error {
+		launched = inv
+		return nil
+	}
+	defer func() { launchCommand = oldLaunch }()
 
 	out := &bytes.Buffer{}
-	err := runWithIO([]string{"run", "codex", "--provider", "minimax-cn"}, strings.NewReader(""), out)
-	if err == nil {
-		t.Fatalf("expected error for non --dry-run, got nil (output: %s)", out.String())
+	if err := runWithIO([]string{"run", "codex", "--provider", "openrouter"}, strings.NewReader(""), out); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if launched.Agent != agentCodex {
+		t.Fatalf("launched agent = %q, want codex", launched.Agent)
 	}
 }
 
-func TestRunUnsupportedAgent(t *testing.T) {
+func TestRunClaudeAndOpencodeDryRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	cfg := AppConfig{Providers: map[string]StoredProvider{
+		"minimax-cn": {APIKey: "sk-claude"},
+		"openrouter": {APIKey: "sk-open"},
+	}}
+	configPath := filepath.Join(home, ".code-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write app config: %v", err)
+	}
 
-	out := &bytes.Buffer{}
-	err := runWithIO([]string{"run", "claude", "--provider", "minimax-cn", "--dry-run"}, strings.NewReader(""), out)
-	if err == nil {
-		t.Fatalf("expected error for unsupported agent, got nil")
+	cases := []struct {
+		name     string
+		agent    string
+		provider string
+		want     []string
+	}{
+		{"claude", "claude", "minimax-cn", []string{"agent: claude", "provider: minimax-cn", "ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic", "ANTHROPIC_MODEL=MiniMax-M3"}},
+		{"opencode", "opencode", "openrouter", []string{"agent: opencode", "provider: openrouter", "OPENAI_BASE_URL=https://openrouter.ai/api/v1", "OPENAI_MODEL=anthropic/claude-sonnet-4.6"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := &bytes.Buffer{}
+			if err := runWithIO([]string{"run", tc.agent, "--provider", tc.provider, "--dry-run"}, strings.NewReader(""), out); err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			got := out.String()
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("dry-run output missing %q\noutput:\n%s", want, got)
+				}
+			}
+			if strings.Contains(got, "sk-") {
+				t.Fatalf("dry-run output leaked API key:\n%s", got)
+			}
+		})
 	}
 }
 

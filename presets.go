@@ -148,17 +148,17 @@ type ProviderPreset struct {
 }
 
 type StoredProvider struct {
-	Name     string           `json:"name,omitempty"`
-	BaseURL  string           `json:"baseUrl,omitempty"`
-	Protocol ProviderProtocol `json:"protocol,omitempty"`
-	Model    string           `json:"model,omitempty"`
-	APIKey   string           `json:"apiKey,omitempty"`
-	AuthEnv  string           `json:"authEnv,omitempty"`
-	Haiku    string           `json:"haiku,omitempty"`
-	Sonnet   string           `json:"sonnet,omitempty"`
-	Opus     string           `json:"opus,omitempty"`
-	Subagent       string `json:"subagent,omitempty"`
-	ContextWindow  int    `json:"contextWindow,omitempty"`
+	Name          string           `json:"name,omitempty"`
+	BaseURL       string           `json:"baseUrl,omitempty"`
+	Protocol      ProviderProtocol `json:"protocol,omitempty"`
+	Model         string           `json:"model,omitempty"`
+	APIKey        string           `json:"apiKey,omitempty"`
+	AuthEnv       string           `json:"authEnv,omitempty"`
+	Haiku         string           `json:"haiku,omitempty"`
+	Sonnet        string           `json:"sonnet,omitempty"`
+	Opus          string           `json:"opus,omitempty"`
+	Subagent      string           `json:"subagent,omitempty"`
+	ContextWindow int              `json:"contextWindow,omitempty"`
 }
 
 type AgentConfig struct {
@@ -174,20 +174,21 @@ type AppConfig struct {
 }
 
 type ConfigureSelection struct {
-	Agent    string
-	Provider string
-	Model    string
-	ResetKey bool
-	APIKey   string
-	Name     string
-	BaseURL  string
-	Protocol ProviderProtocol
-	AuthEnv  string
-	Haiku    string
-	Sonnet   string
-	Opus     string
-	Subagent string
+	Agent         string
+	Provider      string
+	Model         string
+	ResetKey      bool
+	APIKey        string
+	Name          string
+	BaseURL       string
+	Protocol      ProviderProtocol
+	AuthEnv       string
+	Haiku         string
+	Sonnet        string
+	Opus          string
+	Subagent      string
 	ContextWindow int
+	Launch        bool
 }
 
 type AgentName string
