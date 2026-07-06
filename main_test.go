@@ -1799,6 +1799,75 @@ func TestProviderTitle(t *testing.T) {
 	}
 }
 
+func TestBuildQuickRunCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		agent   AgentName
+		provider string
+		model   string
+		want    string
+	}{
+		{
+			name:     "codex with default model for deepseek",
+			agent:    agentCodex,
+			provider: "deepseek",
+			model:    "deepseek-v4-pro[1m]",
+			want:     "cs run codex --provider deepseek",
+		},
+		{
+			name:     "codex with non-default model",
+			agent:    agentCodex,
+			provider: "deepseek",
+			model:    "deepseek-reasoner",
+			want:     "cs run codex --provider deepseek --model deepseek-reasoner",
+		},
+		{
+			name:     "codex with empty model",
+			agent:    agentCodex,
+			provider: "deepseek",
+			model:    "",
+			want:     "cs run codex --provider deepseek",
+		},
+		{
+			name:     "opencode with default model",
+			agent:    agentOpencode,
+			provider: "minimax-cn",
+			model:    "MiniMax-M3",
+			want:     "cs run opencode --provider minimax-cn",
+		},
+		{
+			name:     "opencode with non-default model",
+			agent:    agentOpencode,
+			provider: "minimax-cn",
+			model:    "MiniMax-M2.5",
+			want:     "cs run opencode --provider minimax-cn --model MiniMax-M2.5",
+		},
+		{
+			name:     "unknown provider includes model",
+			agent:    agentCodex,
+			provider: "custom-provider",
+			model:    "some-model",
+			want:     "cs run codex --provider custom-provider --model some-model",
+		},
+		{
+			name:     "unknown provider empty model omits flag",
+			agent:    agentCodex,
+			provider: "custom-provider",
+			model:    "",
+			want:     "cs run codex --provider custom-provider",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildQuickRunCommand(tt.agent, tt.provider, tt.model)
+			if got != tt.want {
+				t.Errorf("buildQuickRunCommand(%q, %q, %q) = %q, want %q",
+					tt.agent, tt.provider, tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUniqueCustomProviderKeyBoundedLoop(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 	cfg.Providers["test"] = StoredProvider{BaseURL: "https://example.com"}

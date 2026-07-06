@@ -928,6 +928,19 @@ func (ts *tuiState) selectModelForAction(provider, backPage, model string) {
 	ts.showModelActions(provider, model, backPage)
 }
 
+// buildQuickRunCommand constructs a `cs run` command string for display
+// in the model actions help bar. If model is empty or matches the
+// provider's preset default model, the --model flag is omitted.
+func buildQuickRunCommand(agent AgentName, provider, model string) string {
+	cmd := fmt.Sprintf("cs run %s --provider %s", string(agent), provider)
+	if model != "" {
+		if preset, ok := providerPresets[provider]; !ok || preset.Model != model {
+			cmd += fmt.Sprintf(" --model %s", model)
+		}
+	}
+	return cmd
+}
+
 func (ts *tuiState) showModelActions(provider, model, backPage string) {
 	actions := tview.NewList()
 	actions.ShowSecondaryText(false)
@@ -959,14 +972,20 @@ func (ts *tuiState) showModelActions(provider, model, backPage string) {
 
 	help := tview.NewTextView()
 	helpText := "s set as default   b/esc/q back"
+	helpRows := 1
 	if ts.agent != agentClaude {
 		helpText = "l launch   " + helpText
 	}
-	help.SetText(fmt.Sprintf("Provider: %s  |  Model: %s  |  %s", providerTitle(provider, ts.cfg), model, helpText))
+	fullHelp := fmt.Sprintf("Provider: %s  |  Model: %s  |  %s", providerTitle(provider, ts.cfg), model, helpText)
+	if ts.agent != agentClaude {
+		fullHelp += "\nQuick: " + buildQuickRunCommand(ts.agent, provider, model)
+		helpRows = 2
+	}
+	help.SetText(fullHelp)
 
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
-	page.AddItem(help, 1, 0, false)
+	page.AddItem(help, helpRows, 0, false)
 	page.AddItem(actions, 0, 1, true)
 	ts.pages.AddAndSwitchToPage("model-actions", page, true)
 	ts.app.SetFocus(actions)
