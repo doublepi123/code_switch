@@ -54,7 +54,7 @@ type anthropicTool struct {
 type anthropicRawRequest struct {
 	Model     string                `json:"model"`
 	MaxTokens int                   `json:"max_tokens"`
-	System    string                `json:"system,omitempty"`
+	System    json.RawMessage       `json:"system,omitempty"`
 	Stream    bool                  `json:"stream,omitempty"`
 	Messages  []anthropicRawMessage `json:"messages,omitempty"`
 	Tools     []anthropicTool       `json:"tools,omitempty"`
@@ -63,6 +63,44 @@ type anthropicRawRequest struct {
 type anthropicRawMessage struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
+}
+
+// anthropicParseSystemField parses the Anthropic "system" field which can be
+// either a plain string or an array of content blocks (as used by Claude Code).
+// Returns the extracted text parts, or nil if the field is absent/empty.
+func anthropicParseSystemField(raw json.RawMessage) ([]IRPart, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	// Try string first.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "" {
+			return nil, nil
+		}
+		return []IRPart{{Type: irPartText, Text: s}}, nil
+	}
+	// Try content blocks array.
+	var blocks []anthropicRequestContent
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, fmt.Errorf("system must be a string or content blocks array: %w", err)
+	}
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+	parts := make([]IRPart, 0, len(blocks))
+	for j, block := range blocks {
+		switch block.Type {
+		case irPartText:
+			if block.Text == "" {
+				return nil, fmt.Errorf("system block %d text must not be empty", j)
+			}
+			parts = append(parts, IRPart{Type: irPartText, Text: block.Text})
+		default:
+			return nil, fmt.Errorf("system block %d has unsupported type %q", j, block.Type)
+		}
+	}
+	return parts, nil
 }
 
 // anthropicRequestToIR translates an Anthropic Messages API request body
@@ -82,8 +120,12 @@ func anthropicRequestToIR(body []byte) (IRRequest, error) {
 		return IRRequest{}, fmt.Errorf("anthropic request: max_tokens must be >= 0 (got %d)", raw.MaxTokens)
 	}
 	messages := make([]IRMessage, 0, len(raw.Messages)+1)
-	if raw.System != "" {
-		messages = append(messages, IRMessage{Role: "system", Parts: []IRPart{{Type: irPartText, Text: raw.System}}})
+	systemParts, err := anthropicParseSystemField(raw.System)
+	if err != nil {
+		return IRRequest{}, fmt.Errorf("anthropic request: system: %w", err)
+	}
+	if len(systemParts) > 0 {
+		messages = append(messages, IRMessage{Role: "system", Parts: systemParts})
 	}
 	for i, msg := range raw.Messages {
 		if msg.Role != "user" && msg.Role != "assistant" {

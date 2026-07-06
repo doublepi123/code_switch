@@ -1182,6 +1182,107 @@ func TestIRToAnthropicRequestMapsSystemToTopLevel(t *testing.T) {
 	})
 }
 
+// TestAnthropicRequestToIRSystemContentBlocks verifies that the Anthropic
+// inbound adapter accepts the "system" field as an array of content blocks
+// (the format used by Claude Code) in addition to the plain string format.
+func TestAnthropicRequestToIRSystemContentBlocks(t *testing.T) {
+	t.Run("single_text_block", func(t *testing.T) {
+		body := []byte(`{"model":"claude-model","max_tokens":16,"system":[{"type":"text","text":"be brief"}],"messages":[{"role":"user","content":"hi"}]}`)
+		req, err := anthropicRequestToIR(body)
+		if err != nil {
+			t.Fatalf("anthropicRequestToIR returned error: %v", err)
+		}
+		if len(req.Messages) != 2 {
+			t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
+		}
+		if req.Messages[0].Role != "system" || req.Messages[0].Parts[0].Text != "be brief" {
+			t.Fatalf("system message = %+v", req.Messages[0])
+		}
+		if req.Messages[1].Role != "user" || req.Messages[1].Parts[0].Text != "hi" {
+			t.Fatalf("user message = %+v", req.Messages[1])
+		}
+	})
+
+	t.Run("multiple_text_blocks", func(t *testing.T) {
+		body := []byte(`{"model":"claude-model","max_tokens":16,"system":[{"type":"text","text":"rule one"},{"type":"text","text":"rule two"}],"messages":[{"role":"user","content":"hi"}]}`)
+		req, err := anthropicRequestToIR(body)
+		if err != nil {
+			t.Fatalf("anthropicRequestToIR returned error: %v", err)
+		}
+		if len(req.Messages) != 2 {
+			t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
+		}
+		sys := req.Messages[0]
+		if sys.Role != "system" || len(sys.Parts) != 2 {
+			t.Fatalf("system message = %+v", sys)
+		}
+		if sys.Parts[0].Text != "rule one" || sys.Parts[1].Text != "rule two" {
+			t.Fatalf("system parts = %+v", sys.Parts)
+		}
+	})
+
+	t.Run("empty_array_omitted", func(t *testing.T) {
+		body := []byte(`{"model":"claude-model","max_tokens":16,"system":[],"messages":[{"role":"user","content":"hi"}]}`)
+		req, err := anthropicRequestToIR(body)
+		if err != nil {
+			t.Fatalf("anthropicRequestToIR returned error: %v", err)
+		}
+		if len(req.Messages) != 1 {
+			t.Fatalf("len(Messages) = %d, want 1 (empty system should be omitted)", len(req.Messages))
+		}
+		if req.Messages[0].Role != "user" {
+			t.Fatalf("messages[0].Role = %q, want user", req.Messages[0].Role)
+		}
+	})
+
+	t.Run("no_system_field", func(t *testing.T) {
+		body := []byte(`{"model":"claude-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+		req, err := anthropicRequestToIR(body)
+		if err != nil {
+			t.Fatalf("anthropicRequestToIR returned error: %v", err)
+		}
+		if len(req.Messages) != 1 {
+			t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
+		}
+	})
+
+	t.Run("string_system_still_works", func(t *testing.T) {
+		body := []byte(`{"model":"claude-model","max_tokens":16,"system":"be brief","messages":[{"role":"user","content":"hi"}]}`)
+		req, err := anthropicRequestToIR(body)
+		if err != nil {
+			t.Fatalf("anthropicRequestToIR returned error: %v", err)
+		}
+		if len(req.Messages) != 2 {
+			t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
+		}
+		if req.Messages[0].Role != "system" || req.Messages[0].Parts[0].Text != "be brief" {
+			t.Fatalf("system message = %+v", req.Messages[0])
+		}
+	})
+
+	t.Run("empty_string_system_omitted", func(t *testing.T) {
+		body := []byte(`{"model":"claude-model","max_tokens":16,"system":"","messages":[{"role":"user","content":"hi"}]}`)
+		req, err := anthropicRequestToIR(body)
+		if err != nil {
+			t.Fatalf("anthropicRequestToIR returned error: %v", err)
+		}
+		if len(req.Messages) != 1 {
+			t.Fatalf("len(Messages) = %d, want 1 (empty string system should be omitted)", len(req.Messages))
+		}
+	})
+
+	t.Run("unsupported_block_type_rejected", func(t *testing.T) {
+		body := []byte(`{"model":"claude-model","max_tokens":16,"system":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}],"messages":[{"role":"user","content":"hi"}]}`)
+		_, err := anthropicRequestToIR(body)
+		if err == nil {
+			t.Fatal("expected error for unsupported system block type, got nil")
+		}
+		if !strings.Contains(err.Error(), "unsupported type") {
+			t.Fatalf("error = %q, want mention unsupported type", err.Error())
+		}
+	})
+}
+
 // TestIRToAnthropicRequestRejectsNonTextPart verifies that the text-only
 // validation surfaces an actionable error when the IR carries an
 // unsupported part type.
