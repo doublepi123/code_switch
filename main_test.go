@@ -10351,6 +10351,15 @@ func TestProviderNamesForAgentCodex(t *testing.T) {
 	}
 }
 
+func TestProviderNamesForAgentCodexIncludesCustomOption(t *testing.T) {
+	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
+	ensureAppConfigMaps(cfg)
+	names := providerNamesForAgent(agentCodex, cfg, true, true)
+	if !containsString(names, customProviderOption) {
+		t.Fatalf("codex TUI provider names missing custom option: %v", names)
+	}
+}
+
 func TestProviderModelsForAgentCodex(t *testing.T) {
 	cfg := &AppConfig{Agents: map[string]AgentConfig{}, Providers: map[string]StoredProvider{}}
 	ensureAppConfigMaps(cfg)

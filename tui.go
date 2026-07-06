@@ -301,7 +301,7 @@ func (ts *tuiState) finishLaunch(provider, model string) {
 }
 
 func (ts *tuiState) showProviders() {
-	ts.names = providerNamesForAgent(ts.agent, ts.cfg, ts.agent == agentClaude || ts.agent == agentOpencode, true)
+	ts.names = providerNamesForAgent(ts.agent, ts.cfg, true, true)
 	ts.rebuildProviderList()
 	ts.pages.SwitchToPage("providers")
 	ts.app.SetFocus(ts.providerList)
@@ -319,7 +319,7 @@ func (ts *tuiState) rebuildProviderList() {
 				selectedIndex = len(filteredNames)
 			}
 			filteredNames = append(filteredNames, name)
-			ts.providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
+			ts.providerList.AddItem("custom...", "Add a custom provider", 0, nil)
 			ts.displayNames = append(ts.displayNames, name)
 			continue
 		}
@@ -1090,9 +1090,22 @@ func (ts *tuiState) showCustomProviderForm() {
 	form.AddInputField("Model", "", 0, nil, func(text string) {
 		modelValue = text
 	})
-	protocolValue := protocolAnthropicMessages
+	var defaultProtocolIdx int
+	var defaultProtocol ProviderProtocol
+	switch ts.agent {
+	case agentCodex:
+		defaultProtocol = protocolOpenAIResponses
+		defaultProtocolIdx = 2
+	case agentOpencode:
+		defaultProtocol = protocolOpenAIChat
+		defaultProtocolIdx = 1
+	default:
+		defaultProtocol = protocolAnthropicMessages
+		defaultProtocolIdx = 0
+	}
+	protocolValue := defaultProtocol
 	protocolOptions := []string{string(protocolAnthropicMessages), string(protocolOpenAIChat), string(protocolOpenAIResponses)}
-	form.AddDropDown("Protocol", protocolOptions, 0, func(_ string, idx int) {
+	form.AddDropDown("Protocol", protocolOptions, defaultProtocolIdx, func(_ string, idx int) {
 		if idx >= 0 && idx < len(protocolOptions) {
 			protocolValue = ProviderProtocol(protocolOptions[idx])
 		}
