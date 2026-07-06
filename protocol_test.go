@@ -154,6 +154,44 @@ func TestResolveConnectionSelectsDirectOrProxyByAgentProfileAndProviderEndpoints
 	}
 }
 
+func TestPresetEndpointNoBaseURLFallbackWhenEndpointsDeclared(t *testing.T) {
+	// Simulates kimi-coding: has Endpoints with only openai-chat, plus a BaseURL.
+	preset := ProviderPreset{
+		BaseURL: "https://api.kimi.com/coding/",
+		AuthEnv: "ANTHROPIC_AUTH_TOKEN",
+		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
+			protocolOpenAIChat: {BaseURL: "https://api.kimi.com/coding/v1", AuthEnv: "KIMI_API_KEY"},
+		},
+	}
+
+	// openai-chat should be found via Endpoints
+	ep, ok := preset.presetEndpoint(protocolOpenAIChat)
+	if !ok || ep.BaseURL != "https://api.kimi.com/coding/v1" {
+		t.Fatalf("presetEndpoint(openai-chat) = (%#v, %v), want base=https://api.kimi.com/coding/v1", ep, ok)
+	}
+
+	// anthropic-messages should NOT be found via BaseURL fallback
+	_, ok = preset.presetEndpoint(protocolAnthropicMessages)
+	if ok {
+		t.Fatal("presetEndpoint(anthropic-messages) should be false when Endpoints is non-empty")
+	}
+}
+
+func TestCodexKimiCodingResolvesToOpenAIChat(t *testing.T) {
+	// Codex ProxyUpstreamPreference: [anthropic-messages, openai-chat, openai-responses]
+	// kimi-coding only has openai-chat → must resolve to openai-chat, not anthropic-messages.
+	plan, err := resolveConnection(agentCodex, "kimi-coding", providerPresets["kimi-coding"], "")
+	if err != nil {
+		t.Fatalf("resolveConnection error: %v", err)
+	}
+	if plan.UpstreamProtocol != protocolOpenAIChat {
+		t.Fatalf("UpstreamProtocol = %q, want %q", plan.UpstreamProtocol, protocolOpenAIChat)
+	}
+	if plan.Endpoint.BaseURL != "https://api.kimi.com/coding/v1" {
+		t.Fatalf("Endpoint.BaseURL = %q, want https://api.kimi.com/coding/v1", plan.Endpoint.BaseURL)
+	}
+}
+
 func assertProtocolSlice(t *testing.T, label string, got, want []ProviderProtocol) {
 	t.Helper()
 	if len(got) != len(want) {

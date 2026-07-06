@@ -16,7 +16,7 @@ func TestProviderListItemShowsProtocolBadgesAndConnectionMode(t *testing.T) {
 		},
 	}
 	title, secondary := providerListItemText(agentClaude, cfg, "all-protocols", preset, "", "")
-	for _, want := range []string{"[A]", "[C]", "[R]", "direct"} {
+	for _, want := range []string{"[A]", "[C]", "[R]", "proxy"} {
 		if !strings.Contains(title, want) {
 			t.Fatalf("provider list title %q missing %q (secondary=%q)", title, want, secondary)
 		}

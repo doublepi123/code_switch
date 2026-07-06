@@ -253,7 +253,8 @@ var providerPresets = map[string]ProviderPreset{
 		Name:    "DeepSeek",
 		BaseURL: "https://api.deepseek.com/anthropic",
 		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
-			protocolOpenAIChat: {BaseURL: "https://api.deepseek.com/v1", AuthEnv: "DEEPSEEK_API_KEY"},
+			protocolAnthropicMessages: {BaseURL: "https://api.deepseek.com/anthropic", AuthEnv: "ANTHROPIC_AUTH_TOKEN"},
+			protocolOpenAIChat:         {BaseURL: "https://api.deepseek.com/v1", AuthEnv: "DEEPSEEK_API_KEY"},
 		},
 		Model:     "deepseek-v4-pro[1m]",
 		Models:    []string{"deepseek-v4-pro[1m]", "deepseek-v4-pro", "deepseek-v4-flash"},

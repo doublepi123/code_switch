@@ -54,7 +54,12 @@ func (p ProviderPreset) presetEndpoint(protocol ProviderProtocol) (ProtocolEndpo
 	if endpoint, ok := p.Endpoints[protocol]; ok && strings.TrimSpace(endpoint.BaseURL) != "" {
 		return endpoint, true
 	}
-	if protocol == protocolAnthropicMessages && strings.TrimSpace(p.BaseURL) != "" {
+	// BaseURL fallback only when Endpoints is nil/empty (legacy providers).
+	// Providers that declare Endpoints explicitly (e.g. kimi-coding with only
+	// openai-chat) must NOT be matched via the BaseURL fallback for
+	// anthropic-messages — that would route proxy traffic to a non-existent
+	// upstream.
+	if len(p.Endpoints) == 0 && protocol == protocolAnthropicMessages && strings.TrimSpace(p.BaseURL) != "" {
 		return ProtocolEndpoint{BaseURL: p.BaseURL, AuthEnv: p.AuthEnv}, true
 	}
 	return ProtocolEndpoint{}, false
