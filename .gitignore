@@ -3,6 +3,7 @@
 # Binaries
 cs
 cs.exe
+code-switch
 claude-switch
 claude-switch.exe
 
@@ -14,6 +15,10 @@ cover.out
 
 # Local caches
 .gocache/
+
+# Local agent workdirs
+.claude/
+.agents/
 
 # IDE files
 .idea/
