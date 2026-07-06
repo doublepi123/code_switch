@@ -6349,6 +6349,110 @@ func TestResolveProviderPresetCustomNoBaseURL(t *testing.T) {
 	}
 }
 
+// ---- custom provider protocol -> Endpoints mapping ----
+
+func TestResolveProviderPresetCustomWithProtocol(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"my-openai": {
+				Name:     "My OpenAI",
+				BaseURL:  "https://api.example.com/v1",
+				Protocol: "openai-responses",
+				Model:    "gpt-4o",
+				APIKey:   "sk-test",
+				AuthEnv:  "MY_API_KEY",
+			},
+		},
+	}
+	preset, err := resolveProviderPreset("my-openai", cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderPreset returned error: %v", err)
+	}
+	if preset.Endpoints == nil {
+		t.Fatal("expected Endpoints to be populated, got nil")
+	}
+	ep, ok := preset.Endpoints[protocolOpenAIResponses]
+	if !ok {
+		t.Fatalf("expected Endpoints[openai-responses], keys: %v", preset.Endpoints)
+	}
+	if ep.BaseURL != "https://api.example.com/v1" {
+		t.Fatalf("endpoint BaseURL = %q, want %q", ep.BaseURL, "https://api.example.com/v1")
+	}
+	if ep.AuthEnv != "MY_API_KEY" {
+		t.Fatalf("endpoint AuthEnv = %q, want %q", ep.AuthEnv, "MY_API_KEY")
+	}
+	// presetEndpoint should succeed for the declared protocol
+	resolved, found := preset.presetEndpoint(protocolOpenAIResponses)
+	if !found {
+		t.Fatal("presetEndpoint(openai-responses) returned false, want true")
+	}
+	if resolved.BaseURL != "https://api.example.com/v1" {
+		t.Fatalf("resolved BaseURL = %q, want %q", resolved.BaseURL, "https://api.example.com/v1")
+	}
+}
+
+func TestResolveProviderPresetCustomWithoutProtocol(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"legacy-provider": {
+				Name:    "Legacy",
+				BaseURL: "https://legacy.example.com/anthropic",
+				Model:   "my-model",
+				APIKey:  "sk-abc",
+			},
+		},
+	}
+	preset, err := resolveProviderPreset("legacy-provider", cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderPreset returned error: %v", err)
+	}
+	// Without Protocol, Endpoints should be nil (backward compatible)
+	if preset.Endpoints != nil {
+		t.Fatalf("expected Endpoints nil for legacy provider, got %v", preset.Endpoints)
+	}
+	// anthropic-messages should still work via BaseURL fallback
+	ep, found := preset.presetEndpoint(protocolAnthropicMessages)
+	if !found {
+		t.Fatal("presetEndpoint(anthropic-messages) should fall back to BaseURL")
+	}
+	if ep.BaseURL != "https://legacy.example.com/anthropic" {
+		t.Fatalf("fallback BaseURL = %q, want %q", ep.BaseURL, "https://legacy.example.com/anthropic")
+	}
+	// openai-responses should NOT be found
+	_, found = preset.presetEndpoint(protocolOpenAIResponses)
+	if found {
+		t.Fatal("presetEndpoint(openai-responses) should be false for legacy provider")
+	}
+}
+
+func TestResolveProviderPresetCustomProtocolAnthropic(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"my-anthropic": {
+				Name:     "My Anthropic",
+				BaseURL:  "https://my-anthropic.example.com",
+				Protocol: "anthropic-messages",
+				Model:    "claude-sonnet-4-20250514",
+				AuthEnv:  "MY_ANTHROPIC_KEY",
+			},
+		},
+	}
+	preset, err := resolveProviderPreset("my-anthropic", cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderPreset returned error: %v", err)
+	}
+	if preset.Endpoints == nil {
+		t.Fatal("expected Endpoints populated")
+	}
+	ep, ok := preset.Endpoints[protocolAnthropicMessages]
+	if !ok {
+		t.Fatal("expected Endpoints[anthropic-messages]")
+	}
+	if ep.BaseURL != "https://my-anthropic.example.com" {
+		t.Fatalf("endpoint BaseURL = %q", ep.BaseURL)
+	}
+}
+
 // ---- shouldSkipUpgrade more cases ----
 
 func TestShouldSkipUpgradeEmptyCurrent(t *testing.T) {

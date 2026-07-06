@@ -577,16 +577,30 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 	if model == "" {
 		model = "custom-model"
 	}
+	baseURL := strings.TrimSpace(stored.BaseURL)
+	authEnv := strings.TrimSpace(stored.AuthEnv)
+
+	var endpoints map[ProviderProtocol]ProtocolEndpoint
+	if proto := ProviderProtocol(strings.TrimSpace(string(stored.Protocol))); proto != "" {
+		endpoints = map[ProviderProtocol]ProtocolEndpoint{
+			proto: {
+				BaseURL: baseURL,
+				AuthEnv: authEnv,
+			},
+		}
+	}
+
 	return ProviderPreset{
-		Name:     firstNonEmpty(stored.Name, provider),
-		BaseURL:  strings.TrimSpace(stored.BaseURL),
-		Model:    model,
-		Models:   []string{model},
-		Haiku:    firstNonEmpty(stored.Haiku, model),
-		Sonnet:   firstNonEmpty(stored.Sonnet, model),
-		Opus:     firstNonEmpty(stored.Opus, model),
-		Subagent: firstNonEmpty(stored.Subagent, model),
-		AuthEnv:  strings.TrimSpace(stored.AuthEnv),
+		Name:      firstNonEmpty(stored.Name, provider),
+		BaseURL:   baseURL,
+		Endpoints: endpoints,
+		Model:     model,
+		Models:    []string{model},
+		Haiku:     firstNonEmpty(stored.Haiku, model),
+		Sonnet:    firstNonEmpty(stored.Sonnet, model),
+		Opus:      firstNonEmpty(stored.Opus, model),
+		Subagent:  firstNonEmpty(stored.Subagent, model),
+		AuthEnv:   authEnv,
 	}, nil
 }
 
