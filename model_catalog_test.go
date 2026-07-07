@@ -42,7 +42,7 @@ func TestFetchOpenRouterModelCatalogParsesModelInfo(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := overrideModelCatalogHTTP(t, server.URL, "")
+	restore := overrideModelCatalogHTTP(t, server.URL, "", "")
 	defer restore()
 
 	catalog := fetchOpenRouterModelCatalog("test-key")
@@ -64,6 +64,175 @@ func TestFetchOpenRouterModelCatalogParsesModelInfo(t *testing.T) {
 	}
 }
 
+func TestFetchOpenRouterModelCatalogParsesExtendedModelInfo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": [{
+				"id": "provider/model-b",
+				"name": "Model B",
+				"description": "extended description",
+				"context_length": 123456,
+				"pricing": {"prompt": "1.25", "completion": "2.50"},
+				"supported_parameters": ["tools", "", "json_schema"]
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	restore := overrideModelCatalogHTTP(t, server.URL, "", "")
+	defer restore()
+
+	catalog := fetchOpenRouterModelCatalog("test-key")
+	if catalog.Source != "remote" || catalog.Err != "" || len(catalog.Models) != 1 {
+		t.Fatalf("unexpected catalog: %+v", catalog)
+	}
+	model := catalog.Models[0]
+	if model.Name != "Model B" || model.Description != "extended description" || model.ContextWindow != 123456 {
+		t.Fatalf("extended text fields not parsed: %+v", model)
+	}
+	if model.InputPrice != "1.25" || model.OutputPrice != "2.50" {
+		t.Fatalf("pricing not parsed: %+v", model)
+	}
+	if !equalStringSlices(model.Capabilities, []string{"tools", "json_schema"}) {
+		t.Fatalf("capabilities = %v", model.Capabilities)
+	}
+}
+
+func TestFetchDeepSeekModelCatalogParsesOpenAICompatibleResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer deepseek-key" {
+			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-chat","object":"model","owned_by":"deepseek"}]}`))
+	}))
+	defer server.Close()
+
+	restore := overrideModelCatalogHTTP(t, "", "", server.URL+"/v1")
+	defer restore()
+
+	catalog := fetchDeepSeekModelCatalog("deepseek-key")
+	if catalog.Source != "remote" || catalog.Err != "" {
+		t.Fatalf("unexpected catalog metadata: %+v", catalog)
+	}
+	if got := modelIDs(catalog); !equalStringSlices(got, []string{"deepseek-chat"}) {
+		t.Fatalf("model ids = %v, want [deepseek-chat]", got)
+	}
+	if catalog.Models[0].RawProvider != "deepseek" {
+		t.Fatalf("raw provider = %q, want deepseek", catalog.Models[0].RawProvider)
+	}
+}
+
+func TestFetchOpenAICompatibleModelCatalogParsesModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Fatalf("path = %q, want /models", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer custom-key" {
+			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"custom-b"},{"id":"custom-a","owned_by":"owner-a"}]}`))
+	}))
+	defer server.Close()
+
+	catalog := fetchOpenAICompatibleModelCatalog(server.URL, "custom-key")
+	if catalog.Source != "remote" || catalog.Err != "" {
+		t.Fatalf("unexpected catalog metadata: %+v", catalog)
+	}
+	if got := modelIDs(catalog); !equalStringSlices(got, []string{"custom-a", "custom-b"}) {
+		t.Fatalf("model ids = %v, want sorted [custom-a custom-b]", got)
+	}
+	if catalog.Models[0].RawProvider != "owner-a" {
+		t.Fatalf("raw provider = %q, want owner-a", catalog.Models[0].RawProvider)
+	}
+}
+
+func TestProviderModelCatalogUsesDeepSeekRemoteAndFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-remote"}]}`))
+	}))
+	defer server.Close()
+
+	restore := overrideModelCatalogHTTP(t, "", "", server.URL+"/v1")
+	defer restore()
+
+	catalog := providerModelCatalog(&AppConfig{}, agentCodex, "deepseek", "deepseek-key")
+	if catalog.Source != "remote" || !equalStringSlices(modelIDs(catalog), []string{"deepseek-remote"}) {
+		t.Fatalf("provider catalog = %+v", catalog)
+	}
+	if catalog.Provider != "deepseek" {
+		t.Fatalf("provider = %q, want deepseek", catalog.Provider)
+	}
+}
+
+func TestProviderModelCatalogDeepSeekFallbackUsesStaticModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	restore := overrideModelCatalogHTTP(t, "", "", server.URL+"/v1")
+	defer restore()
+
+	catalog := providerModelCatalog(&AppConfig{}, agentCodex, "deepseek", "deepseek-key")
+	if catalog.Provider != "deepseek" || catalog.Source != "fallback" || catalog.Err == "" {
+		t.Fatalf("unexpected fallback catalog: %+v", catalog)
+	}
+	if got := modelIDs(catalog); !equalStringSlices(got, providerPresets["deepseek"].Models) {
+		t.Fatalf("fallback ids = %v, want %v", got, providerPresets["deepseek"].Models)
+	}
+}
+
+func TestProviderModelCatalogUsesOpenAICompatibleCustomProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"custom-remote"}]}`))
+	}))
+	defer server.Close()
+
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"custom-openai": {Name: "Custom OpenAI", BaseURL: server.URL, Protocol: protocolOpenAIChat, Model: "fallback-custom"},
+	}}
+	catalog := providerModelCatalog(cfg, agentCodex, "custom-openai", "custom-key")
+	if catalog.Source != "remote" || !equalStringSlices(modelIDs(catalog), []string{"custom-remote"}) {
+		t.Fatalf("provider catalog = %+v", catalog)
+	}
+	if catalog.Provider != "custom-openai" {
+		t.Fatalf("provider = %q, want custom-openai", catalog.Provider)
+	}
+}
+
+func TestProviderModelCatalogCustomOpenAICompatibleFallbackUsesStaticModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"custom-openai": {Name: "Custom OpenAI", BaseURL: server.URL, Protocol: protocolOpenAIChat, Model: "fallback-custom"},
+	}}
+	catalog := providerModelCatalog(cfg, agentCodex, "custom-openai", "custom-key")
+	if catalog.Provider != "custom-openai" || catalog.Source != "fallback" || catalog.Err == "" {
+		t.Fatalf("unexpected fallback catalog: %+v", catalog)
+	}
+	if got := modelIDs(catalog); !equalStringSlices(got, []string{"fallback-custom"}) {
+		t.Fatalf("fallback ids = %v, want [fallback-custom]", got)
+	}
+}
+
+func TestProviderModelCatalogZhipuWithoutOpenAIEndpointUsesStaticCatalog(t *testing.T) {
+	catalog := providerModelCatalog(&AppConfig{}, agentCodex, "zhipu-cn", "zhipu-key")
+	if catalog.Provider != "zhipu-cn" || catalog.Source != "static" || catalog.Err != "" {
+		t.Fatalf("unexpected zhipu catalog: %+v", catalog)
+	}
+}
+
 func TestFetchOpenRouterModelCatalogFallsBackWithoutNetworkWhenKeyMissing(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +241,7 @@ func TestFetchOpenRouterModelCatalogFallsBackWithoutNetworkWhenKeyMissing(t *tes
 	}))
 	defer server.Close()
 
-	restore := overrideModelCatalogHTTP(t, server.URL, "")
+	restore := overrideModelCatalogHTTP(t, server.URL, "", "")
 	defer restore()
 
 	catalog := fetchOpenRouterModelCatalog(" ")
@@ -93,7 +262,7 @@ func TestFetchOllamaModelCatalogFallsBackOnRemoteError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := overrideModelCatalogHTTP(t, "", server.URL)
+	restore := overrideModelCatalogHTTP(t, "", server.URL, "")
 	defer restore()
 
 	catalog := fetchOllamaModelCatalog()
@@ -112,7 +281,7 @@ func TestProviderModelCatalogUsesOpenRouterForCodexAndFallsBack(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := overrideModelCatalogHTTP(t, server.URL, "")
+	restore := overrideModelCatalogHTTP(t, server.URL, "", "")
 	defer restore()
 
 	catalog := providerModelCatalog(&AppConfig{}, agentCodex, "openrouter", "test-key")
@@ -127,7 +296,7 @@ func TestProviderModelCatalogOpenRouterFallbackUsesResolvedPreset(t *testing.T) 
 	}))
 	defer server.Close()
 
-	restore := overrideModelCatalogHTTP(t, server.URL, "")
+	restore := overrideModelCatalogHTTP(t, server.URL, "", "")
 	defer restore()
 
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}, Agents: map[string]AgentConfig{
@@ -169,11 +338,12 @@ func TestModelCatalogSecondaryTextAndInfoText(t *testing.T) {
 	}
 }
 
-func overrideModelCatalogHTTP(t *testing.T, openRouterURL, ollamaURL string) func() {
+func overrideModelCatalogHTTP(t *testing.T, openRouterURL, ollamaURL string, deepSeekURL ...string) func() {
 	t.Helper()
 	oldClient := modelCatalogHTTPClient
 	oldOpenRouterURL := modelCatalogOpenRouterURL
 	oldOllamaURL := modelCatalogOllamaURL
+	oldDeepSeekURL := modelCatalogDeepSeekURL
 	modelCatalogHTTPClient = &http.Client{Timeout: time.Second}
 	if openRouterURL != "" {
 		modelCatalogOpenRouterURL = openRouterURL
@@ -181,10 +351,14 @@ func overrideModelCatalogHTTP(t *testing.T, openRouterURL, ollamaURL string) fun
 	if ollamaURL != "" {
 		modelCatalogOllamaURL = ollamaURL
 	}
+	if len(deepSeekURL) > 0 && deepSeekURL[0] != "" {
+		modelCatalogDeepSeekURL = deepSeekURL[0]
+	}
 	return func() {
 		modelCatalogHTTPClient = oldClient
 		modelCatalogOpenRouterURL = oldOpenRouterURL
 		modelCatalogOllamaURL = oldOllamaURL
+		modelCatalogDeepSeekURL = oldDeepSeekURL
 	}
 }
 

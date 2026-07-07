@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -20,7 +21,18 @@ var (
 	modelCatalogHTTPClient    = &http.Client{Timeout: 3 * time.Second}
 	modelCatalogOpenRouterURL = "https://openrouter.ai/api/v1/models"
 	modelCatalogOllamaURL     = "http://localhost:11434/api/tags"
+	modelCatalogDeepSeekURL   = "https://api.deepseek.com/v1"
 )
+
+type openAICompatibleModelsResponse struct {
+	Data []openAICompatibleModelData `json:"data"`
+}
+
+type openAICompatibleModelData struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	OwnedBy string `json:"owned_by"`
+}
 
 type ProviderModelInfo struct {
 	ID            string
@@ -62,9 +74,45 @@ func providerModelCatalog(cfg *AppConfig, agent AgentName, provider, apiKey stri
 			apiKey = storedAPIKeyForAgent(cfg, agentCodex, provider)
 		}
 		return catalogWithResolvedFallback(fetchOpenRouterModelCatalog(apiKey), staticModelCatalog(provider, preset))
+	case "deepseek":
+		apiKey = modelCatalogAPIKey(cfg, agent, provider, apiKey)
+		return catalogWithResolvedFallback(withCatalogProvider(fetchDeepSeekModelCatalog(apiKey), provider), staticModelCatalog(provider, preset))
+	case "zhipu-cn":
+		if endpoint, ok := openAICompatibleEndpoint(preset); ok {
+			apiKey = modelCatalogAPIKey(cfg, agent, provider, apiKey)
+			return catalogWithResolvedFallback(withCatalogProvider(fetchOpenAICompatibleModelCatalog(endpoint.BaseURL, apiKey), provider), staticModelCatalog(provider, preset))
+		}
+		return staticModelCatalog(provider, preset)
 	default:
+		if endpoint, ok := openAICompatibleEndpoint(preset); ok {
+			apiKey = modelCatalogAPIKey(cfg, agent, provider, apiKey)
+			return catalogWithResolvedFallback(withCatalogProvider(fetchOpenAICompatibleModelCatalog(endpoint.BaseURL, apiKey), provider), staticModelCatalog(provider, preset))
+		}
 		return staticModelCatalog(provider, preset)
 	}
+}
+
+func withCatalogProvider(catalog ProviderModelCatalog, provider string) ProviderModelCatalog {
+	catalog.Provider = provider
+	return catalog
+}
+
+func modelCatalogAPIKey(cfg *AppConfig, agent AgentName, provider, apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" {
+		return apiKey
+	}
+	return storedAPIKeyForAgent(cfg, agent, provider)
+}
+
+func openAICompatibleEndpoint(preset ProviderPreset) (ProtocolEndpoint, bool) {
+	if endpoint, ok := preset.presetEndpoint(protocolOpenAIChat); ok {
+		return endpoint, true
+	}
+	if endpoint, ok := preset.presetEndpoint(protocolOpenAIResponses); ok {
+		return endpoint, true
+	}
+	return ProtocolEndpoint{}, false
 }
 
 func catalogWithResolvedFallback(catalog, resolvedStatic ProviderModelCatalog) ProviderModelCatalog {
@@ -165,6 +213,68 @@ func fetchOpenRouterModelCatalog(apiKey string) ProviderModelCatalog {
 	}
 	sortModelInfoByID(models)
 	return ProviderModelCatalog{Provider: "openrouter", Source: modelCatalogSourceRemote, Models: models}
+}
+
+func fetchDeepSeekModelCatalog(apiKey string) ProviderModelCatalog {
+	static := staticModelCatalog("deepseek", providerPresets["deepseek"])
+	return catalogWithResolvedFallback(withCatalogProvider(fetchOpenAICompatibleModelCatalog(modelCatalogDeepSeekURL, apiKey), "deepseek"), static)
+}
+
+func fetchOpenAICompatibleModelCatalog(baseURL, apiKey string) ProviderModelCatalog {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: "OpenAI-compatible base URL is required to fetch remote models"}
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: "API key is required to fetch remote models"}
+	}
+	modelsURL, err := appendURLPath(baseURL, "models")
+	if err != nil {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: err.Error()}
+	}
+	req, err := http.NewRequest(http.MethodGet, modelsURL, nil)
+	if err != nil {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := modelCatalogHTTPClient.Do(req)
+	if err != nil {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: fmt.Sprintf("OpenAI-compatible models request returned HTTP %d", resp.StatusCode)}
+	}
+	var data openAICompatibleModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: err.Error()}
+	}
+	models := make([]ProviderModelInfo, 0, len(data.Data))
+	for _, item := range data.Data {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		models = append(models, ProviderModelInfo{ID: id, RawProvider: strings.TrimSpace(item.OwnedBy)})
+	}
+	if len(models) == 0 {
+		return ProviderModelCatalog{Source: modelCatalogSourceFallback, Err: "OpenAI-compatible endpoint returned no models"}
+	}
+	sortModelInfoByID(models)
+	return ProviderModelCatalog{Source: modelCatalogSourceRemote, Models: models}
+}
+
+func appendURLPath(baseURL, elem string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("invalid OpenAI-compatible base URL %q", baseURL)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/" + strings.TrimLeft(elem, "/")
+	return u.String(), nil
 }
 
 func fallbackModelCatalog(static ProviderModelCatalog, err error) ProviderModelCatalog {
