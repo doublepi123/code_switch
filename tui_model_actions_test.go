@@ -14,13 +14,13 @@ func TestModelSelectionActionLabels(t *testing.T) {
 	}
 }
 
-func TestTUIStateShowModelActionsForClaudeOmitsLaunch(t *testing.T) {
+func TestTUIStateShowModelActionsForClaudeIncludesLaunch(t *testing.T) {
 	ts := newModelActionTestState()
 
 	ts.showModelActions("deepseek", "deepseek-v3.2-exp", "detail")
 
 	got := frontModelActionLabels(t, ts)
-	want := []string{actionLabelSetDefault, actionLabelBack}
+	want := []string{actionLabelLaunch, actionLabelSetDefault, actionLabelBack}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude model action labels = %#v, want %#v", got, want)
 	}
@@ -118,13 +118,13 @@ func TestTUIStateRunModelSelectionActionLaunch(t *testing.T) {
 	}
 }
 
-func TestTUIStateRunModelSelectionActionLaunchIgnoredForClaude(t *testing.T) {
+func TestTUIStateRunModelSelectionActionLaunchForClaude(t *testing.T) {
 	ts := newModelActionTestState()
 
 	ts.runModelSelectionAction(actionLabelLaunch, "deepseek", "deepseek-v3.2-exp", "detail")
 
-	if ts.result.Provider != "" || ts.result.Model != "" || ts.result.Launch {
-		t.Fatalf("claude Launch action should be ignored, got %+v", ts.result)
+	if ts.result.Provider != "deepseek" || ts.result.Model != "deepseek-v3.2-exp" || !ts.result.Launch {
+		t.Fatalf("claude Launch action should finish launch, got %+v", ts.result)
 	}
 }
 

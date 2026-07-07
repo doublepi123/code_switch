@@ -241,6 +241,8 @@ type tuiState struct {
 	displayNames    []string
 
 	selectedProvider string
+	selectedModel    map[string]string
+	advancedReturn   map[string]bool
 	typedAPIKeys     map[string]string
 	resetKeys        map[string]bool
 	customModels     map[string]string
@@ -305,6 +307,202 @@ func (ts *tuiState) showProviders() {
 	ts.rebuildProviderList()
 	ts.pages.SwitchToPage("providers")
 	ts.app.SetFocus(ts.providerList)
+}
+
+func (ts *tuiState) selectedModelForProvider(provider string) string {
+	if ts.selectedModel != nil {
+		if model := strings.TrimSpace(ts.selectedModel[provider]); model != "" {
+			return model
+		}
+	}
+	return defaultSelectionModelForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
+}
+
+func (ts *tuiState) keyStatusForProvider(provider string, preset ProviderPreset) string {
+	if preset.NoAPIKey {
+		return "not required"
+	}
+	if strings.TrimSpace(ts.typedAPIKeys[provider]) != "" {
+		return "session"
+	}
+	if storedAPIKeyForAgent(ts.cfg, ts.agent, provider) != "" {
+		return "saved"
+	}
+	return "missing"
+}
+
+func (ts *tuiState) showProviderWorkspace(provider string) {
+	ts.selectedProvider = provider
+	if ts.advancedReturn != nil {
+		delete(ts.advancedReturn, provider)
+	}
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+	model := ts.selectedModelForProvider(provider)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Provider: %s                 Agent: %s\n", providerTitle(provider, ts.cfg), ts.agent)
+	if plan, err := resolveConnection(ts.agent, provider, preset, "auto"); err == nil {
+		fmt.Fprintf(&b, "Connection: %s/%s        Key: %s\n", plan.Mode, plan.UpstreamProtocol, ts.keyStatusForProvider(provider, preset))
+	} else {
+		fmt.Fprintf(&b, "Connection: unavailable        Key: %s\n", ts.keyStatusForProvider(provider, preset))
+	}
+	fmt.Fprintf(&b, "Selected model: %s\n", model)
+
+	info := tview.NewTextView()
+	info.SetDynamicColors(true)
+	info.SetWrap(true)
+	info.SetBorder(true)
+	info.SetTitle(" Provider Workspace ")
+	info.SetText(b.String())
+
+	actions := tview.NewList()
+	actions.ShowSecondaryText(false)
+	actions.SetBorder(true)
+	actions.SetTitle(" Actions ")
+	actions.AddItem(actionLabelLaunch, "", 'l', func() { ts.launchSelectedProvider(provider) })
+	actions.AddItem(actionLabelSetDefault, "", 's', func() { ts.saveSelectedProvider(provider) })
+	if !preset.NoModel {
+		actions.AddItem(actionLabelModels, "", 'm', func() { ts.showModels(provider, "provider-workspace") })
+	}
+	if !preset.NoAPIKey {
+		actions.AddItem(actionLabelEditAPIKey, "", 'k', func() {
+			ts.showKeyForm(provider, "provider-workspace", func() { ts.showProviderWorkspace(provider) })
+		})
+	}
+	actions.AddItem(actionLabelAdvanced, "", 'a', func() { ts.showAdvancedMenu(provider) })
+	actions.AddItem(actionLabelBack, "", 'b', ts.showProviders)
+	actions.SetCurrentItem(0)
+	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+			ts.showProviders()
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q' || event.Rune() == 'b' || event.Rune() == 'B':
+			ts.showProviders()
+			return nil
+		case event.Rune() == 'l' || event.Rune() == 'L':
+			ts.launchSelectedProvider(provider)
+			return nil
+		case event.Rune() == 's' || event.Rune() == 'S':
+			ts.saveSelectedProvider(provider)
+			return nil
+		case !preset.NoModel && (event.Rune() == 'm' || event.Rune() == 'M'):
+			ts.showModels(provider, "provider-workspace")
+			return nil
+		case !preset.NoAPIKey && (event.Rune() == 'k' || event.Rune() == 'K'):
+			ts.showKeyForm(provider, "provider-workspace", func() { ts.showProviderWorkspace(provider) })
+			return nil
+		case event.Rune() == 'a' || event.Rune() == 'A':
+			ts.showAdvancedMenu(provider)
+			return nil
+		}
+		return event
+	})
+
+	page := tview.NewFlex().SetDirection(tview.FlexRow)
+	page.AddItem(info, 0, 1, false)
+	page.AddItem(actions, 9, 0, true)
+	ts.pages.AddAndSwitchToPage("provider-workspace", page, true)
+	ts.app.SetFocus(actions)
+}
+
+func (ts *tuiState) launchSelectedProvider(provider string) {
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+	if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
+		ts.showKeyFormWithCancel(provider, "provider-workspace", func() { ts.showProviderWorkspace(provider) }, func() { ts.showProviderWorkspace(provider) })
+		return
+	}
+	ts.finishLaunch(provider, ts.selectedModelForProvider(provider))
+}
+
+func (ts *tuiState) saveSelectedProvider(provider string) {
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+	if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
+		ts.showKeyFormWithCancel(provider, "provider-workspace", func() { ts.showProviderWorkspace(provider) }, func() { ts.showProviderWorkspace(provider) })
+		return
+	}
+	ts.finishSelection(provider, ts.selectedModelForProvider(provider))
+}
+
+func (ts *tuiState) showAdvancedMenu(provider string) {
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+	actions := tview.NewList()
+	actions.ShowSecondaryText(false)
+	actions.SetBorder(true)
+	actions.SetTitle(" Advanced ")
+	if ts.agent != agentOpencode && !preset.NoModel {
+		actions.AddItem(actionLabelEditTiers, "", 't', func() { ts.showTierConfig(provider, "provider-workspace") })
+	}
+	actions.AddItem(actionLabelManageMappings, "", 'g', func() {
+		ts.markAdvancedReturn(provider)
+		ts.showModelMappings(provider)
+	})
+	if ts.agent == agentCodex && !preset.NoModel {
+		actions.AddItem(actionLabelEditContextWindow, "", 'c', func() {
+			ts.markAdvancedReturn(provider)
+			ts.showContextWindowForm(provider)
+		})
+	}
+	actions.AddItem(actionLabelProxyManager, "", 'p', func() {
+		ts.markAdvancedReturn(provider)
+		ts.showProxyManager(provider)
+	})
+	actions.AddItem("Provider Details", "", 'd', func() {
+		if ts.advancedReturn != nil {
+			delete(ts.advancedReturn, provider)
+		}
+		ts.showDetail(provider, "provider-workspace")
+	})
+	actions.AddItem(actionLabelBack, "", 'b', func() { ts.showProviderWorkspace(provider) })
+	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape || event.Rune() == 'q' || event.Rune() == 'Q' || event.Rune() == 'b' || event.Rune() == 'B' {
+			ts.showProviderWorkspace(provider)
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView()
+	help.SetText(fmt.Sprintf("Provider: %s", providerTitle(provider, ts.cfg)))
+	page := tview.NewFlex().SetDirection(tview.FlexRow)
+	page.AddItem(help, 1, 0, false)
+	page.AddItem(actions, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("advanced", page, true)
+	ts.app.SetFocus(actions)
+}
+
+func (ts *tuiState) markAdvancedReturn(provider string) {
+	if ts.advancedReturn == nil {
+		ts.advancedReturn = map[string]bool{}
+	}
+	ts.advancedReturn[provider] = true
+}
+
+func (ts *tuiState) returnToAdvancedOrDetail(provider string) {
+	if ts.advancedReturn != nil && ts.advancedReturn[provider] {
+		ts.showAdvancedMenu(provider)
+		return
+	}
+	ts.showDetail(provider, "detail")
 }
 
 func (ts *tuiState) rebuildProviderList() {
@@ -651,10 +849,18 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 		ov.Opus = opusVal
 		ov.Subagent = subagentVal
 		ts.tierOverrides[provider] = ov
-		ts.showDetail(provider, backPage)
+		if backPage == "provider-workspace" {
+			ts.showAdvancedMenu(provider)
+		} else {
+			ts.showDetail(provider, backPage)
+		}
 	})
 	cancelBtn := tview.NewButton(" Cancel ").SetSelectedFunc(func() {
-		ts.showDetail(provider, backPage)
+		if backPage == "provider-workspace" {
+			ts.showAdvancedMenu(provider)
+		} else {
+			ts.showDetail(provider, backPage)
+		}
 	})
 
 	btnRow := tview.NewFlex().SetDirection(tview.FlexColumn)
@@ -681,7 +887,13 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 			}
 		}
 	}
-	goBack := func() { ts.showDetail(provider, backPage) }
+	goBack := func() {
+		if backPage == "provider-workspace" {
+			ts.showAdvancedMenu(provider)
+		} else {
+			ts.showDetail(provider, backPage)
+		}
+	}
 
 	for _, dd := range []*tview.DropDown{haikuDD, sonnetDD, opusDD, subagentDD} {
 		dd := dd
@@ -760,11 +972,19 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			}
 			modelName := model
 			modelList.AddItem(label, "", 0, func() {
+				if backPage == "provider-workspace" {
+					if ts.selectedModel == nil {
+						ts.selectedModel = map[string]string{}
+					}
+					ts.selectedModel[provider] = modelName
+					ts.showProviderWorkspace(provider)
+					return
+				}
 				ts.selectModelForAction(provider, backPage, modelName)
 			})
 		}
 		modelList.AddItem("Custom model...", "", 0, func() {
-			ts.showCustomModelForm(provider)
+			ts.showCustomModelForm(provider, backPage)
 		})
 		selectedIndex := modelIndexForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
 		if filter == "" {
@@ -795,15 +1015,27 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	})
 
 	modelList.SetDoneFunc(func() {
-		ts.showDetail(provider, backPage)
+		if backPage == "provider-workspace" {
+			ts.showProviderWorkspace(provider)
+		} else {
+			ts.showDetail(provider, backPage)
+		}
 	})
 	modelList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
 		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
-			ts.showDetail(provider, backPage)
+			if backPage == "provider-workspace" {
+				ts.showProviderWorkspace(provider)
+			} else {
+				ts.showDetail(provider, backPage)
+			}
 			return nil
 		case event.Rune() == 'q' || event.Rune() == 'Q':
-			ts.showDetail(provider, backPage)
+			if backPage == "provider-workspace" {
+				ts.showProviderWorkspace(provider)
+			} else {
+				ts.showDetail(provider, backPage)
+			}
 			return nil
 		case event.Rune() == '/':
 			ts.app.SetFocus(searchInput)
@@ -814,7 +1046,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			})
 			return nil
 		case event.Rune() == 'c' || event.Rune() == 'C':
-			ts.showCustomModelForm(provider)
+			ts.showCustomModelForm(provider, backPage)
 			return nil
 		case event.Rune() == 'r' || event.Rune() == 'R':
 			allModels = ts.buildModels(provider)
@@ -837,7 +1069,15 @@ func (ts *tuiState) showModels(provider, backPage string) {
 				} else {
 					model = model + "[1m]"
 				}
-				ts.selectModelForAction(provider, backPage, model)
+				if backPage == "provider-workspace" {
+					if ts.selectedModel == nil {
+						ts.selectedModel = map[string]string{}
+					}
+					ts.selectedModel[provider] = model
+					ts.showProviderWorkspace(provider)
+				} else {
+					ts.selectModelForAction(provider, backPage, model)
+				}
 			}
 			return nil
 		}
@@ -892,12 +1132,6 @@ func modelSelectionActionSpecs() []modelSelectionActionSpec {
 }
 
 func modelSelectionActionSpecsForAgent(agent AgentName) []modelSelectionActionSpec {
-	if agent == agentClaude {
-		return []modelSelectionActionSpec{
-			{Label: actionLabelSetDefault, Shortcut: 's'},
-			{Label: actionLabelBack, Shortcut: 'b'},
-		}
-	}
 	return modelSelectionActionSpecs()
 }
 
@@ -960,7 +1194,7 @@ func (ts *tuiState) showModelActions(provider, model, backPage string) {
 		case event.Rune() == 'q' || event.Rune() == 'Q':
 			ts.runModelSelectionAction(actionLabelBack, provider, model, backPage)
 			return nil
-		case ts.agent != agentClaude && (event.Rune() == 'l' || event.Rune() == 'L'):
+		case event.Rune() == 'l' || event.Rune() == 'L':
 			ts.runModelSelectionAction(actionLabelLaunch, provider, model, backPage)
 			return nil
 		case event.Rune() == 's' || event.Rune() == 'S':
@@ -971,16 +1205,10 @@ func (ts *tuiState) showModelActions(provider, model, backPage string) {
 	})
 
 	help := tview.NewTextView()
-	helpText := "s set as default   b/esc/q back"
-	helpRows := 1
-	if ts.agent != agentClaude {
-		helpText = "l launch   " + helpText
-	}
+	helpText := "l launch   s set as default   b/esc/q back"
+	helpRows := 2
 	fullHelp := fmt.Sprintf("Provider: %s  |  Model: %s  |  %s", providerTitle(provider, ts.cfg), model, helpText)
-	if ts.agent != agentClaude {
-		fullHelp += "\nQuick: " + buildQuickRunCommand(ts.agent, provider, model)
-		helpRows = 2
-	}
+	fullHelp += "\nQuick: " + buildQuickRunCommand(ts.agent, provider, model)
 	help.SetText(fullHelp)
 
 	page := tview.NewFlex()
@@ -994,9 +1222,6 @@ func (ts *tuiState) showModelActions(provider, model, backPage string) {
 func (ts *tuiState) runModelSelectionAction(actionLabel, provider, model, backPage string) {
 	switch actionLabel {
 	case actionLabelLaunch:
-		if ts.agent == agentClaude {
-			return
-		}
 		ts.finishLaunch(provider, model)
 	case actionLabelSetDefault:
 		ts.finishSelection(provider, model)
@@ -1050,7 +1275,7 @@ func (ts *tuiState) showKeyFormWithCancel(provider, backPage string, onSave func
 	ts.app.SetFocus(form)
 }
 
-func (ts *tuiState) showCustomModelForm(provider string) {
+func (ts *tuiState) showCustomModelForm(provider, backPage string) {
 	modelValue := strings.TrimSpace(ts.customModels[provider])
 	form := tview.NewForm()
 	form.AddInputField("Model", modelValue, 0, nil, func(text string) {
@@ -1065,17 +1290,17 @@ func (ts *tuiState) showCustomModelForm(provider string) {
 			return
 		}
 		ts.customModels[provider] = modelValue
-		ts.showModels(provider, "detail")
+		ts.showModels(provider, backPage)
 	})
 	form.AddButton("Cancel", func() {
-		ts.showModels(provider, "detail")
+		ts.showModels(provider, backPage)
 	})
 	form.SetBorder(true)
 	form.SetTitle(" Custom Model ")
 	form.SetButtonsAlign(tview.AlignLeft)
 	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			ts.showModels(provider, "detail")
+			ts.showModels(provider, backPage)
 			return nil
 		}
 		return event
@@ -1299,6 +1524,8 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		selectedProvider: selectedProvider,
 		typedAPIKeys:     map[string]string{},
 		resetKeys:        map[string]bool{},
+		selectedModel:    map[string]string{},
+		advancedReturn:   map[string]bool{},
 		customModels:     map[string]string{},
 		tierOverrides:    map[string]StoredProvider{},
 		resultErr:        nil,
@@ -1310,7 +1537,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 	ts.providerList.SetTitle(" " + agentDisplayName(ts.agent) + " Providers ")
 
 	providerHelp := tview.NewTextView()
-	providerHelp.SetText("Enter/→ details   q/esc quit")
+	providerHelp.SetText("Enter/→ workspace   q/esc quit")
 
 	ts.providerPage = tview.NewFlex()
 	ts.providerPage.SetDirection(tview.FlexRow)
@@ -1346,7 +1573,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 			ts.showRestoreConfirm()
 			return
 		}
-		ts.showDetail(ts.selectedProvider, "providers")
+		ts.showProviderWorkspace(ts.selectedProvider)
 	})
 	ts.providerList.SetDoneFunc(func() {
 		ts.resultErr = errCancelled
@@ -1363,7 +1590,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 				} else if ts.selectedProvider == restoreProviderOption {
 					ts.showRestoreConfirm()
 				} else {
-					ts.showDetail(ts.selectedProvider, "providers")
+					ts.showProviderWorkspace(ts.selectedProvider)
 				}
 			}
 			return nil
@@ -1452,6 +1679,29 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 				modelText = defaultModel
 			}
 
+			fmt.Fprint(out, "Action ([L]aunch/[s]ave as default): ")
+			actionText, err := readLine(reader)
+			if err != nil && err != io.EOF {
+				return ConfigureSelection{}, err
+			}
+			launch := true
+			apiKeyText := ""
+			if err == io.EOF {
+				launch = false
+			}
+			switch normalizedAction := strings.ToLower(strings.TrimSpace(actionText)); normalizedAction {
+			case "", "l", "launch":
+				// Keep the new default: pressing Enter launches.
+			case "s", "save":
+				launch = false
+			default:
+				// Backward compatibility for existing non-TTY fallback flows:
+				// before this prompt existed, the next line was the API key.
+				launch = false
+				apiKeyText = strings.TrimSpace(actionText)
+				fmt.Fprint(out, "API key: ")
+			}
+
 			stored := cfg.Providers[provider]
 			if agent == agentOpencode {
 				stored = opencodeProviderConfig(cfg, provider)
@@ -1463,6 +1713,8 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 				Agent:    string(agent),
 				Provider: provider,
 				Model:    modelText,
+				Launch:   launch,
+				APIKey:   apiKeyText,
 				AuthEnv:  stored.AuthEnv,
 				Haiku:    stored.Haiku,
 				Sonnet:   stored.Sonnet,

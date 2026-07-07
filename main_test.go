@@ -1792,11 +1792,11 @@ func TestProviderTitle(t *testing.T) {
 
 func TestBuildQuickRunCommand(t *testing.T) {
 	tests := []struct {
-		name    string
-		agent   AgentName
+		name     string
+		agent    AgentName
 		provider string
-		model   string
-		want    string
+		model    string
+		want     string
 	}{
 		{
 			name:     "codex with default model for deepseek",
@@ -7202,7 +7202,7 @@ func TestTUIStateShowCustomModelForm(t *testing.T) {
 	ts.providerPage.SetDirection(tview.FlexRow)
 	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
 	ts.pages.AddPage("providers", ts.providerPage, true, true)
-	ts.showCustomModelForm("openrouter")
+	ts.showCustomModelForm("openrouter", "detail")
 }
 
 func TestTUIStateShowCustomProviderForm(t *testing.T) {

@@ -51,6 +51,8 @@ const (
 	actionLabelEditContextWindow = "Edit Context Window"
 	actionLabelLaunch            = "Launch"
 	actionLabelSetDefault        = "Set as default"
+	actionLabelModels            = "Models..."
+	actionLabelAdvanced          = "Advanced..."
 	actionLabelBack              = "Back"
 )
 
@@ -149,15 +151,15 @@ func (ts *tuiState) showUseModelForm(provider string) {
 		}
 		unlock()
 		ts.cfg = cfg
-		ts.showDetail(provider, "detail")
+		ts.returnToAdvancedOrDetail(provider)
 	})
-	form.AddButton("Cancel", func() { ts.showDetail(provider, "detail") })
+	form.AddButton("Cancel", func() { ts.returnToAdvancedOrDetail(provider) })
 	form.SetBorder(true)
 	form.SetTitle(" Use Model ")
 	form.SetButtonsAlign(tview.AlignLeft)
 	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			ts.showDetail(provider, "detail")
+			ts.returnToAdvancedOrDetail(provider)
 			return nil
 		}
 		return event
@@ -283,12 +285,12 @@ func (ts *tuiState) showModelMappings(provider string) {
 	}
 	list.AddItem("Add / Update Mapping", "", 'a', func() { ts.showModelMappingForm(provider) })
 	list.AddItem("Remove Mapping", "", 'r', func() { ts.showRemoveModelMappingForm(provider) })
-	list.AddItem("Back", "", 'b', func() { ts.showDetail(provider, "detail") })
+	list.AddItem("Back", "", 'b', func() { ts.returnToAdvancedOrDetail(provider) })
 	list.SetBorder(true)
 	list.SetTitle(" Model Mappings ")
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' || event.Rune() == 'Q' {
-			ts.showDetail(provider, "detail")
+			ts.returnToAdvancedOrDetail(provider)
 			return nil
 		}
 		return event
@@ -523,12 +525,12 @@ func (ts *tuiState) showProxyManagerForAgent(provider, agent string) {
 	list.AddItem("Stop Proxy", "", 'x', func() { ts.showProxyActionResult(provider, "stop", agent) })
 	list.AddItem("Status", "", 't', func() { ts.showProxyActionResult(provider, "status", agent) })
 	list.AddItem("Agent Config Preview", "", 'p', func() { ts.showProxyPreview(provider, agent) })
-	list.AddItem("Back", "", 'b', func() { ts.showDetail(provider, "detail") })
+	list.AddItem("Back", "", 'b', func() { ts.returnToAdvancedOrDetail(provider) })
 	list.SetBorder(true)
 	list.SetTitle(" Proxy Manager ")
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' || event.Rune() == 'Q' {
-			ts.showDetail(provider, "detail")
+			ts.returnToAdvancedOrDetail(provider)
 			return nil
 		}
 		return event
