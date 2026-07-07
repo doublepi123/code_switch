@@ -130,9 +130,9 @@ func TestE2E_ListIncludesNewProviders(t *testing.T) {
 		}
 	}
 
-	// kimi-coding is NoModel: true, so its model label in the list is "auto".
-	if !strings.Contains(out, "kimi-coding\thttps://api.kimi.com/coding/\tauto") {
-		t.Fatalf("kimi-coding should show 'auto' model label\n%s", out)
+	// kimi-coding has a default model, so its model label appears in the list.
+	if !strings.Contains(out, "kimi-coding\thttps://api.kimi.com/coding/\tkimi-k2.7-code") {
+		t.Fatalf("kimi-coding should show default model label\n%s", out)
 	}
 
 	// JSON output must include all three new providers as entries. The

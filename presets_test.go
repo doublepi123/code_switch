@@ -4,22 +4,17 @@ import (
 	"testing"
 )
 
-func TestKimiCodingNoModelThinking(t *testing.T) {
+func TestKimiCodingPreset(t *testing.T) {
 	preset, ok := providerPresets["kimi-coding"]
 	if !ok {
 		t.Fatal("kimi-coding preset not found")
 	}
 
-	// Per https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html:
-	// Kimi ignores the model name and routes by thinking mode, so no model is pinned.
-	if !preset.NoModel {
-		t.Errorf("NoModel = false, want true (model name should be left empty)")
+	if preset.NoModel {
+		t.Errorf("NoModel = true, want false")
 	}
-	if preset.Model != "" {
-		t.Errorf("Model = %q, want empty (provider-routed)", preset.Model)
-	}
-	if len(preset.Models) != 0 {
-		t.Errorf("Models = %v, want empty", preset.Models)
+	if preset.Model != "kimi-k2.7-code" {
+		t.Errorf("Model = %q, want kimi-k2.7-code", preset.Model)
 	}
 	for _, field := range []struct {
 		name string
@@ -31,7 +26,7 @@ func TestKimiCodingNoModelThinking(t *testing.T) {
 		{"Subagent", preset.Subagent},
 	} {
 		if field.got != "" {
-			t.Errorf("%s = %q, want empty (NoModel provider)", field.name, field.got)
+			t.Errorf("%s = %q, want empty", field.name, field.got)
 		}
 	}
 

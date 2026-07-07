@@ -716,9 +716,9 @@ func TestApplyPresetZhipuCNGLM52OneMKnownModel(t *testing.T) {
 	}
 }
 
-func TestApplyPresetKimiCodingNoModel(t *testing.T) {
-	if !providerPresets["kimi-coding"].NoModel {
-		t.Fatalf("kimi-coding preset must set NoModel")
+func TestApplyPresetKimiCoding(t *testing.T) {
+	if providerPresets["kimi-coding"].NoModel {
+		t.Fatalf("kimi-coding preset must NOT set NoModel")
 	}
 
 	root := map[string]any{
@@ -740,17 +740,8 @@ func TestApplyPresetKimiCodingNoModel(t *testing.T) {
 	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
 		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for kimi-coding")
 	}
-	// Model name is intentionally left empty: Kimi routes by thinking mode, not model name.
-	for _, key := range []string{
-		"ANTHROPIC_MODEL",
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
-		"ANTHROPIC_DEFAULT_SONNET_MODEL",
-		"ANTHROPIC_DEFAULT_OPUS_MODEL",
-		"CLAUDE_CODE_SUBAGENT_MODEL",
-	} {
-		if v, ok := env[key]; ok {
-			t.Fatalf("expected %s to be unset for kimi-coding (NoModel), got %v", key, v)
-		}
+	if got := env["ANTHROPIC_MODEL"]; got != "kimi-k2.7-code" {
+		t.Fatalf("ANTHROPIC_MODEL = %v, want kimi-k2.7-code", got)
 	}
 	if got := env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]; got != "262144" {
 		t.Fatalf("CLAUDE_CODE_AUTO_COMPACT_WINDOW = %v, want 262144", got)

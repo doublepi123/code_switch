@@ -202,7 +202,7 @@ func TestBuildProxyRouteDefensiveCopy(t *testing.T) {
 // Issue 3 (Important): `model set` / `use-model` must reuse
 // validateProviderModel(provider, model) before persisting. In particular:
 //   - opencode-go must reject models in unsupportedOpenCodeGoAnthropicModels.
-//   - NoModel providers (e.g. kimi-coding) must reject default-model setting.
+//   - Providers with fixed model constraints must reject invalid model setting.
 //   - Custom providers must NOT be rejected by validateProviderModel.
 // =============================================================================
 
@@ -226,23 +226,19 @@ func TestCmdModelSetRejectsUnsupportedOpenCodeGoModel(t *testing.T) {
 	}
 }
 
-// TestCmdModelSetRejectsNoModelProvider: a NoModel provider (kimi-coding)
-// must reject setting a default model because it does not accept model
-// selection at all.
-func TestCmdModelSetRejectsNoModelProvider(t *testing.T) {
+// TestCmdModelSetAllowsKimiCodingModel: kimi-coding has a default model and
+// accepts default-model setting.
+func TestCmdModelSetAllowsKimiCodingModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	out := &bytes.Buffer{}
-	err := runWithIO([]string{"model", "set", "kimi-coding", "some-model"}, strings.NewReader(""), out)
-	if err == nil {
-		t.Fatalf("expected error for NoModel provider, got nil\noutput: %s", out.String())
+	if err := runWithIO([]string{"model", "set", "kimi-coding", "some-model"}, strings.NewReader(""), out); err != nil {
+		t.Fatalf("model set kimi-coding: %v\noutput: %s", err, out.String())
 	}
-	if !strings.Contains(err.Error(), "kimi-coding") {
-		t.Fatalf("error should mention provider kimi-coding, got: %v", err)
-	}
-	if !strings.Contains(strings.ToLower(err.Error()), "model") {
-		t.Fatalf("error should explain model selection is not accepted, got: %v", err)
+	cfg := loadTestAppConfig(t)
+	if got := cfg.Providers["kimi-coding"].Model; got != "some-model" {
+		t.Fatalf("kimi-coding stored model = %q, want some-model", got)
 	}
 }
 
@@ -286,16 +282,22 @@ func TestCmdUseModelRejectsUnsupportedOpenCodeGoModel(t *testing.T) {
 	}
 }
 
-// TestCmdUseModelRejectsNoModelProvider: use-model must reject a NoModel
-// provider.
-func TestCmdUseModelRejectsNoModelProvider(t *testing.T) {
+// TestCmdUseModelAllowsKimiCodingModel: use-model must allow kimi-coding now
+// that it has a default model.
+func TestCmdUseModelAllowsKimiCodingModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	out := &bytes.Buffer{}
-	err := runWithIO([]string{"use-model", "kimi-coding", "some-model"}, strings.NewReader(""), out)
-	if err == nil {
-		t.Fatalf("expected error for NoModel provider, got nil\noutput: %s", out.String())
+	if err := runWithIO([]string{"use-model", "kimi-coding", "some-model"}, strings.NewReader(""), out); err != nil {
+		t.Fatalf("use-model kimi-coding: %v\noutput: %s", err, out.String())
+	}
+	cfg := loadTestAppConfig(t)
+	if got := cfg.Providers["kimi-coding"].Model; got != "some-model" {
+		t.Fatalf("kimi-coding default model = %q, want some-model", got)
+	}
+	if got := cfg.ModelMappings["kimi-coding"]["default"]; got != "some-model" {
+		t.Fatalf("kimi-coding default mapping = %q, want some-model", got)
 	}
 }
 

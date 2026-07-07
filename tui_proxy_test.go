@@ -111,15 +111,14 @@ func TestUseModelForProviderRejectsEmptyArgs(t *testing.T) {
 	}
 }
 
-func TestUseModelForProviderRejectsNoModelProvider(t *testing.T) {
-	// kimi-coding is a NoModel preset (configured by API key alone).
+func TestUseModelForProviderAllowsKimiCodingModel(t *testing.T) {
+	// kimi-coding has a default model and accepts model selection.
 	cfg := &AppConfig{Providers: map[string]StoredProvider{"kimi-coding": {APIKey: "sk-test"}}}
-	err := useModelForProvider(cfg, agentClaude, "kimi-coding", "anything")
-	if err == nil {
-		t.Fatal("expected error for NoModel provider, got nil")
+	if err := useModelForProvider(cfg, agentClaude, "kimi-coding", "anything"); err != nil {
+		t.Fatalf("useModelForProvider kimi-coding: %v", err)
 	}
-	if !strings.Contains(err.Error(), "does not accept model selection") {
-		t.Fatalf("unexpected error message: %v", err)
+	if got := cfg.Providers["kimi-coding"].Model; got != "anything" {
+		t.Fatalf("kimi-coding model = %q, want anything", got)
 	}
 }
 
@@ -572,23 +571,21 @@ func TestProxyRouteFormSubmitArgsRoundTripCmdConfigure(t *testing.T) {
 	}
 }
 
-func TestProxyRouteFormSubmitArgsDropsEmptyModel(t *testing.T) {
+func TestProxyRouteFormSubmitArgsIncludesKimiCodingDefaultModel(t *testing.T) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{"kimi-coding": {APIKey: "sk-test"}}}
 	def := proxyRouteFormDefaults("kimi-coding", "codex", cfg)
-	if def.Model != "" {
-		t.Fatalf("kimi-coding default model should be empty, got %q", def.Model)
+	if def.Model != "kimi-k2.7-code" {
+		t.Fatalf("kimi-coding default model = %q, want kimi-k2.7-code", def.Model)
 	}
 	args := proxyRouteFormSubmitArgs(def)
-	for i, a := range args {
-		if a == "--model" {
-			t.Fatalf("empty model should be dropped, but --model present at index %d in %#v", i, args)
-		}
-	}
-	// Provider and protocol must still be present.
-	hasProvider, hasProtocol := false, false
+	// Provider, model, and protocol must be present.
+	hasProvider, hasModel, hasProtocol := false, false, false
 	for i, a := range args {
 		if a == "--provider" && i+1 < len(args) && args[i+1] == "kimi-coding" {
 			hasProvider = true
+		}
+		if a == "--model" && i+1 < len(args) && args[i+1] == "kimi-k2.7-code" {
+			hasModel = true
 		}
 		if a == "--protocol" && i+1 < len(args) {
 			hasProtocol = true
@@ -596,6 +593,9 @@ func TestProxyRouteFormSubmitArgsDropsEmptyModel(t *testing.T) {
 	}
 	if !hasProvider {
 		t.Fatalf("submit args missing --provider in %#v", args)
+	}
+	if !hasModel {
+		t.Fatalf("submit args missing --model kimi-k2.7-code in %#v", args)
 	}
 	if !hasProtocol {
 		t.Fatalf("submit args missing --protocol in %#v", args)

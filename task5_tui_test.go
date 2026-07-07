@@ -364,14 +364,12 @@ func TestUseModelFormDefaultPrefersCustomTypedModel(t *testing.T) {
 	}
 }
 
-func TestUseModelFormDefaultNoModelProviderEmpty(t *testing.T) {
-	// NoModel presets must yield an empty default (form starts blank and
-	// the page itself is hidden for NoModel providers, but the helper
-	// must still be safe to call).
+func TestUseModelFormDefaultKimiCodingUsesPresetDefault(t *testing.T) {
+	// kimi-coding has a preset default model and should prefill the form with it.
 	cfg := &AppConfig{}
 	got := useModelFormDefault(agentClaude, cfg, "kimi-coding", "")
-	if got != "" {
-		t.Fatalf("useModelFormDefault for NoModel provider = %q, want empty", got)
+	if got != "kimi-k2.7-code" {
+		t.Fatalf("useModelFormDefault for kimi-coding = %q, want kimi-k2.7-code", got)
 	}
 }
 
