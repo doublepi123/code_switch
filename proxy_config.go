@@ -254,14 +254,13 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	}
 	// Protocol resolution uses one registry instance for both parsing and
 	// compatibility validation:
-	//   - empty/whitespace UpstreamProtocol -> agent-specific default via
-	//     defaultProxyProtocolForAgent(agent). This MUST be the
-	//     agent-specific default (not a global constant) so a hand-edited
-	//     config that omits the field produces the SAME route as a fresh
-	//     `configure`. In particular, claude + anthropic-messages is an
-	//     illegal combination that validateProxyAgentProtocol would reject;
-	//     resolving to defaultProxyProtocolForAgent("claude") =
-	//     openai-responses keeps hand-edited and configured routes identical.
+	//   - empty/whitespace UpstreamProtocol first resolves to the
+	//     agent-specific default via defaultProxyProtocolForAgent(agent). If
+	//     that default is unsupported by the selected provider (for example,
+	//     kimi-coding only exposes openai-chat), we fall back to the same
+	//     provider-aware proxy selection used by fresh configure/switch flows.
+	//     This keeps legacy/hand-edited routes usable without silently changing
+	//     explicitly requested protocols.
 	//   - non-empty but unrecognized value -> error (no silent downgrade),
 	//     via resolveProxyProtocol.
 	routeForValidation := rc
@@ -270,6 +269,13 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	protocol, err := routeForValidation.ResolveProtocol(registry)
 	if err != nil {
 		return ProxyRoute{}, err
+	}
+	if strings.TrimSpace(rc.UpstreamProtocol) == "" && !providerCanUseProxyProtocol(preset, protocol) {
+		plan, err := resolveConnection(AgentName(agent), provider, preset, "proxy")
+		if err == nil {
+			protocol = plan.UpstreamProtocol
+			routeForValidation.UpstreamProtocol = string(protocol)
+		}
 	}
 	// Enforce the agent/protocol compatibility matrix at route-build time
 	// too, so a stale/hand-edited config (or a configure that pre-dated this

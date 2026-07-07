@@ -107,6 +107,51 @@ func TestCmdProxyConfigureDefaultProtocolUsesProviderEndpoint(t *testing.T) {
 	}
 }
 
+func TestBuildProxyRouteFromConfigOmittedProtocolUsesKimiChatEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"kimi-coding": {APIKey: "sk-test"},
+		},
+		Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+			"codex": {Agent: "codex", Provider: "kimi-coding"},
+		}},
+	}
+
+	route, err := buildProxyRouteFromConfig("codex", cfg, "route-token")
+	if err != nil {
+		t.Fatalf("buildProxyRouteFromConfig error: %v", err)
+	}
+	if route.UpstreamProtocol != protocolOpenAIChat {
+		t.Fatalf("UpstreamProtocol = %q, want %q", route.UpstreamProtocol, protocolOpenAIChat)
+	}
+	if route.UpstreamBaseURL != "https://api.kimi.com/coding/v1" {
+		t.Fatalf("UpstreamBaseURL = %q, want https://api.kimi.com/coding/v1", route.UpstreamBaseURL)
+	}
+	if got := upstreamURL(route.UpstreamBaseURL, openAIChatAdapter{}.UpstreamPath()); got != "https://api.kimi.com/coding/v1/chat/completions" {
+		t.Fatalf("upstream URL = %q, want Kimi chat completions URL", got)
+	}
+}
+
+func TestBuildProxyRouteFromConfigRejectsExplicitKimiResponsesProtocol(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"kimi-coding": {APIKey: "sk-test"},
+		},
+		Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+			"codex": {Agent: "codex", Provider: "kimi-coding", UpstreamProtocol: string(protocolOpenAIResponses)},
+		}},
+	}
+
+	_, err := buildProxyRouteFromConfig("codex", cfg, "route-token")
+	if err == nil {
+		t.Fatal("expected explicit kimi-coding openai-responses route to fail")
+	}
+	if !strings.Contains(err.Error(), "openai-responses endpoint") {
+		t.Fatalf("error = %v, want missing openai-responses endpoint", err)
+	}
+}
+
 func TestCmdProxyConfigureRejectsProtocolWithoutProviderEndpoint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var out bytes.Buffer
