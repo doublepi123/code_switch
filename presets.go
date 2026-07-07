@@ -238,7 +238,8 @@ var providerPresets = map[string]ProviderPreset{
 		Name:    "OpenRouter",
 		BaseURL: "https://openrouter.ai/api",
 		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
-			protocolOpenAIChat: {BaseURL: "https://openrouter.ai/api/v1", AuthEnv: "OPENROUTER_API_KEY"},
+			protocolAnthropicMessages: {BaseURL: "https://openrouter.ai/api", AuthEnv: "OPENROUTER_API_KEY"},
+			protocolOpenAIChat:        {BaseURL: "https://openrouter.ai/api/v1", AuthEnv: "OPENROUTER_API_KEY"},
 		},
 		Model:           "anthropic/claude-sonnet-4.6",
 		Models:          []string{"anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5", "anthropic/claude-opus-4.7"},
@@ -254,7 +255,7 @@ var providerPresets = map[string]ProviderPreset{
 		BaseURL: "https://api.deepseek.com/anthropic",
 		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
 			protocolAnthropicMessages: {BaseURL: "https://api.deepseek.com/anthropic", AuthEnv: "ANTHROPIC_AUTH_TOKEN"},
-			protocolOpenAIChat:         {BaseURL: "https://api.deepseek.com/v1", AuthEnv: "DEEPSEEK_API_KEY"},
+			protocolOpenAIChat:        {BaseURL: "https://api.deepseek.com/v1", AuthEnv: "DEEPSEEK_API_KEY"},
 		},
 		Model:     "deepseek-v4-pro[1m]",
 		Models:    []string{"deepseek-v4-pro[1m]", "deepseek-v4-pro", "deepseek-v4-flash"},
@@ -306,7 +307,8 @@ var providerPresets = map[string]ProviderPreset{
 		Name:    "Ollama (Local)",
 		BaseURL: "http://localhost:11434",
 		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
-			protocolOpenAIChat: {BaseURL: "http://localhost:11434/v1"},
+			protocolAnthropicMessages: {BaseURL: "http://localhost:11434", AuthEnv: "ANTHROPIC_AUTH_TOKEN"},
+			protocolOpenAIChat:        {BaseURL: "http://localhost:11434/v1"},
 		},
 		Model: "qwen3-coder",
 		Models: []string{"qwen3-coder", "gpt-oss:20b", "qwen2.5:14b", "qwen2.5:7b", "qwen2.5:32b", "qwen2.5:72b",
@@ -382,7 +384,8 @@ var providerPresets = map[string]ProviderPreset{
 		Name:    "Ollama Cloud",
 		BaseURL: "https://ollama.com",
 		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
-			protocolOpenAIChat: {BaseURL: "https://ollama.com/v1", AuthEnv: "OLLAMA_API_KEY"},
+			protocolAnthropicMessages: {BaseURL: "https://ollama.com", AuthEnv: "ANTHROPIC_AUTH_TOKEN"},
+			protocolOpenAIChat:        {BaseURL: "https://ollama.com/v1", AuthEnv: "OLLAMA_API_KEY"},
 		},
 		Model: "qwen3-coder:480b",
 		Models: []string{

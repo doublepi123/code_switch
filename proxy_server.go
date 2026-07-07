@@ -24,11 +24,18 @@ const proxyMaxRequestBodyBytes = 10 << 20
 // truncating it surfaces as an explicit 502 instead of an OOM.
 const proxyMaxUpstreamBodyBytes = 10 << 20
 
-// proxyHTTPClient is the package-level client used for all upstream
+// proxyHTTPClient is the package-level client used for buffered upstream
 // calls. Using a shared client (instead of http.DefaultClient) gives
-// the proxy a bounded total request timeout so a wedged upstream cannot
-// hold a handler goroutine forever.
+// non-streaming proxy requests a bounded total request timeout so a wedged
+// upstream cannot hold a handler goroutine forever.
 var proxyHTTPClient = &http.Client{Timeout: 60 * time.Second}
+
+// proxyStreamingHTTPClient is used for SSE upstream calls. It deliberately has
+// no total request timeout: long-running model streams can be idle for more
+// than proxyHTTPClient's buffered-request deadline between chunks. The inbound
+// request context still cancels the upstream request when the client disconnects
+// or the server shuts down.
+var proxyStreamingHTTPClient = &http.Client{}
 
 // proxyAnthropicVersionHeader is the version string the proxy sends to
 // every Anthropic Messages upstream. Anthropic's API rejects requests
@@ -477,7 +484,7 @@ func proxyRouteAuthEnv(route ProxyRoute) string {
 }
 
 func serveStreamingProtocolUpstream(w http.ResponseWriter, r *http.Request, req *http.Request, inboundAdapter, upstreamAdapter ProtocolAdapter) {
-	resp, err := proxyHTTPClient.Do(req)
+	resp, err := proxyStreamingHTTPClient.Do(req)
 	if err != nil {
 		writeProxyError(w, http.StatusBadGateway,
 			fmt.Sprintf("upstream request: %v", err))
@@ -510,6 +517,7 @@ func serveStreamingProtocolUpstream(w http.ResponseWriter, r *http.Request, req 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(http.StatusOK)
 	if err := decoder.DecodeStream(resp.Body, func(event StreamEvent) error {
 		return encoder.EncodeStreamEvent(w, event)

@@ -278,7 +278,17 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	if err := routeForValidation.ValidateProtocol(registry); err != nil {
 		return ProxyRoute{}, err
 	}
+	if !providerCanUseProxyProtocol(preset, protocol) {
+		return ProxyRoute{}, fmt.Errorf("provider %q has no %s endpoint", provider, protocol)
+	}
 	return buildProxyRoute(provider, preset, protocol, localToken, mappings), nil
+}
+
+func providerCanUseProxyProtocol(preset ProviderPreset, protocol ProviderProtocol) bool {
+	if _, ok := preset.presetEndpoint(protocol); ok {
+		return true
+	}
+	return len(preset.Endpoints) == 0 && strings.TrimSpace(preset.BaseURL) != ""
 }
 
 // resolveProxyProtocol normalizes a stored protocol string into a

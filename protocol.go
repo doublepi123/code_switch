@@ -118,6 +118,10 @@ func resolveDirectConnection(agent AgentName, provider string, preset ProviderPr
 func resolveProxyConnection(agent AgentName, provider string, preset ProviderPreset, profile AgentProfile) (ConnectionPlan, bool) {
 	for _, protocol := range profile.ProxyUpstreamPreference {
 		endpoint, ok := preset.presetEndpoint(protocol)
+		if !ok && len(preset.Endpoints) == 0 && strings.TrimSpace(preset.BaseURL) != "" {
+			endpoint = ProtocolEndpoint{BaseURL: preset.BaseURL, AuthEnv: preset.AuthEnv}
+			ok = true
+		}
 		if !ok {
 			continue
 		}

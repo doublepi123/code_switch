@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // startAnthropicUpstream returns a test server that mimics an Anthropic
@@ -512,6 +513,118 @@ func TestProxyHandlerStreamTrueReturnsSSE(t *testing.T) {
 	// non-streaming response client-side.
 	if !strings.Contains(string(cap.body), `"stream":true`) {
 		t.Fatalf("upstream body should carry stream:true: %s", string(cap.body))
+	}
+}
+
+func TestProxyHandlerStreamingIgnoresNonStreamingHTTPClientTimeout(t *testing.T) {
+	originalClient := proxyHTTPClient
+	proxyHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}
+	t.Cleanup(func() { proxyHTTPClient = originalClient })
+
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "event: message_start\n"+
+			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":7,"output_tokens":0}}}`+"\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(50 * time.Millisecond)
+		_, _ = io.WriteString(w, "event: content_block_start\n"+
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`+"\n\n"+
+			"event: content_block_delta\n"+
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`+"\n\n"+
+			"event: content_block_stop\n"+
+			`data: {"type":"content_block_stop","index":0}`+"\n\n"+
+			"event: message_delta\n"+
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`+"\n\n"+
+			"event: message_stop\n"+
+			`data: {"type":"message_stop"}`+"\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler := newProxyHandler(ProxyRoute{
+		Provider:         "minimax-cn",
+		Model:            "MiniMax-M3",
+		UpstreamProtocol: protocolAnthropicMessages,
+		UpstreamBaseURL:  upstream.URL,
+		LocalToken:       "local-token",
+	}, "provider-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"m","input":"hi","stream":true}`))
+	req.Header.Set("Authorization", "Bearer local-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for stream:true\nbody: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: response.completed") {
+		t.Fatalf("streaming request was cut off before completion; body:\n%s", body)
+	}
+	if strings.Contains(body, "context deadline exceeded") || strings.Contains(body, "Client.Timeout") {
+		t.Fatalf("streaming body contains client timeout error:\n%s", body)
+	}
+}
+
+func TestProxyHandlerStreamingIgnoresServerWriteTimeout(t *testing.T) {
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "event: message_start\n"+
+			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":7,"output_tokens":0}}}`+"\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(50 * time.Millisecond)
+		_, _ = io.WriteString(w, "event: content_block_start\n"+
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`+"\n\n"+
+			"event: content_block_delta\n"+
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`+"\n\n"+
+			"event: content_block_stop\n"+
+			`data: {"type":"content_block_stop","index":0}`+"\n\n"+
+			"event: message_delta\n"+
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`+"\n\n"+
+			"event: message_stop\n"+
+			`data: {"type":"message_stop"}`+"\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler := newProxyHandler(ProxyRoute{
+		Provider:         "minimax-cn",
+		Model:            "MiniMax-M3",
+		UpstreamProtocol: protocolAnthropicMessages,
+		UpstreamBaseURL:  upstream.URL,
+		LocalToken:       "local-token",
+	}, "provider-key")
+	proxy := httptest.NewUnstartedServer(handler)
+	proxy.Config.WriteTimeout = 20 * time.Millisecond
+	proxy.Start()
+	t.Cleanup(proxy.Close)
+
+	req, err := http.NewRequest(http.MethodPost, proxy.URL+"/v1/responses",
+		strings.NewReader(`{"model":"m","input":"hi","stream":true}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer local-token")
+	resp, err := proxy.Client().Do(req)
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read streaming response: %v", err)
+	}
+	body := string(bodyBytes)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for stream:true\nbody: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "event: response.completed") {
+		t.Fatalf("server WriteTimeout cut off streaming response before completion; body:\n%s", body)
 	}
 }
 

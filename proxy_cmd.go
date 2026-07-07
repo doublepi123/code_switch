@@ -187,7 +187,8 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 	}
 	defer unlock()
 
-	if _, err := resolveProviderPreset(provider, cfg); err != nil {
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
 		return fmt.Errorf("unsupported provider %q", provider)
 	}
 
@@ -215,15 +216,19 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 		if err := validateProxyAgentProtocol(agent, protocolResolved); err != nil {
 			return err
 		}
-	} else {
-		protocolResolved = defaultProxyProtocolForAgent(agent)
-		// The default must itself be a valid combination; this is also
-		// enforced by a unit test on defaultProxyProtocolForAgent. We
-		// call validate here too so a future edit to the defaults table
-		// cannot silently produce a route the proxy would reject.
-		if err := validateProxyAgentProtocol(agent, protocolResolved); err != nil {
-			return err
+		if !providerCanUseProxyProtocol(preset, protocolResolved) {
+			return fmt.Errorf("provider %q has no %s endpoint", provider, protocolResolved)
 		}
+	} else {
+		profile, ok := agentProfiles[AgentName(agent)]
+		if !ok {
+			return fmt.Errorf("unsupported agent %q", agent)
+		}
+		plan, ok := resolveProxyConnection(AgentName(agent), provider, preset, profile)
+		if !ok {
+			return fmt.Errorf("provider %q has no proxy-compatible endpoint for agent %q", provider, agent)
+		}
+		protocolResolved = plan.UpstreamProtocol
 	}
 
 	if cfg.Proxy == nil {

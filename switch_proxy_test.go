@@ -288,7 +288,8 @@ func TestProxyRoutesHashDeterministic(t *testing.T) {
 	cfg2 := &AppConfig{Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
 		"codex": {Agent: "codex", Provider: "deepseek", Model: "deepseek-v4-pro", UpstreamProtocol: "anthropic-messages"},
 	}}}
-	// Different token should NOT affect the hash (tokens are excluded).
+	// Different token should affect the hash: changing a route token changes
+	// daemon dispatch/auth behavior and must force reload.
 	r := cfg2.Proxy.Routes["codex"]
 	r.Token = "different-token"
 	cfg2.Proxy.Routes["codex"] = r
@@ -298,8 +299,8 @@ func TestProxyRoutesHashDeterministic(t *testing.T) {
 	if h1 == "" {
 		t.Fatal("proxyRoutesHash returned empty for non-empty config")
 	}
-	if h1 != h2 {
-		t.Fatalf("same routes (different token) should have same hash: %q vs %q", h1, h2)
+	if h1 == h2 {
+		t.Fatalf("different token should produce different hash: %q", h1)
 	}
 
 	// Different model should change the hash.

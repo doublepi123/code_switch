@@ -70,6 +70,57 @@ func TestWriteReadProxyRuntimeState(t *testing.T) {
 	}
 }
 
+func TestValidateProxyRouteHasAPIKeyUsesAgentScopedKey(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "agent-key"}}},
+		},
+	}
+	route := ProxyRouteConfig{Agent: "codex", Provider: "zhipu-cn"}
+	if err := validateProxyRouteHasAPIKey(route, cfg); err != nil {
+		t.Fatalf("validateProxyRouteHasAPIKey: %v", err)
+	}
+}
+
+func TestBuildProxyServedRoutesUsesAgentScopedKey(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "agent-key"}}},
+		},
+		Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+			"codex": {Agent: "codex", Provider: "zhipu-cn", Model: "glm-5.2", UpstreamProtocol: string(protocolAnthropicMessages), Token: "route-token"},
+		}},
+	}
+	routes, err := buildProxyServedRoutesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("buildProxyServedRoutesFromConfig: %v", err)
+	}
+	if len(routes) != 1 || routes[0].ProviderKey != "agent-key" {
+		t.Fatalf("served routes = %+v, want provider key from agent config", routes)
+	}
+}
+
+func TestBuildProxyServedRoutesUsesRouteMapKeyForAgentScopedKey(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			"codex": {Providers: map[string]StoredProvider{"zhipu-cn": {APIKey: "codex-key"}}},
+		},
+		Proxy: &ProxyConfig{Routes: map[string]ProxyRouteConfig{
+			"codex": {Agent: "claude", Provider: "zhipu-cn", Model: "glm-5.2", UpstreamProtocol: string(protocolAnthropicMessages), Token: "route-token"},
+		}},
+	}
+	routes, err := buildProxyServedRoutesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("buildProxyServedRoutesFromConfig: %v", err)
+	}
+	if len(routes) != 1 || routes[0].ProviderKey != "codex-key" {
+		t.Fatalf("served routes = %+v, want provider key from codex map key", routes)
+	}
+}
+
 func TestReadProxyRuntimeStateMissingIsNotExist(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	_, err := readProxyRuntimeState()
@@ -889,6 +940,62 @@ func TestCmdProxyStartSuccessPath(t *testing.T) {
 	}
 	if _, err := readProxyRuntimeState(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state still present after stop: %v", err)
+	}
+}
+
+func TestCmdProxyStartRestartsWhenRunningRoutesHashDiffers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("injectable sleep-based child is Unix-only")
+	}
+	t.Setenv("HOME", t.TempDir())
+	if err := runWithIO([]string{"set-key", "zhipu-cn", "sk-test"}, nil, io.Discard); err != nil {
+		t.Fatalf("set-key: %v", err)
+	}
+	if err := runWithIO([]string{"proxy", "configure", "codex", "--provider", "zhipu-cn", "--model", "glm-5.2"}, nil, io.Discard); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+
+	const instanceID = "csproxy-old-instance"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"ok":true,"instanceID":%q,"pid":%d}`, instanceID, os.Getpid())
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	oldPort := ln.Addr().(*net.TCPAddr).Port
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+	if err := writeProxyRuntimeState(ProxyRuntimeState{
+		PID:        os.Getpid(),
+		InstanceID: instanceID,
+		Host:       "127.0.0.1",
+		Port:       oldPort,
+		BaseURL:    fmt.Sprintf("http://127.0.0.1:%d/v1", oldPort),
+		StartedAt:  time.Now().UTC(),
+		RoutesHash: "different-route-hash",
+	}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	_, child, restore := withFakeProxyExec(false)
+	defer restore()
+	var out bytes.Buffer
+	if err := cmdProxyStart(nil, &out); err != nil {
+		t.Fatalf("start returned error: %v", err)
+	}
+	if child.agent != "codex" {
+		t.Fatalf("expected route hash mismatch to spawn replacement, child agent = %q; output=%s", child.agent, out.String())
+	}
+	if strings.Contains(out.String(), "already running") {
+		t.Fatalf("start should not report already running when routes hash differs:\n%s", out.String())
 	}
 }
 

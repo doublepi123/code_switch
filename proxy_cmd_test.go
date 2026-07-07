@@ -84,6 +84,45 @@ func TestCmdProxyConfigureRejectsUnknownProtocol(t *testing.T) {
 	}
 }
 
+func TestCmdProxyConfigureDefaultProtocolUsesProviderEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var out bytes.Buffer
+	if err := runWithIO([]string{"set-key", "kimi-coding", "sk-test"}, nil, &out); err != nil {
+		t.Fatalf("set-key error: %v", err)
+	}
+	out.Reset()
+	if err := runWithIO([]string{"proxy", "configure", "codex", "--provider", "kimi-coding"}, nil, &out); err != nil {
+		t.Fatalf("proxy configure error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".code-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := cfg.Proxy.Routes["codex"].UpstreamProtocol; got != string(protocolOpenAIChat) {
+		t.Fatalf("upstreamProtocol = %q, want %q", got, protocolOpenAIChat)
+	}
+}
+
+func TestCmdProxyConfigureRejectsProtocolWithoutProviderEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var out bytes.Buffer
+	if err := runWithIO([]string{"set-key", "kimi-coding", "sk-test"}, nil, &out); err != nil {
+		t.Fatalf("set-key error: %v", err)
+	}
+	out.Reset()
+	err := runWithIO([]string{"proxy", "configure", "codex", "--provider", "kimi-coding", "--protocol", string(protocolAnthropicMessages)}, nil, &out)
+	if err == nil {
+		t.Fatal("expected error for provider/protocol mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "endpoint") && !strings.Contains(err.Error(), "compatible") {
+		t.Fatalf("error should mention endpoint/compatibility: %v", err)
+	}
+}
+
 func TestCmdProxyPreviewMissingRouteErrors(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var out bytes.Buffer

@@ -22,14 +22,14 @@ import (
 )
 
 type ProxyRuntimeState struct {
-	PID         int       `json:"pid"`
-	InstanceID  string    `json:"instanceID,omitempty"`
-	Host        string    `json:"host"`
-	Port        int       `json:"port"`
-	BaseURL     string    `json:"baseURL"`
-	Token       string    `json:"token"`
-	StartedAt   time.Time `json:"startedAt"`
-	RoutesHash  string    `json:"routesHash,omitempty"`
+	PID        int       `json:"pid"`
+	InstanceID string    `json:"instanceID,omitempty"`
+	Host       string    `json:"host"`
+	Port       int       `json:"port"`
+	BaseURL    string    `json:"baseURL"`
+	Token      string    `json:"token"`
+	StartedAt  time.Time `json:"startedAt"`
+	RoutesHash string    `json:"routesHash,omitempty"`
 }
 
 type proxyServeInstance struct {
@@ -71,10 +71,9 @@ func removeProxyRuntimeState() error {
 
 // proxyRoutesHash computes a deterministic fingerprint of the proxy routes in
 // the app config. It captures the agent, provider, model, upstream protocol,
-// and model-mappings of every route (the token is deliberately excluded so a
-// token regeneration alone does not force a daemon restart). Two configs that
-// produce the same hash will serve identical routes at the daemon level, so
-// the daemon does NOT need to be restarted when the hash matches.
+// route token, and model-mappings of every route. Two configs that produce the
+// same hash will serve identical routes at the daemon level, so the daemon does
+// NOT need to be restarted when the hash matches.
 func proxyRoutesHash(cfg *AppConfig) string {
 	if cfg == nil || cfg.Proxy == nil || len(cfg.Proxy.Routes) == 0 {
 		return ""
@@ -83,7 +82,7 @@ func proxyRoutesHash(cfg *AppConfig) string {
 	var b strings.Builder
 	for _, agent := range agents {
 		route := cfg.Proxy.Routes[agent]
-		fmt.Fprintf(&b, "%s|%s|%s|%s|", agent, route.Provider, route.Model, route.UpstreamProtocol)
+		fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", agent, route.Provider, route.Model, route.UpstreamProtocol, route.Token)
 		keys := make([]string, 0, len(route.ModelMappings))
 		for k := range route.ModelMappings {
 			keys = append(keys, k)
@@ -97,7 +96,6 @@ func proxyRoutesHash(cfg *AppConfig) string {
 	h := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(h[:])
 }
-
 
 func proxyHealthURL(state ProxyRuntimeState) string {
 	// Use net.JoinHostPort so IPv6 hosts are bracketed. A naive
@@ -344,14 +342,14 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 	}
 	pid := os.Getpid()
 	state := ProxyRuntimeState{
-		PID:         pid,
-		InstanceID:  instanceID,
-		Host:        proxyCfg.Host,
-		Port:        actualPort,
-		BaseURL:     baseURL,
-		Token:       token,
-		StartedAt:   time.Now().UTC(),
-		RoutesHash:  proxyRoutesHash(cfg),
+		PID:        pid,
+		InstanceID: instanceID,
+		Host:       proxyCfg.Host,
+		Port:       actualPort,
+		BaseURL:    baseURL,
+		Token:      token,
+		StartedAt:  time.Now().UTC(),
+		RoutesHash: proxyRoutesHash(cfg),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +391,7 @@ func buildProxyServedRoutesFromConfig(cfg *AppConfig) ([]proxyServedRoute, error
 	routes := make([]proxyServedRoute, 0, len(cfg.Proxy.Routes))
 	for _, agent := range sortedProxyRouteAgents(cfg.Proxy.Routes) {
 		persisted := cfg.Proxy.Routes[agent]
+		persisted.Agent = agent
 		if err := validateProxyRouteHasAPIKey(persisted, cfg); err != nil {
 			return nil, err
 		}
@@ -412,7 +411,7 @@ func buildProxyServedRoutesFromConfig(cfg *AppConfig) ([]proxyServedRoute, error
 			Agent:          agent,
 			ClientProtocol: profile.ClientProtocol,
 			Route:          route,
-			ProviderKey:    cfg.Providers[route.Provider].APIKey,
+			ProviderKey:    storedAPIKeyForAgent(cfg, AgentName(agent), route.Provider),
 		})
 	}
 	return routes, nil
@@ -582,11 +581,21 @@ func cmdProxyStart(args []string, out io.Writer) error {
 			if cfgErr != nil {
 				return cfgErr
 			}
-			if err := refreshProxyClientConfigs(existingState, freshCfg); err != nil {
-				return err
+			currentHash := proxyRoutesHash(freshCfg)
+			if currentHash != "" && existingState.RoutesHash != "" && currentHash != existingState.RoutesHash {
+				if existingState.PID > 0 && report.PID == existingState.PID && existingState.PID != os.Getpid() {
+					terminateProxyProcess(existingState.PID)
+				}
+				if err := removeProxyRuntimeState(); err != nil {
+					return err
+				}
+			} else {
+				if err := refreshProxyClientConfigs(existingState, freshCfg); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "proxy already running\npid: %d\nbase_url: %s\n", existingState.PID, existingState.BaseURL)
+				return nil
 			}
-			fmt.Fprintf(out, "proxy already running\npid: %d\nbase_url: %s\n", existingState.PID, existingState.BaseURL)
-			return nil
 		}
 	}
 	// Snapshot any pre-existing state BEFORE spawning the child. The child
@@ -771,7 +780,7 @@ func validateProxyRouteHasAPIKey(route ProxyRouteConfig, cfg *AppConfig) error {
 	if err != nil {
 		return fmt.Errorf("unsupported provider %q", provider)
 	}
-	if !preset.NoAPIKey && strings.TrimSpace(cfg.Providers[provider].APIKey) == "" {
+	if !preset.NoAPIKey && strings.TrimSpace(storedAPIKeyForAgent(cfg, AgentName(route.Agent), provider)) == "" {
 		return fmt.Errorf("provider %q has no API key configured; run `cs set-key %s <key>` before starting the proxy", provider, provider)
 	}
 	return nil
