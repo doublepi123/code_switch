@@ -1,12 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
-	"time"
 )
 
 type ollamaTagResponse struct {
@@ -22,39 +19,25 @@ type openRouterModelsResponse struct {
 }
 
 type openRouterModelData struct {
-	ID string `json:"id"`
+	ID                  string                 `json:"id"`
+	Name                string                 `json:"name"`
+	Description         string                 `json:"description"`
+	ContextLength       int                    `json:"context_length"`
+	Pricing             openRouterModelPricing `json:"pricing"`
+	SupportedParameters []string               `json:"supported_parameters"`
+}
+
+type openRouterModelPricing struct {
+	Prompt     string `json:"prompt"`
+	Completion string `json:"completion"`
 }
 
 func discoverOllamaModels() []string {
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("http://localhost:11434/api/tags")
-	if err != nil {
+	catalog := fetchOllamaModelCatalog()
+	if catalog.Source != "remote" {
 		return nil
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-
-	var data ollamaTagResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil
-	}
-
-	if len(data.Models) == 0 {
-		return nil
-	}
-
-	models := make([]string, 0, len(data.Models))
-	for _, m := range data.Models {
-		name := strings.TrimSpace(m.Name)
-		if name != "" {
-			models = append(models, name)
-		}
-	}
-	sort.Strings(models)
-	return models
+	return modelIDs(catalog)
 }
 
 func ollamaModels() []string {
@@ -65,39 +48,11 @@ func ollamaModels() []string {
 }
 
 func discoverOpenRouterModels(apiKey string) []string {
-	if strings.TrimSpace(apiKey) == "" {
+	catalog := fetchOpenRouterModelCatalog(apiKey)
+	if catalog.Source != "remote" {
 		return nil
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://openrouter.ai/api/v1/models", nil)
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	var data openRouterModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil
-	}
-	if len(data.Data) == 0 {
-		return nil
-	}
-	models := make([]string, 0, len(data.Data))
-	for _, m := range data.Data {
-		id := strings.TrimSpace(m.ID)
-		if id != "" {
-			models = append(models, id)
-		}
-	}
-	sort.Strings(models)
-	return models
+	return modelIDs(catalog)
 }
 
 func openRouterModels(cfg *AppConfig) []string {
@@ -112,10 +67,7 @@ func openRouterModelsWithAPIKey(cfg *AppConfig, apiKey string) []string {
 	if apiKey == "" {
 		apiKey = storedAPIKeyForAgent(cfg, agentClaude, "openrouter")
 	}
-	if discovered := discoverOpenRouterModels(apiKey); len(discovered) > 0 {
-		return discovered
-	}
-	return providerPresets["openrouter"].Models
+	return modelIDs(providerModelCatalog(cfg, agentCodex, "openrouter", apiKey))
 }
 
 type ModelTiers struct {
@@ -769,19 +721,7 @@ func providerTitle(name string, cfg *AppConfig) string {
 }
 
 func providerModels(cfg *AppConfig, provider string) []string {
-	preset, err := resolveProviderPreset(provider, cfg)
-	if err != nil {
-		return nil
-	}
-	if provider == "ollama" {
-		if models := ollamaModels(); len(models) > 0 {
-			return models
-		}
-	}
-	if len(preset.Models) == 0 {
-		return []string{preset.Model}
-	}
-	return preset.Models
+	return modelIDs(providerModelCatalog(cfg, agentClaude, provider, ""))
 }
 
 func modelIndex(cfg *AppConfig, provider, currentProvider, currentModel string) int {

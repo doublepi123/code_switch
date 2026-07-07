@@ -264,6 +264,27 @@ func (ts *tuiState) buildModels(provider string) []string {
 	return buildModelList(ts.cfg, provider, ts.customModels)
 }
 
+func (ts *tuiState) buildModelCatalog(provider string) ProviderModelCatalog {
+	apiKey := ""
+	if ts.typedAPIKeys != nil {
+		apiKey = ts.typedAPIKeys[provider]
+	}
+	catalog := providerModelCatalog(ts.cfg, ts.agent, provider, apiKey)
+	if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" && !catalogContainsModel(catalog, customModel) {
+		catalog.Models = append([]ProviderModelInfo{{ID: customModel, Description: "custom model"}}, catalog.Models...)
+	}
+	return catalog
+}
+
+func catalogContainsModel(catalog ProviderModelCatalog, modelID string) bool {
+	for _, model := range catalog.Models {
+		if model.ID == modelID {
+			return true
+		}
+	}
+	return false
+}
+
 func (ts *tuiState) finishSelection(provider, model string) {
 	ov, editedTiers := ts.tierOverrides[provider]
 	if !editedTiers && ts.cfg != nil {
@@ -946,11 +967,11 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 
 func (ts *tuiState) showModels(provider, backPage string) {
 	ts.selectedProvider = provider
-	allModels := ts.buildModels(provider)
+	catalog := ts.buildModelCatalog(provider)
 	defaultModel := defaultSelectionModelForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
 
 	modelList := tview.NewList()
-	modelList.ShowSecondaryText(false)
+	modelList.ShowSecondaryText(true)
 	modelList.SetBorder(true)
 	modelList.SetTitle(" Models ")
 
@@ -959,19 +980,30 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	searchInput.SetPlaceholder("type to filter models...")
 	searchInput.SetFieldBackgroundColor(tcell.ColorDefault)
 
-	populateModels := func(filter string) {
-		modelList.Clear()
+	status := tview.NewTextView()
+	status.SetText(modelCatalogStatusText(catalog))
+
+	filteredModels := func(filter string) []ProviderModelInfo {
 		filter = strings.ToLower(strings.TrimSpace(filter))
-		for _, model := range allModels {
-			if filter != "" && !strings.Contains(strings.ToLower(model), filter) {
+		models := []ProviderModelInfo{}
+		for _, model := range catalog.Models {
+			if filter != "" && !strings.Contains(strings.ToLower(model.ID), filter) && !strings.Contains(strings.ToLower(model.Name), filter) {
 				continue
 			}
-			label := model
-			if model == defaultModel {
+			models = append(models, model)
+		}
+		return models
+	}
+
+	populateModels := func(filter string) {
+		modelList.Clear()
+		for _, model := range filteredModels(filter) {
+			label := model.ID
+			if model.ID == defaultModel {
 				label += " [default]"
 			}
-			modelName := model
-			modelList.AddItem(label, "", 0, func() {
+			modelName := model.ID
+			modelList.AddItem(label, modelCatalogSecondaryText(model), 0, func() {
 				if backPage == "provider-workspace" {
 					if ts.selectedModel == nil {
 						ts.selectedModel = map[string]string{}
@@ -986,7 +1018,13 @@ func (ts *tuiState) showModels(provider, backPage string) {
 		modelList.AddItem("Custom model...", "", 0, func() {
 			ts.showCustomModelForm(provider, backPage)
 		})
-		selectedIndex := modelIndexForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
+		selectedIndex := 0
+		for i, model := range filteredModels(filter) {
+			if model.ID == defaultModel {
+				selectedIndex = i
+				break
+			}
+		}
 		if filter == "" {
 			if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
 				selectedIndex = 0
@@ -1049,21 +1087,25 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			ts.showCustomModelForm(provider, backPage)
 			return nil
 		case event.Rune() == 'r' || event.Rune() == 'R':
-			allModels = ts.buildModels(provider)
+			catalog = ts.buildModelCatalog(provider)
+			status.SetText(modelCatalogStatusText(catalog))
 			populateModels(searchInput.GetText())
 			return nil
-		case event.Rune() == '1':
-			filter := strings.ToLower(strings.TrimSpace(searchInput.GetText()))
-			filtered := []string{}
-			for _, m := range allModels {
-				if filter != "" && !strings.Contains(strings.ToLower(m), filter) {
-					continue
-				}
-				filtered = append(filtered, m)
+		case event.Rune() == 'i' || event.Rune() == 'I':
+			models := filteredModels(searchInput.GetText())
+			idx := modelList.GetCurrentItem()
+			if idx >= 0 && idx < len(models) {
+				ts.showModelInfo(provider, catalog, models[idx].ID, func() {
+					ts.pages.SwitchToPage("models")
+					ts.app.SetFocus(modelList)
+				})
 			}
+			return nil
+		case event.Rune() == '1':
+			filtered := filteredModels(searchInput.GetText())
 			idx := modelList.GetCurrentItem()
 			if idx >= 0 && idx < len(filtered) {
-				model := filtered[idx]
+				model := filtered[idx].ID
 				if strings.HasSuffix(model, "[1m]") {
 					model = strings.TrimSuffix(model, "[1m]")
 				} else {
@@ -1088,16 +1130,9 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	ts.updateTierInfo(provider, defaultModel)
 
 	modelList.SetChangedFunc(func(index int, mainText string, secondaryText string, shortcut rune) {
-		filter := strings.ToLower(strings.TrimSpace(searchInput.GetText()))
-		filtered := []string{}
-		for _, m := range allModels {
-			if filter != "" && !strings.Contains(strings.ToLower(m), filter) {
-				continue
-			}
-			filtered = append(filtered, m)
-		}
+		filtered := filteredModels(searchInput.GetText())
 		if index >= 0 && index < len(filtered) {
-			ts.updateTierInfo(provider, filtered[index])
+			ts.updateTierInfo(provider, filtered[index].ID)
 		} else if index == len(filtered) {
 			ts.tierInfo.SetText("enter a custom model name")
 		} else {
@@ -1106,16 +1141,50 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	})
 
 	help := tview.NewTextView()
-	help.SetText("Enter actions   / filter   c custom   k edit key   1 toggle 1m   r refresh   q/esc/← back")
+	help.SetText("Enter actions   / filter   i info   c custom   k edit key   1 toggle 1m   r refresh   q/esc/← back")
 
 	page := tview.NewFlex()
 	page.SetDirection(tview.FlexRow)
 	page.AddItem(searchInput, 1, 0, false)
+	page.AddItem(status, 1, 0, false)
 	page.AddItem(ts.tierInfo, 1, 0, false)
 	page.AddItem(modelList, 0, 1, true)
 	page.AddItem(help, 1, 0, false)
 	ts.pages.AddAndSwitchToPage("models", page, true)
 	ts.app.SetFocus(modelList)
+}
+
+func (ts *tuiState) showModelInfo(provider string, catalog ProviderModelCatalog, modelID string, back func()) {
+	if back == nil {
+		back = func() { ts.pages.SwitchToPage("models") }
+	}
+	text := tview.NewTextView()
+	text.SetBorder(true)
+	text.SetTitle(" Model Info ")
+	text.SetText(modelInfoText(provider, catalog, modelID))
+	text.SetDynamicColors(true)
+	text.SetDoneFunc(func(key tcell.Key) {
+		back()
+	})
+	text.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyLeft:
+			back()
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q' || event.Rune() == 'b' || event.Rune() == 'B':
+			back()
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView()
+	help.SetText("q/esc/← back")
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(text, 0, 1, true)
+	page.AddItem(help, 1, 0, false)
+	ts.pages.AddAndSwitchToPage("model-info", page, true)
+	ts.app.SetFocus(text)
 }
 
 type modelSelectionActionSpec struct {

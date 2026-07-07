@@ -204,24 +204,13 @@ func providerModelsForAgent(cfg *AppConfig, agent AgentName, provider string) []
 }
 
 func providerModelsForAgentWithAPIKey(cfg *AppConfig, agent AgentName, provider, apiKey string) []string {
-	if agent == agentCodex {
-		provider = canonicalProviderName(provider)
-		preset, err := resolveAgentProviderPreset(agent, provider, cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to resolve preset for provider %q: %v\n", provider, err)
-			return nil
-		}
-		if provider == "openrouter" {
-			if models := openRouterModelsWithAPIKey(cfg, apiKey); len(models) > 0 {
-				return models
-			}
-		}
-		if len(preset.Models) == 0 {
-			return []string{preset.Model}
-		}
-		return preset.Models
+	provider = canonicalProviderName(provider)
+	catalog := providerModelCatalog(cfg, agent, provider, apiKey)
+	if catalog.Err != "" && len(catalog.Models) == 0 {
+		fmt.Fprintf(os.Stderr, "warning: failed to resolve models for provider %q: %s\n", provider, catalog.Err)
+		return nil
 	}
-	return providerModels(cfg, provider)
+	return modelIDs(catalog)
 }
 
 func defaultSelectionModelForAgent(cfg *AppConfig, agent AgentName, provider, currentProvider, currentModel string) string {
