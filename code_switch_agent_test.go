@@ -141,6 +141,52 @@ func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
 	}
 }
 
+func TestCodexSwitchUsesCODEXHOMEWhenDirFlagAbsent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexHome := filepath.Join(home, "temporary-codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "ollama-cloud", "--agent", "codex", "--api-key", "ollama-sk", "--model", "qwen3-coder:480b"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex switch returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config from CODEX_HOME: %v", err)
+	}
+	config := string(configBytes)
+	if !strings.Contains(config, `model = "qwen3-coder:480b"`) {
+		t.Fatalf("codex config missing selected model:\n%s", config)
+	}
+	defaultPath := filepath.Join(home, ".codex", "config.toml")
+	if _, err := os.Stat(defaultPath); !os.IsNotExist(err) {
+		t.Fatalf("default codex config path %s should not be written when CODEX_HOME is set; stat err=%v", defaultPath, err)
+	}
+}
+
+func TestCodexDirFlagOverridesCODEXHOME(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexHome := filepath.Join(home, "env-codex-home")
+	codexDir := filepath.Join(home, "flag-codex-dir")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "ollama-cloud", "--agent", "codex", "--api-key", "ollama-sk", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex switch returned error: %v", err)
+	}
+
+	if _, err := os.ReadFile(filepath.Join(codexDir, "config.toml")); err != nil {
+		t.Fatalf("read codex config from --codex-dir: %v", err)
+	}
+	envPath := filepath.Join(codexHome, "config.toml")
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Fatalf("CODEX_HOME config path %s should not be written when --codex-dir is set; stat err=%v", envPath, err)
+	}
+}
+
 func TestCodexSwitchDeepSeekV4SetsReasoningEffortXhigh(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -365,6 +411,40 @@ base_url = "https://ollama.com/v1"
 
 	output := &bytes.Buffer{}
 	if err := runWithIO([]string{"current", "--agent", "codex", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex current returned error: %v", err)
+	}
+	out := output.String()
+	for _, want := range []string{"provider: ollama-cloud", "base_url: https://ollama.com/v1", "model: qwen3-coder:480b"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("current output missing %q: %q", want, out)
+		}
+	}
+}
+
+func TestCodexCurrentUsesCODEXHOMEWhenDirFlagAbsent(t *testing.T) {
+	origNoColor := noColor
+	noColor = true
+	t.Cleanup(func() { noColor = origNoColor })
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexHome := filepath.Join(home, "temporary-codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatalf("mkdir codex home: %v", err)
+	}
+	config := `model = "qwen3-coder:480b"
+model_provider = "ollama-cloud"
+
+[model_providers.ollama-cloud]
+base_url = "https://ollama.com/v1"
+`
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write codex config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"current", "--agent", "codex"}, strings.NewReader(""), output); err != nil {
 		t.Fatalf("codex current returned error: %v", err)
 	}
 	out := output.String()

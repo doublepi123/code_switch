@@ -17,6 +17,9 @@ import (
 func codexConfigPath(overrideDir string) string {
 	dir := strings.TrimSpace(overrideDir)
 	if dir == "" {
+		dir = strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	}
+	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return filepath.Join(os.TempDir(), ".codex", "config.toml")

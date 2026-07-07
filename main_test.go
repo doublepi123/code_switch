@@ -7610,8 +7610,15 @@ func TestCodexConfigPath(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	path := codexConfigPath("")
-	if !strings.HasSuffix(path, filepath.Join(".codex", "config.toml")) {
+	if path != filepath.Join(home, ".codex", "config.toml") {
 		t.Fatalf("default path = %q, want ~/.codex/config.toml", path)
+	}
+
+	codexHome := filepath.Join(home, "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+	path = codexConfigPath("")
+	if path != filepath.Join(codexHome, "config.toml") {
+		t.Fatalf("CODEX_HOME path = %q, want %s", path, filepath.Join(codexHome, "config.toml"))
 	}
 
 	customPath := codexConfigPath("/custom/dir")
