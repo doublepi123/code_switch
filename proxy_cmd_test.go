@@ -133,7 +133,7 @@ func TestBuildProxyRouteFromConfigOmittedProtocolUsesKimiChatEndpoint(t *testing
 	}
 }
 
-func TestBuildProxyRouteFromConfigRejectsExplicitKimiResponsesProtocol(t *testing.T) {
+func TestBuildProxyRouteFromConfigAutoDowngradesUnsupportedProtocol(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
 			"kimi-coding": {APIKey: "sk-test"},
@@ -143,12 +143,12 @@ func TestBuildProxyRouteFromConfigRejectsExplicitKimiResponsesProtocol(t *testin
 		}},
 	}
 
-	_, err := buildProxyRouteFromConfig("codex", cfg, "route-token")
-	if err == nil {
-		t.Fatal("expected explicit kimi-coding openai-responses route to fail")
+	route, err := buildProxyRouteFromConfig("codex", cfg, "route-token")
+	if err != nil {
+		t.Fatalf("expected auto-downgrade to succeed, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "openai-responses endpoint") {
-		t.Fatalf("error = %v, want missing openai-responses endpoint", err)
+	if route.UpstreamProtocol != protocolOpenAIChat {
+		t.Fatalf("expected downgrade to openai-chat, got %s", route.UpstreamProtocol)
 	}
 }
 

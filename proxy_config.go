@@ -270,7 +270,7 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	if err != nil {
 		return ProxyRoute{}, err
 	}
-	if strings.TrimSpace(rc.UpstreamProtocol) == "" && !providerCanUseProxyProtocol(preset, protocol) {
+	if !providerCanUseProxyProtocol(preset, protocol) {
 		plan, err := resolveConnection(AgentName(agent), provider, preset, "proxy")
 		if err == nil {
 			protocol = plan.UpstreamProtocol
