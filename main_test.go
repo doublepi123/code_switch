@@ -6137,6 +6137,160 @@ func TestTUIStateBuildModelsCodexOpenRouterUsesTypedKey(t *testing.T) {
 	}
 }
 
+func TestTUIStateSessionAPIKeyPrefersTypedThenStored(t *testing.T) {
+	ts := &tuiState{
+		cfg: &AppConfig{Providers: map[string]StoredProvider{
+			"openrouter": {APIKey: "stored-key"},
+		}},
+		agent:        agentClaude,
+		typedAPIKeys: map[string]string{"openrouter": "typed-key"},
+	}
+	if got := ts.sessionAPIKey("openrouter"); got != "typed-key" {
+		t.Fatalf("sessionAPIKey with typed key = %q, want typed-key", got)
+	}
+	delete(ts.typedAPIKeys, "openrouter")
+	if got := ts.sessionAPIKey("openrouter"); got != "stored-key" {
+		t.Fatalf("sessionAPIKey with stored key = %q, want stored-key", got)
+	}
+}
+
+func TestTUIStateLoadModelCatalogCachesAndRefreshes(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"data":[{"id":"remote/model-%d"}]}`, requests)))
+	}))
+	defer server.Close()
+
+	restore := overrideModelCatalogHTTP(t, server.URL, "")
+	defer restore()
+
+	ts := &tuiState{
+		cfg:              &AppConfig{Providers: map[string]StoredProvider{}},
+		agent:            agentClaude,
+		typedAPIKeys:     map[string]string{"openrouter": "typed-key"},
+		customModels:     map[string]string{},
+		modelCatalogs:    map[string]ProviderModelCatalog{},
+		modelFetchStatus: map[string]string{},
+	}
+
+	first := ts.loadModelCatalog("openrouter", false)
+	second := ts.loadModelCatalog("openrouter", false)
+	if requests != 1 {
+		t.Fatalf("cached load made %d requests, want 1", requests)
+	}
+	if first.Models[0].ID != "remote/model-1" || second.Models[0].ID != "remote/model-1" {
+		t.Fatalf("cached catalogs = %+v then %+v", first, second)
+	}
+	if got := ts.modelFetchStatus["openrouter"]; !strings.Contains(got, "Source: remote (1 models)") {
+		t.Fatalf("status = %q, want remote model count", got)
+	}
+
+	refreshed := ts.loadModelCatalog("openrouter", true)
+	if requests != 2 {
+		t.Fatalf("forced refresh made %d requests, want 2", requests)
+	}
+	if refreshed.Models[0].ID != "remote/model-2" {
+		t.Fatalf("refreshed model = %q, want remote/model-2", refreshed.Models[0].ID)
+	}
+}
+
+func TestTUIStateLoadModelCatalogRefreshWithoutKeyShowsKeyHintNoNetwork(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	restore := overrideModelCatalogHTTP(t, server.URL, "")
+	defer restore()
+
+	ts := &tuiState{
+		cfg:              &AppConfig{Providers: map[string]StoredProvider{}},
+		agent:            agentClaude,
+		typedAPIKeys:     map[string]string{},
+		customModels:     map[string]string{},
+		modelCatalogs:    map[string]ProviderModelCatalog{},
+		modelFetchStatus: map[string]string{},
+	}
+
+	catalog := ts.loadModelCatalog("openrouter", true)
+	if called {
+		t.Fatal("forced refresh without an API key made a network request")
+	}
+	if catalog.Source != modelCatalogSourceFallback {
+		t.Fatalf("catalog source = %q, want fallback", catalog.Source)
+	}
+	if got := ts.modelFetchStatus["openrouter"]; !strings.Contains(got, "需要 API key 才能从远端获取模型列表") {
+		t.Fatalf("status = %q, want missing-key hint", got)
+	}
+}
+
+func TestTUIStateLoadModelCatalogRefreshWithCodexFallbackKeyDoesNotShowKeyHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer codex-key" {
+			t.Fatalf("Authorization header = %q, want Bearer codex-key", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"remote/model"}]}`))
+	}))
+	defer server.Close()
+
+	restore := overrideModelCatalogHTTP(t, server.URL, "")
+	defer restore()
+
+	ts := &tuiState{
+		cfg: &AppConfig{Providers: map[string]StoredProvider{}, Agents: map[string]AgentConfig{
+			string(agentCodex): {Providers: map[string]StoredProvider{"openrouter": {APIKey: "codex-key"}}},
+		}},
+		agent:            agentClaude,
+		typedAPIKeys:     map[string]string{},
+		customModels:     map[string]string{},
+		modelCatalogs:    map[string]ProviderModelCatalog{},
+		modelFetchStatus: map[string]string{},
+	}
+
+	ts.loadModelCatalog("openrouter", true)
+	if got := ts.modelFetchStatus["openrouter"]; strings.Contains(got, "需要 API key") {
+		t.Fatalf("status = %q, should not include missing-key hint when fallback key fetched remote catalog", got)
+	}
+}
+
+func TestTUIStateLoadModelCatalogRefreshStaticProviderDoesNotShowKeyHint(t *testing.T) {
+	ts := &tuiState{
+		cfg:              &AppConfig{Providers: map[string]StoredProvider{}},
+		agent:            agentClaude,
+		typedAPIKeys:     map[string]string{},
+		customModels:     map[string]string{},
+		modelCatalogs:    map[string]ProviderModelCatalog{},
+		modelFetchStatus: map[string]string{},
+	}
+
+	ts.loadModelCatalog("deepseek", true)
+	if got := ts.modelFetchStatus["deepseek"]; strings.Contains(got, "需要 API key") {
+		t.Fatalf("status = %q, should not include missing-key hint for static-only provider", got)
+	}
+}
+
+func TestTUIStateInvalidateModelCatalogClearsCatalogAndStatus(t *testing.T) {
+	ts := &tuiState{
+		modelCatalogs: map[string]ProviderModelCatalog{
+			"openrouter": {Provider: "openrouter", Source: modelCatalogSourceRemote},
+		},
+		modelFetchStatus: map[string]string{"openrouter": "Source: remote (1 models)"},
+	}
+
+	ts.invalidateModelCatalog("openrouter")
+	if _, ok := ts.modelCatalogs["openrouter"]; ok {
+		t.Fatal("model catalog cache was not cleared")
+	}
+	if _, ok := ts.modelFetchStatus["openrouter"]; ok {
+		t.Fatal("model fetch status was not cleared")
+	}
+}
+
 func TestTUIStateFinishSelection(t *testing.T) {
 	app := tview.NewApplication()
 	ts := &tuiState{

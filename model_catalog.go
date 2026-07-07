@@ -224,9 +224,12 @@ func modelCatalogSecondaryText(model ProviderModelInfo) string {
 }
 
 func modelCatalogStatusText(catalog ProviderModelCatalog) string {
-	status := fmt.Sprintf("source: %s  models: %d", catalog.Source, len(catalog.Models))
+	status := fmt.Sprintf("Source: %s", catalog.Source)
+	if catalog.Source == modelCatalogSourceRemote {
+		status += fmt.Sprintf(" (%d models)", len(catalog.Models))
+	}
 	if strings.TrimSpace(catalog.Err) != "" {
-		status += "  err: " + catalog.Err
+		status += " - 远端获取失败: " + catalog.Err
 	}
 	return status
 }

@@ -247,6 +247,8 @@ type tuiState struct {
 	resetKeys        map[string]bool
 	customModels     map[string]string
 	tierOverrides    map[string]StoredProvider
+	modelCatalogs    map[string]ProviderModelCatalog
+	modelFetchStatus map[string]string
 
 	result    ConfigureSelection
 	resultErr error
@@ -264,16 +266,57 @@ func (ts *tuiState) buildModels(provider string) []string {
 	return buildModelList(ts.cfg, provider, ts.customModels)
 }
 
-func (ts *tuiState) buildModelCatalog(provider string) ProviderModelCatalog {
-	apiKey := ""
+func (ts *tuiState) sessionAPIKey(provider string) string {
 	if ts.typedAPIKeys != nil {
-		apiKey = ts.typedAPIKeys[provider]
+		if key := strings.TrimSpace(ts.typedAPIKeys[provider]); key != "" {
+			return key
+		}
 	}
-	catalog := providerModelCatalog(ts.cfg, ts.agent, provider, apiKey)
+	return storedAPIKeyForAgent(ts.cfg, ts.agent, provider)
+}
+
+func (ts *tuiState) loadModelCatalog(provider string, force bool) ProviderModelCatalog {
+	if ts.modelCatalogs == nil {
+		ts.modelCatalogs = map[string]ProviderModelCatalog{}
+	}
+	if ts.modelFetchStatus == nil {
+		ts.modelFetchStatus = map[string]string{}
+	}
+	if !force {
+		if catalog, ok := ts.modelCatalogs[provider]; ok {
+			return catalog
+		}
+	}
+
+	catalog := providerModelCatalog(ts.cfg, ts.agent, provider, ts.sessionAPIKey(provider))
 	if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" && !catalogContainsModel(catalog, customModel) {
 		catalog.Models = append([]ProviderModelInfo{{ID: customModel, Description: "custom model"}}, catalog.Models...)
 	}
+	ts.modelCatalogs[provider] = catalog
+	ts.modelFetchStatus[provider] = modelCatalogStatusText(catalog)
+	if force && missingAPIKeyPreventedRemoteCatalog(catalog) {
+		ts.modelFetchStatus[provider] += "  - 需要 API key 才能从远端获取模型列表"
+	}
 	return catalog
+}
+
+func missingAPIKeyPreventedRemoteCatalog(catalog ProviderModelCatalog) bool {
+	return catalog.Provider == "openrouter" &&
+		catalog.Source == modelCatalogSourceFallback &&
+		strings.Contains(catalog.Err, "API key is required")
+}
+
+func (ts *tuiState) invalidateModelCatalog(provider string) {
+	if ts.modelCatalogs != nil {
+		delete(ts.modelCatalogs, provider)
+	}
+	if ts.modelFetchStatus != nil {
+		delete(ts.modelFetchStatus, provider)
+	}
+}
+
+func (ts *tuiState) buildModelCatalog(provider string) ProviderModelCatalog {
+	return ts.loadModelCatalog(provider, false)
 }
 
 func catalogContainsModel(catalog ProviderModelCatalog, modelID string) bool {
@@ -967,7 +1010,7 @@ func (ts *tuiState) showTierConfig(provider, backPage string) {
 
 func (ts *tuiState) showModels(provider, backPage string) {
 	ts.selectedProvider = provider
-	catalog := ts.buildModelCatalog(provider)
+	catalog := ts.loadModelCatalog(provider, false)
 	defaultModel := defaultSelectionModelForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
 
 	modelList := tview.NewList()
@@ -981,7 +1024,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	searchInput.SetFieldBackgroundColor(tcell.ColorDefault)
 
 	status := tview.NewTextView()
-	status.SetText(modelCatalogStatusText(catalog))
+	status.SetText(ts.modelFetchStatus[provider])
 
 	filteredModels := func(filter string) []ProviderModelInfo {
 		filter = strings.ToLower(strings.TrimSpace(filter))
@@ -1087,8 +1130,8 @@ func (ts *tuiState) showModels(provider, backPage string) {
 			ts.showCustomModelForm(provider, backPage)
 			return nil
 		case event.Rune() == 'r' || event.Rune() == 'R':
-			catalog = ts.buildModelCatalog(provider)
-			status.SetText(modelCatalogStatusText(catalog))
+			catalog = ts.loadModelCatalog(provider, true)
+			status.SetText(ts.modelFetchStatus[provider])
 			populateModels(searchInput.GetText())
 			return nil
 		case event.Rune() == 'i' || event.Rune() == 'I':
@@ -1320,6 +1363,7 @@ func (ts *tuiState) showKeyFormWithCancel(provider, backPage string, onSave func
 		}
 		ts.typedAPIKeys[provider] = keyValue
 		ts.resetKeys[provider] = true
+		ts.invalidateModelCatalog(provider)
 		onSave()
 	})
 	form.AddButton("Cancel", onCancel)
@@ -1359,6 +1403,7 @@ func (ts *tuiState) showCustomModelForm(provider, backPage string) {
 			return
 		}
 		ts.customModels[provider] = modelValue
+		ts.invalidateModelCatalog(provider)
 		ts.showModels(provider, backPage)
 	})
 	form.AddButton("Cancel", func() {
@@ -1597,6 +1642,8 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		advancedReturn:   map[string]bool{},
 		customModels:     map[string]string{},
 		tierOverrides:    map[string]StoredProvider{},
+		modelCatalogs:    map[string]ProviderModelCatalog{},
+		modelFetchStatus: map[string]string{},
 		resultErr:        nil,
 	}
 
