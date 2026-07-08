@@ -102,12 +102,12 @@ func TestCmdProxyConfigureDefaultProtocolUsesProviderEndpoint(t *testing.T) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
-	if got := cfg.Proxy.Routes["codex"].UpstreamProtocol; got != string(protocolOpenAIChat) {
-		t.Fatalf("upstreamProtocol = %q, want %q", got, protocolOpenAIChat)
+	if got := cfg.Proxy.Routes["codex"].UpstreamProtocol; got != string(protocolAnthropicMessages) {
+		t.Fatalf("upstreamProtocol = %q, want %q", got, protocolAnthropicMessages)
 	}
 }
 
-func TestBuildProxyRouteFromConfigOmittedProtocolUsesKimiChatEndpoint(t *testing.T) {
+func TestBuildProxyRouteFromConfigOmittedProtocolUsesKimiAnthropicEndpoint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
@@ -122,14 +122,11 @@ func TestBuildProxyRouteFromConfigOmittedProtocolUsesKimiChatEndpoint(t *testing
 	if err != nil {
 		t.Fatalf("buildProxyRouteFromConfig error: %v", err)
 	}
-	if route.UpstreamProtocol != protocolOpenAIChat {
-		t.Fatalf("UpstreamProtocol = %q, want %q", route.UpstreamProtocol, protocolOpenAIChat)
+	if route.UpstreamProtocol != protocolAnthropicMessages {
+		t.Fatalf("UpstreamProtocol = %q, want %q", route.UpstreamProtocol, protocolAnthropicMessages)
 	}
-	if route.UpstreamBaseURL != "https://api.kimi.com/coding/v1" {
-		t.Fatalf("UpstreamBaseURL = %q, want https://api.kimi.com/coding/v1", route.UpstreamBaseURL)
-	}
-	if got := upstreamURL(route.UpstreamBaseURL, openAIChatAdapter{}.UpstreamPath()); got != "https://api.kimi.com/coding/v1/chat/completions" {
-		t.Fatalf("upstream URL = %q, want Kimi chat completions URL", got)
+	if route.UpstreamBaseURL != "https://api.kimi.com/coding" {
+		t.Fatalf("UpstreamBaseURL = %q, want https://api.kimi.com/coding", route.UpstreamBaseURL)
 	}
 }
 
@@ -147,12 +144,12 @@ func TestBuildProxyRouteFromConfigAutoDowngradesUnsupportedProtocol(t *testing.T
 	if err != nil {
 		t.Fatalf("expected auto-downgrade to succeed, got: %v", err)
 	}
-	if route.UpstreamProtocol != protocolOpenAIChat {
-		t.Fatalf("expected downgrade to openai-chat, got %s", route.UpstreamProtocol)
+	if route.UpstreamProtocol != protocolAnthropicMessages {
+		t.Fatalf("expected downgrade to anthropic-messages, got %s", route.UpstreamProtocol)
 	}
 }
 
-func TestCmdProxyConfigureRejectsProtocolWithoutProviderEndpoint(t *testing.T) {
+func TestCmdProxyConfigureAcceptsKimiAnthropicProtocol(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var out bytes.Buffer
 	if err := runWithIO([]string{"set-key", "kimi-coding", "sk-test"}, nil, &out); err != nil {
@@ -160,11 +157,8 @@ func TestCmdProxyConfigureRejectsProtocolWithoutProviderEndpoint(t *testing.T) {
 	}
 	out.Reset()
 	err := runWithIO([]string{"proxy", "configure", "codex", "--provider", "kimi-coding", "--protocol", string(protocolAnthropicMessages)}, nil, &out)
-	if err == nil {
-		t.Fatal("expected error for provider/protocol mismatch, got nil")
-	}
-	if !strings.Contains(err.Error(), "endpoint") && !strings.Contains(err.Error(), "compatible") {
-		t.Fatalf("error should mention endpoint/compatibility: %v", err)
+	if err != nil {
+		t.Fatalf("expected kimi-coding to support anthropic-messages, got error: %v", err)
 	}
 }
 

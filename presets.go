@@ -394,7 +394,8 @@ var providerPresets = map[string]ProviderPreset{
 		Name:    "Kimi Coding",
 		BaseURL: "https://api.kimi.com/coding/",
 		Endpoints: map[ProviderProtocol]ProtocolEndpoint{
-			protocolOpenAIChat: {BaseURL: "https://api.kimi.com/coding/v1", AuthEnv: "KIMI_API_KEY"},
+			protocolAnthropicMessages: {BaseURL: "https://api.kimi.com/coding", AuthEnv: "ANTHROPIC_AUTH_TOKEN"},
+			protocolOpenAIChat:        {BaseURL: "https://api.kimi.com/coding/v1", AuthEnv: "KIMI_API_KEY"},
 		},
 		AuthEnv:         "ANTHROPIC_AUTH_TOKEN",
 		Model:           "kimi-k2.7-code",
