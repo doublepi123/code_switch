@@ -16,7 +16,7 @@ func TestTUIStateShowProviderWorkspaceLaunchFirst(t *testing.T) {
 	ts.showProviderWorkspace("openrouter")
 
 	labels := frontWorkspaceActionLabels(t, ts)
-	want := []string{actionLabelLaunch, actionLabelSetDefault, actionLabelModels, actionLabelEditAPIKey, actionLabelAdvanced, actionLabelBack}
+	want := []string{actionLabelLaunch, actionLabelSetDefault, actionLabelModels, actionLabelEditAPIKey, actionLabelEditBaseURL, actionLabelChangeProtocol, actionLabelAdvanced, actionLabelBack}
 	if !reflect.DeepEqual(labels, want) {
 		t.Fatalf("workspace actions = %#v, want %#v", labels, want)
 	}
@@ -25,8 +25,28 @@ func TestTUIStateShowProviderWorkspaceLaunchFirst(t *testing.T) {
 	}
 }
 
+func TestTUIStateShowProviderWorkspaceDisplaysCustomBaseURLAndProtocol(t *testing.T) {
+	ts := newWorkspaceTestState(agentClaude)
+	ts.customBaseURLs["deepseek"] = "https://custom.example.com/anthropic"
+	ts.customProtocols["deepseek"] = protocolOpenAIResponses
+
+	ts.showProviderWorkspace("deepseek")
+
+	text := frontWorkspaceInfoText(t, ts)
+	for _, want := range []string{
+		"Base URL: https://custom.example.com/anthropic (custom)",
+		"API Protocol: openai-responses",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("workspace text missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestTUIStateLaunchSelectedProviderWithSavedKeyFinishesLaunch(t *testing.T) {
 	ts := newWorkspaceTestState(agentClaude)
+	ts.customBaseURLs["deepseek"] = "https://launch.example.com/v1"
+	ts.customProtocols["deepseek"] = protocolOpenAIChat
 
 	ts.launchSelectedProvider("deepseek")
 
@@ -48,6 +68,9 @@ func TestTUIStateLaunchSelectedProviderWithSavedKeyFinishesLaunch(t *testing.T) 
 	}
 	if !ts.result.Launch {
 		t.Fatalf("launch selected provider should set Launch=true, got %+v", ts.result)
+	}
+	if ts.result.BaseURL != "https://launch.example.com/v1" || ts.result.Protocol != protocolOpenAIChat {
+		t.Fatalf("launch custom endpoint = (%q, %q), want custom values", ts.result.BaseURL, ts.result.Protocol)
 	}
 }
 
@@ -102,6 +125,8 @@ func TestTUIStateLaunchSelectedProviderMissingKeyOpensKeyForm(t *testing.T) {
 
 func TestTUIStateSaveSelectedProviderWithSavedKeyDoesNotLaunch(t *testing.T) {
 	ts := newWorkspaceTestState(agentCodex)
+	ts.customBaseURLs["openrouter"] = "https://save.example.com/v1"
+	ts.customProtocols["openrouter"] = protocolOpenAIResponses
 
 	ts.saveSelectedProvider("openrouter")
 
@@ -110,6 +135,85 @@ func TestTUIStateSaveSelectedProviderWithSavedKeyDoesNotLaunch(t *testing.T) {
 	}
 	if ts.result.Launch {
 		t.Fatalf("save selected provider should not set Launch=true, got %+v", ts.result)
+	}
+	if ts.result.BaseURL != "https://save.example.com/v1" || ts.result.Protocol != protocolOpenAIResponses {
+		t.Fatalf("save custom endpoint = (%q, %q), want custom values", ts.result.BaseURL, ts.result.Protocol)
+	}
+}
+
+func TestResolveSwitchPresetUsesStoredEndpointOverrideForBuiltinProvider(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"deepseek": {
+			BaseURL:  "https://override.example.com/v1",
+			Protocol: protocolOpenAIChat,
+			Model:    "deepseek-v3.2-exp",
+		},
+	}}
+
+	preset, err := resolveAgentSwitchPreset(agentClaude, "deepseek", cfg, "")
+	if err != nil {
+		t.Fatalf("resolveAgentSwitchPreset: %v", err)
+	}
+	endpoint, ok := preset.presetEndpoint(protocolOpenAIChat)
+	if !ok {
+		t.Fatalf("expected openai-chat endpoint in preset %+v", preset)
+	}
+	if endpoint.BaseURL != "https://override.example.com/v1" {
+		t.Fatalf("endpoint BaseURL = %q, want override", endpoint.BaseURL)
+	}
+}
+
+func TestResolveAgentSwitchPresetUsesCodexStoredEndpointOverride(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			string(agentCodex): {Providers: map[string]StoredProvider{
+				"deepseek": {
+					BaseURL:  "https://codex-override.example.com/v1",
+					Protocol: protocolOpenAIResponses,
+					Model:    "deepseek-v3.2-exp",
+				},
+			}},
+		},
+	}
+
+	preset, err := resolveAgentSwitchPreset(agentCodex, "deepseek", cfg, "")
+	if err != nil {
+		t.Fatalf("resolveAgentSwitchPreset: %v", err)
+	}
+	endpoint, ok := preset.presetEndpoint(protocolOpenAIResponses)
+	if !ok {
+		t.Fatalf("expected openai-responses endpoint in preset %+v", preset)
+	}
+	if endpoint.BaseURL != "https://codex-override.example.com/v1" {
+		t.Fatalf("endpoint BaseURL = %q, want codex override", endpoint.BaseURL)
+	}
+}
+
+func TestResolveAgentSwitchPresetUsesOpencodeStoredEndpointOverride(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{},
+		Agents: map[string]AgentConfig{
+			string(agentOpencode): {Providers: map[string]StoredProvider{
+				"deepseek": {
+					BaseURL:  "https://opencode-override.example.com/v1",
+					Protocol: protocolOpenAIChat,
+					Model:    "deepseek-v3.2-exp",
+				},
+			}},
+		},
+	}
+
+	preset, err := resolveAgentSwitchPreset(agentOpencode, "deepseek", cfg, "")
+	if err != nil {
+		t.Fatalf("resolveAgentSwitchPreset: %v", err)
+	}
+	endpoint, ok := preset.presetEndpoint(protocolOpenAIChat)
+	if !ok {
+		t.Fatalf("expected openai-chat endpoint in preset %+v", preset)
+	}
+	if endpoint.BaseURL != "https://opencode-override.example.com/v1" {
+		t.Fatalf("endpoint BaseURL = %q, want opencode override", endpoint.BaseURL)
 	}
 }
 
@@ -143,18 +247,37 @@ func TestPromptConfigureSelectionFallbackDefaultsToLaunch(t *testing.T) {
 
 func newWorkspaceTestState(agent AgentName) *tuiState {
 	return &tuiState{
-		app:           tview.NewApplication(),
-		pages:         tview.NewPages(),
-		cfg:           &AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}, "openrouter": {APIKey: "sk-openrouter"}}},
-		agent:         agent,
-		currentModel:  "",
-		typedAPIKeys:  map[string]string{},
-		resetKeys:     map[string]bool{},
-		customModels:  map[string]string{},
-		tierOverrides: map[string]StoredProvider{},
-		detailText:    tview.NewTextView(),
-		tierInfo:      tview.NewTextView(),
+		app:             tview.NewApplication(),
+		pages:           tview.NewPages(),
+		cfg:             &AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "sk-deepseek"}, "openrouter": {APIKey: "sk-openrouter"}}},
+		agent:           agent,
+		currentModel:    "",
+		typedAPIKeys:    map[string]string{},
+		resetKeys:       map[string]bool{},
+		customModels:    map[string]string{},
+		customBaseURLs:  map[string]string{},
+		customProtocols: map[string]ProviderProtocol{},
+		tierOverrides:   map[string]StoredProvider{},
+		detailText:      tview.NewTextView(),
+		tierInfo:        tview.NewTextView(),
 	}
+}
+
+func frontWorkspaceInfoText(t *testing.T, ts *tuiState) string {
+	t.Helper()
+	pageName, primitive := ts.pages.GetFrontPage()
+	if pageName != "provider-workspace" {
+		t.Fatalf("front page = %q, want provider-workspace", pageName)
+	}
+	page, ok := primitive.(*tview.Flex)
+	if !ok {
+		t.Fatalf("workspace page type = %T, want *tview.Flex", primitive)
+	}
+	info, ok := page.GetItem(0).(*tview.TextView)
+	if !ok {
+		t.Fatalf("workspace info type = %T, want *tview.TextView", page.GetItem(0))
+	}
+	return info.GetText(true)
 }
 
 func frontWorkspaceActionLabels(t *testing.T, ts *tuiState) []string {

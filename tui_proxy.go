@@ -47,6 +47,8 @@ const (
 	actionLabelManageMappings    = "Manage Model Mappings"
 	actionLabelProxyManager      = "Proxy Manager"
 	actionLabelEditAPIKey        = "Edit API Key"
+	actionLabelEditBaseURL       = "Edit Base URL"
+	actionLabelChangeProtocol    = "Change Protocol"
 	actionLabelEditTiers         = "Edit Tiers"
 	actionLabelEditContextWindow = "Edit Context Window"
 	actionLabelLaunch            = "Launch"

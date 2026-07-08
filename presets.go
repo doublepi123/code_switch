@@ -516,8 +516,11 @@ func sortedProviderNames(cfg *AppConfig, includeCustomOption bool) []string {
 
 func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, error) {
 	if preset, ok := providerPresets[provider]; ok {
-		if stored, ok := cfg.Providers[provider]; ok && strings.TrimSpace(stored.Model) != "" {
-			preset = withSelectedModel(preset, stored.Model)
+		if stored, ok := cfg.Providers[provider]; ok {
+			if strings.TrimSpace(stored.Model) != "" {
+				preset = withSelectedModel(preset, stored.Model)
+			}
+			applyStoredEndpointOverride(&preset, stored)
 		}
 		return preset, nil
 	}
@@ -562,15 +565,17 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 
 func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) (ProviderPreset, error) {
 	if preset, ok := providerPresets[provider]; ok {
+		stored := cfg.Providers[provider]
 		model := strings.TrimSpace(modelOverride)
 		if model == "" {
-			model = strings.TrimSpace(cfg.Providers[provider].Model)
+			model = strings.TrimSpace(stored.Model)
 		}
 		if err := validateProviderModel(provider, model); err != nil {
 			return ProviderPreset{}, err
 		}
 		preset = withSelectedModel(preset, model)
-		applyStoredTierOverrides(&preset, cfg.Providers[provider])
+		applyStoredTierOverrides(&preset, stored)
+		applyStoredEndpointOverride(&preset, stored)
 		return preset, nil
 	}
 
@@ -581,6 +586,40 @@ func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) 
 	preset = withSelectedModel(preset, modelOverride)
 	applyStoredTierOverrides(&preset, cfg.Providers[provider])
 	return preset, nil
+}
+
+func applyStoredEndpointOverride(preset *ProviderPreset, stored StoredProvider) {
+	baseURL := strings.TrimSpace(stored.BaseURL)
+	protocol := ProviderProtocol(strings.TrimSpace(string(stored.Protocol)))
+	if baseURL == "" && protocol == "" {
+		return
+	}
+	if protocol == "" {
+		protocol = stored.providerProtocol()
+	}
+	if baseURL == "" {
+		if endpoint, ok := preset.presetEndpoint(protocol); ok {
+			baseURL = strings.TrimSpace(endpoint.BaseURL)
+		} else {
+			baseURL = strings.TrimSpace(preset.BaseURL)
+		}
+	}
+	if baseURL == "" {
+		return
+	}
+	authEnv := strings.TrimSpace(stored.AuthEnv)
+	if authEnv == "" {
+		if endpoint, ok := preset.presetEndpoint(protocol); ok && strings.TrimSpace(endpoint.AuthEnv) != "" {
+			authEnv = strings.TrimSpace(endpoint.AuthEnv)
+		} else {
+			authEnv = strings.TrimSpace(preset.AuthEnv)
+		}
+	}
+	preset.BaseURL = baseURL
+	preset.AuthEnv = authEnv
+	preset.Endpoints = map[ProviderProtocol]ProtocolEndpoint{
+		protocol: {BaseURL: baseURL, AuthEnv: authEnv},
+	}
 }
 
 func validateProviderModel(provider, model string) error {

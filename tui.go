@@ -81,7 +81,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			return restoreClaudeConfig(*claudeDir, out, *dryRun)
 		}
 	}
-	if (agent == agentClaude || agent == agentOpencode) && strings.TrimSpace(selection.BaseURL) != "" {
+	if strings.TrimSpace(selection.BaseURL) != "" || selection.Protocol != "" {
 		existingKey := strings.TrimSpace(cfg.Providers[selection.Provider].APIKey)
 		keyToSave := strings.TrimSpace(selection.APIKey)
 		if keyToSave == "" {
@@ -246,6 +246,8 @@ type tuiState struct {
 	typedAPIKeys     map[string]string
 	resetKeys        map[string]bool
 	customModels     map[string]string
+	customBaseURLs   map[string]string
+	customProtocols  map[string]ProviderProtocol
 	tierOverrides    map[string]StoredProvider
 	modelCatalogs    map[string]ProviderModelCatalog
 	modelFetchStatus map[string]string
@@ -357,6 +359,18 @@ func (ts *tuiState) finishSelection(provider, model string) {
 		Opus:     ov.Opus,
 		Subagent: ov.Subagent,
 	}
+	if ts.customBaseURLs != nil {
+		ts.result.BaseURL = strings.TrimSpace(ts.customBaseURLs[provider])
+	}
+	if ts.customProtocols != nil {
+		ts.result.Protocol = ts.customProtocols[provider]
+	}
+	if ts.result.BaseURL != "" && ts.result.Protocol == "" {
+		if preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg); err == nil {
+			_, protocol, _, _ := ts.effectiveWorkspaceEndpoint(provider, preset)
+			ts.result.Protocol = protocol
+		}
+	}
 	ts.resultErr = nil
 	ts.app.Stop()
 }
@@ -403,6 +417,57 @@ func (ts *tuiState) keyStatusForProvider(provider string, preset ProviderPreset)
 	return "missing"
 }
 
+func providerProtocolOptions() []ProviderProtocol {
+	return []ProviderProtocol{protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses}
+}
+
+func (ts *tuiState) effectiveWorkspaceEndpoint(provider string, preset ProviderPreset) (string, ProviderProtocol, bool, bool) {
+	protocol := protocolAnthropicMessages
+	if plan, err := resolveConnection(ts.agent, provider, preset, "auto"); err == nil && plan.UpstreamProtocol != "" {
+		protocol = plan.UpstreamProtocol
+	}
+	protocolCustom := false
+	if ts.customProtocols != nil {
+		if customProtocol := ts.customProtocols[provider]; customProtocol != "" {
+			protocol = customProtocol
+			protocolCustom = true
+		}
+	}
+	baseURL := strings.TrimSpace(preset.BaseURL)
+	if endpoint, ok := preset.presetEndpoint(protocol); ok {
+		baseURL = strings.TrimSpace(endpoint.BaseURL)
+	}
+	baseURLCustom := false
+	if ts.customBaseURLs != nil {
+		if customBaseURL := strings.TrimSpace(ts.customBaseURLs[provider]); customBaseURL != "" {
+			baseURL = customBaseURL
+			baseURLCustom = true
+		}
+	}
+	return baseURL, protocol, baseURLCustom, protocolCustom
+}
+
+func (ts *tuiState) workspacePreset(provider string, preset ProviderPreset) ProviderPreset {
+	baseURL, protocol, baseURLCustom, protocolCustom := ts.effectiveWorkspaceEndpoint(provider, preset)
+	if !baseURLCustom && !protocolCustom {
+		return preset
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return preset
+	}
+	authEnv := preset.AuthEnv
+	if endpoint, ok := preset.presetEndpoint(protocol); ok && strings.TrimSpace(endpoint.AuthEnv) != "" {
+		authEnv = endpoint.AuthEnv
+	}
+	copyPreset := preset
+	copyPreset.BaseURL = baseURL
+	copyPreset.AuthEnv = authEnv
+	copyPreset.Endpoints = map[ProviderProtocol]ProtocolEndpoint{
+		protocol: {BaseURL: baseURL, AuthEnv: authEnv},
+	}
+	return copyPreset
+}
+
 func (ts *tuiState) showProviderWorkspace(provider string) {
 	ts.selectedProvider = provider
 	if ts.advancedReturn != nil {
@@ -414,15 +479,27 @@ func (ts *tuiState) showProviderWorkspace(provider string) {
 		ts.app.Stop()
 		return
 	}
+	baseURL, protocol, baseURLCustom, protocolCustom := ts.effectiveWorkspaceEndpoint(provider, preset)
+	workspacePreset := ts.workspacePreset(provider, preset)
 	model := ts.selectedModelForProvider(provider)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Provider: %s                 Agent: %s\n", providerTitle(provider, ts.cfg), ts.agent)
-	if plan, err := resolveConnection(ts.agent, provider, preset, "auto"); err == nil {
+	if plan, err := resolveConnection(ts.agent, provider, workspacePreset, "auto"); err == nil {
 		fmt.Fprintf(&b, "Connection: %s/%s        Key: %s\n", plan.Mode, plan.UpstreamProtocol, ts.keyStatusForProvider(provider, preset))
 	} else {
 		fmt.Fprintf(&b, "Connection: unavailable        Key: %s\n", ts.keyStatusForProvider(provider, preset))
 	}
+	baseURLSuffix := ""
+	if baseURLCustom {
+		baseURLSuffix = " (custom)"
+	}
+	fmt.Fprintf(&b, "Base URL: %s%s\n", baseURL, baseURLSuffix)
+	protocolSuffix := ""
+	if protocolCustom {
+		protocolSuffix = " (custom)"
+	}
+	fmt.Fprintf(&b, "API Protocol: %s%s\n", protocol, protocolSuffix)
 	fmt.Fprintf(&b, "Selected model: %s\n", model)
 
 	info := tview.NewTextView()
@@ -446,6 +523,8 @@ func (ts *tuiState) showProviderWorkspace(provider string) {
 			ts.showKeyForm(provider, "provider-workspace", func() { ts.showProviderWorkspace(provider) })
 		})
 	}
+	actions.AddItem(actionLabelEditBaseURL, "", 'u', func() { ts.showBaseURLForm(provider) })
+	actions.AddItem(actionLabelChangeProtocol, "", 'p', func() { ts.showProtocolSelect(provider) })
 	actions.AddItem(actionLabelAdvanced, "", 'a', func() { ts.showAdvancedMenu(provider) })
 	actions.AddItem(actionLabelBack, "", 'b', ts.showProviders)
 	actions.SetCurrentItem(0)
@@ -469,6 +548,12 @@ func (ts *tuiState) showProviderWorkspace(provider string) {
 		case !preset.NoAPIKey && (event.Rune() == 'k' || event.Rune() == 'K'):
 			ts.showKeyForm(provider, "provider-workspace", func() { ts.showProviderWorkspace(provider) })
 			return nil
+		case event.Rune() == 'u' || event.Rune() == 'U':
+			ts.showBaseURLForm(provider)
+			return nil
+		case event.Rune() == 'p' || event.Rune() == 'P':
+			ts.showProtocolSelect(provider)
+			return nil
 		case event.Rune() == 'a' || event.Rune() == 'A':
 			ts.showAdvancedMenu(provider)
 			return nil
@@ -478,9 +563,102 @@ func (ts *tuiState) showProviderWorkspace(provider string) {
 
 	page := tview.NewFlex().SetDirection(tview.FlexRow)
 	page.AddItem(info, 0, 1, false)
-	page.AddItem(actions, 9, 0, true)
+	page.AddItem(actions, 11, 0, true)
 	ts.pages.AddAndSwitchToPage("provider-workspace", page, true)
 	ts.app.SetFocus(actions)
+}
+
+func (ts *tuiState) showBaseURLForm(provider string) {
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+	baseURL, _, _, _ := ts.effectiveWorkspaceEndpoint(provider, preset)
+	baseURLValue := baseURL
+	errLabel := tview.NewTextView()
+	errLabel.SetTextColor(tcell.ColorRed)
+	form := tview.NewForm()
+	form.AddInputField("Base URL", baseURLValue, 0, nil, func(text string) {
+		baseURLValue = text
+	})
+	form.AddButton("Save", func() {
+		baseURLValue = strings.TrimSpace(baseURLValue)
+		if baseURLValue == "" {
+			errLabel.SetText("Base URL cannot be empty")
+			return
+		}
+		if err := validateBaseURL(baseURLValue); err != nil {
+			errLabel.SetText(err.Error())
+			return
+		}
+		if ts.customBaseURLs == nil {
+			ts.customBaseURLs = map[string]string{}
+		}
+		ts.customBaseURLs[provider] = baseURLValue
+		ts.showProviderWorkspace(provider)
+	})
+	form.AddButton("Cancel", func() { ts.showProviderWorkspace(provider) })
+	form.SetBorder(true)
+	form.SetTitle(" Edit Base URL ")
+	form.SetButtonsAlign(tview.AlignLeft)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			ts.showProviderWorkspace(provider)
+			return nil
+		}
+		return event
+	})
+	page := tview.NewFlex().SetDirection(tview.FlexRow)
+	page.AddItem(errLabel, 1, 0, false)
+	page.AddItem(form, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("base-url", page, true)
+	ts.app.SetFocus(form)
+}
+
+func (ts *tuiState) showProtocolSelect(provider string) {
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+	_, currentProtocol, _, _ := ts.effectiveWorkspaceEndpoint(provider, preset)
+	protocols := providerProtocolOptions()
+	list := tview.NewList()
+	list.ShowSecondaryText(false)
+	list.SetBorder(true)
+	list.SetTitle(" Change Protocol ")
+	for i, protocol := range protocols {
+		protocol := protocol
+		label := string(protocol)
+		if protocol == currentProtocol {
+			label += " [current]"
+			list.SetCurrentItem(i)
+		}
+		list.AddItem(label, "", 0, func() {
+			if ts.customProtocols == nil {
+				ts.customProtocols = map[string]ProviderProtocol{}
+			}
+			ts.customProtocols[provider] = protocol
+			ts.showProviderWorkspace(provider)
+		})
+	}
+	list.AddItem(actionLabelBack, "", 'b', func() { ts.showProviderWorkspace(provider) })
+	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+			ts.showProviderWorkspace(provider)
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q' || event.Rune() == 'b' || event.Rune() == 'B':
+			ts.showProviderWorkspace(provider)
+			return nil
+		}
+		return event
+	})
+	ts.pages.AddAndSwitchToPage("protocol-select", list, true)
+	ts.app.SetFocus(list)
 }
 
 func (ts *tuiState) launchSelectedProvider(provider string) {
@@ -1716,6 +1894,8 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		selectedModel:    map[string]string{},
 		advancedReturn:   map[string]bool{},
 		customModels:     map[string]string{},
+		customBaseURLs:   map[string]string{},
+		customProtocols:  map[string]ProviderProtocol{},
 		tierOverrides:    map[string]StoredProvider{},
 		modelCatalogs:    map[string]ProviderModelCatalog{},
 		modelFetchStatus: map[string]string{},
@@ -2102,11 +2282,16 @@ func mirrorOpencodeCustomProviderToShared(cfg *AppConfig, selection ConfigureSel
 	if selection.Agent != string(agentOpencode) {
 		return
 	}
-	if strings.TrimSpace(selection.BaseURL) == "" {
+	if strings.TrimSpace(selection.BaseURL) == "" && selection.Protocol == "" {
 		return
 	}
 	shared := cfg.Providers[selection.Provider]
-	shared.BaseURL = strings.TrimSpace(selection.BaseURL)
+	if strings.TrimSpace(selection.BaseURL) != "" {
+		shared.BaseURL = strings.TrimSpace(selection.BaseURL)
+	}
+	if selection.Protocol != "" {
+		shared.Protocol = selection.Protocol
+	}
 	if strings.TrimSpace(selection.Name) != "" {
 		shared.Name = strings.TrimSpace(selection.Name)
 	}
