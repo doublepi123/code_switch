@@ -367,10 +367,18 @@ func (ts *tuiState) finishLaunch(provider, model string) {
 }
 
 func (ts *tuiState) showProviders() {
-	ts.names = providerNamesForAgent(ts.agent, ts.cfg, true, true)
+	ts.names = providerNamesForWorkbench(ts.cfg)
 	ts.rebuildProviderList()
 	ts.pages.SwitchToPage("providers")
 	ts.app.SetFocus(ts.providerList)
+}
+
+func providerNamesForWorkbench(cfg *AppConfig) []string {
+	if cfg == nil {
+		cfg = &AppConfig{Providers: map[string]StoredProvider{}}
+	}
+	names := sortedProviderNames(cfg, true)
+	return append(names, restoreProviderOption)
 }
 
 func (ts *tuiState) selectedModelForProvider(provider string) string {
@@ -476,17 +484,84 @@ func (ts *tuiState) showProviderWorkspace(provider string) {
 }
 
 func (ts *tuiState) launchSelectedProvider(provider string) {
+	ts.showLaunchAgentSelect(provider)
+}
+
+func (ts *tuiState) showLaunchAgentSelect(provider string) {
+	ts.showLaunchAgentSelectWithModel(provider, ts.selectedModelForProvider(provider), func() {
+		ts.showProviderWorkspace(provider)
+	})
+}
+
+func launchAgentChoices() []AgentName {
+	return []AgentName{agentClaude, agentCodex, agentOpencode}
+}
+
+func (ts *tuiState) showLaunchAgentSelectWithModel(provider, model string, back func()) {
+	if back == nil {
+		back = func() { ts.showProviderWorkspace(provider) }
+	}
+	help := tview.NewTextView()
+	help.SetText(fmt.Sprintf("Provider: %s  |  Model: %s", providerTitle(provider, ts.cfg), currentModelLabel(model)))
+
+	agents := tview.NewList()
+	agents.ShowSecondaryText(false)
+	agents.SetBorder(true)
+	agents.SetTitle(" Launch Agent ")
+	for _, choice := range launchAgentChoices() {
+		choice := choice
+		agents.AddItem(agentDisplayName(choice), "", 0, func() {
+			ts.selectLaunchAgentWithModel(choice, provider, model, back)
+		})
+	}
+	agents.AddItem(actionLabelBack, "", 'b', back)
+	agents.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+			back()
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q' || event.Rune() == 'b' || event.Rune() == 'B':
+			back()
+			return nil
+		}
+		return event
+	})
+
+	page := tview.NewFlex().SetDirection(tview.FlexRow)
+	page.AddItem(help, 1, 0, false)
+	page.AddItem(agents, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("agent-select", page, true)
+	ts.app.SetFocus(agents)
+}
+
+func (ts *tuiState) selectLaunchAgent(agent AgentName, provider string) {
+	ts.selectLaunchAgentWithModel(agent, provider, ts.selectedModelForProvider(provider), func() {
+		ts.showProviderWorkspace(provider)
+	})
+}
+
+func (ts *tuiState) selectLaunchAgentWithModel(agent AgentName, provider, model string, back func()) {
+	previousAgent := ts.agent
+	ts.agent = agent
 	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
 	if err != nil {
+		ts.agent = previousAgent
 		ts.resultErr = err
 		ts.app.Stop()
 		return
 	}
 	if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
-		ts.showKeyFormWithCancel(provider, "provider-workspace", func() { ts.showProviderWorkspace(provider) }, func() { ts.showProviderWorkspace(provider) })
+		ts.showKeyFormWithCancel(provider, "agent-select", func() {
+			ts.finishLaunch(provider, model)
+		}, func() {
+			ts.agent = previousAgent
+			if back != nil {
+				back()
+			}
+		})
 		return
 	}
-	ts.finishLaunch(provider, ts.selectedModelForProvider(provider))
+	ts.finishLaunch(provider, model)
 }
 
 func (ts *tuiState) saveSelectedProvider(provider string) {
@@ -1610,7 +1685,7 @@ func (ts *tuiState) showRestoreConfirm() {
 }
 
 func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvider, currentModel, claudeDir, codexDir, opencodeDir string) (ConfigureSelection, error) {
-	names := providerNamesForAgent(agent, cfg, agent == agentClaude || agent == agentOpencode, true)
+	names := providerNamesForWorkbench(cfg)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
 	}
@@ -1650,10 +1725,10 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 	ts.providerList = tview.NewList()
 	ts.providerList.ShowSecondaryText(true)
 	ts.providerList.SetBorder(true)
-	ts.providerList.SetTitle(" " + agentDisplayName(ts.agent) + " Providers ")
+	ts.providerList.SetTitle(" Providers ")
 
 	providerHelp := tview.NewTextView()
-	providerHelp.SetText("Enter/→ workspace   q/esc quit")
+	providerHelp.SetText("Enter/→ workspace   Launch asks for Agent   q/esc quit")
 
 	ts.providerPage = tview.NewFlex()
 	ts.providerPage.SetDirection(tview.FlexRow)

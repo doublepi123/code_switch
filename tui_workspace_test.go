@@ -30,11 +30,52 @@ func TestTUIStateLaunchSelectedProviderWithSavedKeyFinishesLaunch(t *testing.T) 
 
 	ts.launchSelectedProvider("deepseek")
 
+	pageName, _ := ts.pages.GetFrontPage()
+	if pageName != "agent-select" {
+		t.Fatalf("front page = %q, want agent-select", pageName)
+	}
+	if ts.result.Provider != "" || ts.result.Launch {
+		t.Fatalf("launch should wait for agent selection, got %+v", ts.result)
+	}
+
+	ts.selectLaunchAgent(agentClaude, "deepseek")
+
 	if ts.result.Provider != "deepseek" || ts.result.Model == "" {
 		t.Fatalf("launch result = %+v, want provider and default model", ts.result)
 	}
+	if ts.result.Agent != string(agentClaude) {
+		t.Fatalf("launch agent = %q, want %q", ts.result.Agent, agentClaude)
+	}
 	if !ts.result.Launch {
 		t.Fatalf("launch selected provider should set Launch=true, got %+v", ts.result)
+	}
+}
+
+func TestTUIStateLaunchAgentSelectionLabels(t *testing.T) {
+	ts := newWorkspaceTestState(agentClaude)
+
+	ts.showLaunchAgentSelect("deepseek")
+
+	pageName, primitive := ts.pages.GetFrontPage()
+	if pageName != "agent-select" {
+		t.Fatalf("front page = %q, want agent-select", pageName)
+	}
+	page, ok := primitive.(*tview.Flex)
+	if !ok {
+		t.Fatalf("agent-select page type = %T, want *tview.Flex", primitive)
+	}
+	list, ok := page.GetItem(1).(*tview.List)
+	if !ok {
+		t.Fatalf("agent-select list type = %T, want *tview.List", page.GetItem(1))
+	}
+	labels := make([]string, 0, list.GetItemCount())
+	for i := 0; i < list.GetItemCount(); i++ {
+		main, _ := list.GetItemText(i)
+		labels = append(labels, main)
+	}
+	want := []string{agentDisplayName(agentClaude), agentDisplayName(agentCodex), agentDisplayName(agentOpencode), actionLabelBack}
+	if !reflect.DeepEqual(labels, want) {
+		t.Fatalf("agent labels = %#v, want %#v", labels, want)
 	}
 }
 
@@ -45,6 +86,12 @@ func TestTUIStateLaunchSelectedProviderMissingKeyOpensKeyForm(t *testing.T) {
 	ts.launchSelectedProvider("deepseek")
 
 	pageName, _ := ts.pages.GetFrontPage()
+	if pageName != "agent-select" {
+		t.Fatalf("front page after Launch = %q, want agent-select", pageName)
+	}
+	ts.selectLaunchAgent(agentClaude, "deepseek")
+
+	pageName, _ = ts.pages.GetFrontPage()
 	if pageName != "key" {
 		t.Fatalf("front page = %q, want key", pageName)
 	}
