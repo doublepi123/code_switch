@@ -1731,11 +1731,7 @@ func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvi
 		}
 		return event
 	})
-	if ts.selectAgent {
-		ts.showAgents()
-	} else {
-		ts.showProviders()
-	}
+	ts.showProviders()
 	if err := ts.app.Run(); err != nil {
 		return ConfigureSelection{}, err
 	}
