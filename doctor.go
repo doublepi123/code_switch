@@ -78,6 +78,8 @@ func runDoctor(claudeDir, codexDir, opencodeDir string) []checkResult {
 	results = append(results, checkProxyDaemon())
 	if cfg, _, err := loadAppConfig(); err == nil {
 		results = append(results, checkClaudeDrift(claudeDir, cfg))
+		results = append(results, checkCodexDrift(codexDir, cfg))
+		results = append(results, checkOpencodeDrift(opencodeDir, cfg))
 	}
 	results = append(results, checkOrphanedTempFiles(claudeDir, codexDir, opencodeDir))
 	return results
@@ -251,46 +253,4 @@ func checkOpencodeFile(path string) checkResult {
 		return warnResult("opencode config permissions", fmt.Sprintf("mode %o, expected 0600; %s", mode, detail))
 	}
 	return okResult("opencode config", detail)
-}
-
-func checkClaudeDrift(claudeDir string, cfg *AppConfig) checkResult {
-	currentProvider, currentModel := currentConfiguredProvider(cfg, claudeDir)
-	if currentProvider == "" || currentProvider == customDetectedProvider {
-		return okResult("claude model drift", "no tracked provider active")
-	}
-	stored := cfg.Providers[currentProvider]
-	if strings.TrimSpace(stored.Model) == "" {
-		return okResult("claude model drift", fmt.Sprintf("provider %s has no pinned model", currentProvider))
-	}
-	if stored.Model != currentModel {
-		return warnResult("claude model drift", fmt.Sprintf("settings model %q != stored %q for %s (run `cs switch %s` to resync)", currentModel, stored.Model, currentProvider, currentProvider))
-	}
-	return okResult("claude model drift", fmt.Sprintf("settings model %q matches stored for %s", currentModel, currentProvider))
-}
-
-func checkOrphanedTempFiles(claudeDir, codexDir, opencodeDir string) checkResult {
-	dirs := []string{
-		filepath.Dir(claudeSettingsPath(claudeDir)),
-		filepath.Dir(codexConfigPath(codexDir)),
-		filepath.Dir(opencodeConfigPath(opencodeDir)),
-	}
-	var found []string
-	for _, d := range dirs {
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			if strings.Contains(e.Name(), ".tmp-") || strings.HasSuffix(e.Name(), ".tmp") {
-				found = append(found, filepath.Join(d, e.Name()))
-			}
-		}
-	}
-	if len(found) == 0 {
-		return okResult("orphaned temp files", "none")
-	}
-	return warnResult("orphaned temp files", fmt.Sprintf("%d leftover .tmp file(s) from interrupted writes (safe to remove): %s", len(found), strings.Join(found, ", ")))
 }
