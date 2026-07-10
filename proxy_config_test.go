@@ -59,7 +59,7 @@ func TestBuildProxyRouteFromConfigUsesRouteMappingsFirst(t *testing.T) {
 	}
 }
 
-func TestBuildProxyRouteFromConfigFallsBackToProviderMappings(t *testing.T) {
+func TestBuildProxyRouteFromConfigFallsBackToTierMappings(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
 			"zhipu-cn": {APIKey: "sk-test", Model: "glm-5.2"},
@@ -80,8 +80,8 @@ func TestBuildProxyRouteFromConfigFallsBackToProviderMappings(t *testing.T) {
 	if route.Model != "glm-5.2" {
 		t.Fatalf("route.Model = %q, want stored model", route.Model)
 	}
-	if got := route.ModelMappings["default"]; got != "global-model" {
-		t.Fatalf("default mapping = %q, want global-model", got)
+	if got := route.ModelMappings["default"]; got != "glm-5-turbo" {
+		t.Fatalf("default mapping = %q, want glm-5-turbo", got)
 	}
 }
 

@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// writeBytesAtomicTest is a tiny helper that writes raw bytes to a path,
-// creating parent dirs. Used only by tests that need to seed exact JSON.
 func writeBytesAtomicTest(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -17,16 +15,6 @@ func writeBytesAtomicTest(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// =============================================================================
-// Issue 1 (Important): buildProxyRoute must not carry an unused *AppConfig
-// parameter. Its signature should only depend on the values it actually uses
-// (provider/preset/upstreamProtocol/localToken/mappings), keeping the API
-// low-coupling and preventing callers from mistakenly thinking it reads from
-// cfg. These tests verify the new signature directly.
-// =============================================================================
-
-// TestBuildProxyRouteNewSignatureNoConfig verifies buildProxyRoute works with
-// the slim signature (no *AppConfig) and still injects mappings.
 func TestBuildProxyRouteNewSignatureNoConfig(t *testing.T) {
 	preset := providerPresets["zhipu-cn"]
 	route := buildProxyRoute(
@@ -53,8 +41,6 @@ func TestBuildProxyRouteNewSignatureNoConfig(t *testing.T) {
 	}
 }
 
-// TestBuildProxyRouteNewSignatureDefensiveCopy verifies the slim-signature
-// helper still defensively copies the caller's map.
 func TestBuildProxyRouteNewSignatureDefensiveCopy(t *testing.T) {
 	preset := providerPresets["zhipu-cn"]
 	src := map[string]string{"default": "glm-5.2"}
@@ -65,24 +51,6 @@ func TestBuildProxyRouteNewSignatureDefensiveCopy(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// Issue 2 (Important): verify the real persistence → route wiring path via
-// buildProxyRouteFromConfig (end-to-end, not just a hand-built map). This
-// guards that persisted ProxyRouteConfig.ModelMappings actually reach the
-// runtime ProxyRoute when cfg is loaded normally.
-//
-// Per the approved spec, model-mappings resolution is whole-source fallback,
-// NOT a per-key merge: when a route declares any ModelMappings of its own,
-// ONLY a defensive copy of those route-level mappings is used; the
-// provider-level cfg.ModelMappings[provider] table is NOT merged in.
-// Provider-level mappings serve purely as a whole-source fallback for routes
-// that declare no mappings of their own.
-// =============================================================================
-
-// TestBuildProxyRouteFromConfigRouteMappingsNotMergedWithProvider verifies
-// that when a route has its own ModelMappings, only those route-level
-// mappings reach the runtime ProxyRoute (defensively copied), and the
-// provider-level cfg.ModelMappings[provider] table does NOT leak in.
 func TestBuildProxyRouteFromConfigRouteMappingsNotMergedWithProvider(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
@@ -107,31 +75,25 @@ func TestBuildProxyRouteFromConfigRouteMappingsNotMergedWithProvider(t *testing.
 	if err != nil {
 		t.Fatalf("buildProxyRouteFromConfig: %v", err)
 	}
-	// Route-level mapping must be present.
 	if got := route.ModelMappings["default"]; got != "route-level-model" {
 		t.Fatalf("route-level mapping lost: default = %q, want route-level-model", got)
 	}
-	// Provider-level mapping must NOT leak into the route when the route
-	// declares its own mappings (whole-source precedence, not per-key merge).
-	if v, ok := route.ModelMappings["sonnet"]; ok {
-		t.Fatalf("provider-level mapping leaked into route: sonnet = %q (want absent)", v)
+	if got := route.ModelMappings["haiku"]; got != "glm-4.5-air" {
+		t.Fatalf("resolved haiku tier missing: haiku = %q, want glm-4.5-air", got)
 	}
-	if len(route.ModelMappings) != 1 {
-		t.Fatalf("route.ModelMappings len = %d, want 1 (only route-level); got %#v",
+	if got := route.ModelMappings["sonnet"]; got != "glm-5-turbo" {
+		t.Fatalf("resolved sonnet tier missing: sonnet = %q, want glm-5-turbo", got)
+	}
+	if len(route.ModelMappings) != 5 {
+		t.Fatalf("route.ModelMappings len = %d, want 5; got %#v",
 			len(route.ModelMappings), route.ModelMappings)
 	}
-	// Defensive copy: mutating the source route config must not affect the route.
 	cfg.Proxy.Routes["codex"].ModelMappings["default"] = "mutated"
 	if got := route.ModelMappings["default"]; got != "route-level-model" {
 		t.Fatalf("route mappings not defensively copied: default = %q", got)
 	}
 }
 
-// TestBuildProxyRouteFromConfigEmptyRouteMappingsFallsBackToProvider
-// verifies the fallback half of the spec: when the route declares NO
-// ModelMappings of its own, the provider-level cfg.ModelMappings[provider]
-// table is used (defensively copied). This complements the "not merged"
-// test above to pin down the whole-source fallback contract.
 func TestBuildProxyRouteFromConfigEmptyRouteMappingsFallsBackToProvider(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
@@ -147,8 +109,7 @@ func TestBuildProxyRouteFromConfigEmptyRouteMappingsFallsBackToProvider(t *testi
 					Provider:         "zhipu-cn",
 					Model:            "glm-5.2",
 					UpstreamProtocol: string(protocolAnthropicMessages),
-					// No ModelMappings on the route -> fall back to provider-level.
-				},
+					},
 			},
 		},
 	}
@@ -156,27 +117,18 @@ func TestBuildProxyRouteFromConfigEmptyRouteMappingsFallsBackToProvider(t *testi
 	if err != nil {
 		t.Fatalf("buildProxyRouteFromConfig: %v", err)
 	}
-	if got := route.ModelMappings["default"]; got != "provider-level-model" {
-		t.Fatalf("provider fallback lost: default = %q, want provider-level-model", got)
+	if got := route.ModelMappings["default"]; got != "glm-5-turbo" {
+		t.Fatalf("tier fallback lost: default = %q, want glm-5-turbo", got)
 	}
-	if got := route.ModelMappings["sonnet"]; got != "provider-sonnet" {
-		t.Fatalf("provider fallback lost: sonnet = %q, want provider-sonnet", got)
-	}
-	// Defensive copy of the provider table.
-	cfg.ModelMappings["zhipu-cn"]["default"] = "mutated"
-	if got := route.ModelMappings["default"]; got != "provider-level-model" {
-		t.Fatalf("provider mappings not defensively copied: default = %q", got)
+	if got := route.ModelMappings["sonnet"]; got != "glm-5-turbo" {
+		t.Fatalf("tier fallback lost: sonnet = %q, want glm-5-turbo", got)
 	}
 }
 
-// TestDryRunSurfacesPersistedModelMappings verifies the `cs run --dry-run`
-// path actually surfaces persisted cfg.ModelMappings in its plan output,
-// proving the persistence→route wiring is exercised end-to-end through cmdRun.
 func TestDryRunSurfacesPersistedModelMappings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	// Seed an AppConfig on disk that carries per-provider model mappings.
 	cfg := AppConfig{
 		Providers: map[string]StoredProvider{
 			"minimax-cn": {APIKey: "sk-secret"},
@@ -195,11 +147,9 @@ func TestDryRunSurfacesPersistedModelMappings(t *testing.T) {
 		t.Fatalf("run returned error: %v", err)
 	}
 	got := out.String()
-	// Dry-run must report that mappings are present (count > 0).
 	if !strings.Contains(got, "model_mappings:") {
 		t.Fatalf("dry-run output missing model_mappings line; persisted mappings did not reach the route\noutput:\n%s", got)
 	}
-	// Must NOT print "model_mappings: 0".
 	if strings.Contains(got, "model_mappings: 0") {
 		t.Fatalf("dry-run reported 0 mappings despite persisted cfg.ModelMappings\noutput:\n%s", got)
 	}
@@ -499,7 +449,7 @@ func TestBuildProxyRouteFromConfigCanonicalizesProviderAlias(t *testing.T) {
 		t.Fatalf("route.Provider = %q, want canonical zhipu-cn", route.Provider)
 	}
 	// Mappings should also be looked up by the canonical name.
-	if got := route.ModelMappings["default"]; got != "glm-5.2" {
-		t.Fatalf("ModelMappings[default] = %q, want glm-5.2 (looked up by canonical)", got)
+	if got := route.ModelMappings["default"]; got != "glm-5-turbo" {
+		t.Fatalf("ModelMappings[default] = %q, want glm-5-turbo (looked up by canonical)", got)
 	}
 }

@@ -30,8 +30,10 @@ type ProxyRouteConfig struct {
 	Provider         string            `json:"provider"`
 	Model            string            `json:"model,omitempty"`
 	UpstreamProtocol string            `json:"upstreamProtocol,omitempty"`
+	BaseURL          string            `json:"baseURL,omitempty"`
 	ModelMappings    map[string]string `json:"modelMappings,omitempty"`
 	Token            string            `json:"token,omitempty"`
+	Fallback         *ProxyRouteConfig `json:"fallback,omitempty"`
 }
 
 func randomProxyRouteToken() (string, error) {
@@ -217,6 +219,7 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 		"provider": rc.Provider,
 		"model":    rc.Model,
 		"protocol": rc.UpstreamProtocol,
+		"baseURL":  rc.BaseURL,
 		"host":     cfg.Proxy.Host,
 	} {
 		if err := rejectControlChars(label, value); err != nil {
@@ -234,23 +237,27 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	if err != nil {
 		return ProxyRoute{}, err
 	}
-	// Mappings precedence is whole-source fallback, NOT a per-key merge.
-	// A route with any non-empty ModelMappings of its own uses ONLY its own
-	// table (defensively copied), and the provider-level table does NOT leak
-	// in. A route with no mappings of its own falls back to the provider-level
-	// table (defensively copied). Whitespace-only keys are dropped.
-	var mappings map[string]string
+	resolvedTiers := resolveModelTiers(preset, cfg.Providers[provider], ModelTiers{})
+	mappings := tierModelMappings(resolvedTiers)
+	_, explicitDefault := rc.ModelMappings["default"]
+	explicitSonnet := false
 	for k, v := range rc.ModelMappings {
+		if err := rejectControlChars("model mapping key", k); err != nil {
+			return ProxyRoute{}, err
+		}
+		if err := rejectControlChars("model mapping value", v); err != nil {
+			return ProxyRoute{}, err
+		}
 		if strings.TrimSpace(k) == "" {
 			continue
 		}
-		if mappings == nil {
-			mappings = map[string]string{}
-		}
 		mappings[k] = v
+		if k == "sonnet" {
+			explicitSonnet = true
+		}
 	}
-	if mappings == nil {
-		mappings = copyStringMap(cfg.ModelMappings[provider])
+	if !explicitDefault && explicitSonnet {
+		mappings["default"] = mappings["sonnet"]
 	}
 	// Protocol resolution uses one registry instance for both parsing and
 	// compatibility validation:
@@ -271,10 +278,15 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 		return ProxyRoute{}, err
 	}
 	if !providerCanUseProxyProtocol(preset, protocol) {
-		plan, err := resolveConnection(AgentName(agent), provider, preset, "proxy")
-		if err == nil {
-			protocol = plan.UpstreamProtocol
-			routeForValidation.UpstreamProtocol = string(protocol)
+		profile, ok := agentProfiles[AgentName(agent)]
+		if ok {
+			for _, fallback := range profile.ProxyUpstreamPreference {
+				if providerCanUseProxyProtocol(preset, fallback) {
+					protocol = fallback
+					routeForValidation.UpstreamProtocol = string(protocol)
+					break
+				}
+			}
 		}
 	}
 	// Enforce the agent/protocol compatibility matrix at route-build time
@@ -287,14 +299,63 @@ func buildProxyRouteFromConfig(agent string, cfg *AppConfig, localToken string) 
 	if !providerCanUseProxyProtocol(preset, protocol) {
 		return ProxyRoute{}, fmt.Errorf("provider %q has no %s endpoint", provider, protocol)
 	}
-	return buildProxyRoute(provider, preset, protocol, localToken, mappings), nil
+	route := buildProxyRoute(provider, preset, protocol, localToken, mappings)
+	if strings.TrimSpace(rc.BaseURL) != "" {
+		route.UpstreamBaseURL = strings.TrimSpace(rc.BaseURL)
+	}
+	if rc.Fallback != nil {
+		fallback, err := buildProxyFallbackRoute(agent, route, *rc.Fallback, cfg, protocol)
+		if err != nil {
+			return ProxyRoute{}, err
+		}
+		route.Fallback = &fallback
+	}
+	return route, nil
+}
+
+func buildProxyFallbackRoute(agent string, primaryRoute ProxyRoute, rc ProxyRouteConfig, cfg *AppConfig, protocol ProviderProtocol) (ProxyRoute, error) {
+	for label, value := range map[string]string{
+		"fallback provider": rc.Provider,
+		"fallback model":    rc.Model,
+		"fallback protocol": rc.UpstreamProtocol,
+		"fallback baseURL":  rc.BaseURL,
+	} {
+		if err := rejectControlChars(label, value); err != nil {
+			return ProxyRoute{}, err
+		}
+	}
+	provider := canonicalProviderName(strings.TrimSpace(rc.Provider))
+	if provider == "" {
+		return ProxyRoute{}, fmt.Errorf("fallback route for agent %q has no provider", agent)
+	}
+	model := strings.TrimSpace(rc.Model)
+	preset, err := resolveSwitchPreset(provider, cfg, model)
+	if err != nil {
+		return ProxyRoute{}, err
+	}
+	if !providerCanUseProxyProtocol(preset, protocol) && strings.TrimSpace(rc.BaseURL) == "" {
+		return ProxyRoute{}, fmt.Errorf("fallback provider %q has no %s endpoint", provider, protocol)
+	}
+	providerKey := storedAPIKeyForAgent(cfg, AgentName(agent), provider)
+	if !sameCanonicalProvider(provider, primaryRoute.Provider) && !preset.NoAPIKey && strings.TrimSpace(providerKey) == "" {
+		return ProxyRoute{}, fmt.Errorf("fallback provider %q has no API key configured; run `cs set-key %s <key>` before starting the proxy", provider, provider)
+	}
+	route := buildProxyRoute(provider, preset, protocol, "", nil)
+	if model != "" {
+		route.Model = model
+	}
+	if strings.TrimSpace(rc.BaseURL) != "" {
+		route.UpstreamBaseURL = strings.TrimSpace(rc.BaseURL)
+	}
+	route.ProviderKey = providerKey
+	return route, nil
 }
 
 func providerCanUseProxyProtocol(preset ProviderPreset, protocol ProviderProtocol) bool {
 	if _, ok := preset.presetEndpoint(protocol); ok {
 		return true
 	}
-	return len(preset.Endpoints) == 0 && strings.TrimSpace(preset.BaseURL) != ""
+	return len(preset.Endpoints) == 0 && protocol == protocolAnthropicMessages && strings.TrimSpace(preset.BaseURL) != ""
 }
 
 // resolveProxyProtocol normalizes a stored protocol string into a
@@ -321,8 +382,6 @@ func resolveProxyProtocolWithRegistry(raw string, reg *ProtocolRegistry) (Provid
 }
 
 // supportedProxyAgents is the allow-list of agents the proxy MVP supports.
-// Only codex (a Responses API client) and claude (an Anthropic Messages
-// client) are wired in; opencode is intentionally excluded for the MVP.
 var supportedProxyAgents = map[string]struct{}{
 	"codex":    {},
 	"claude":   {},
