@@ -118,11 +118,12 @@ type AgentConfig struct {
 }
 
 type AppConfig struct {
-	Providers     map[string]StoredProvider    `json:"providers"`
-	Agents        map[string]AgentConfig       `json:"agents,omitempty"`
-	Default       string                       `json:"default,omitempty"`
-	ModelMappings map[string]map[string]string `json:"modelMappings,omitempty"`
-	Proxy         *ProxyConfig                 `json:"proxy,omitempty"`
+	Providers     map[string]StoredProvider     `json:"providers"`
+	Agents        map[string]AgentConfig        `json:"agents,omitempty"`
+	AgentProfiles map[string]AgentProfile       `json:"agentProfiles,omitempty"`
+	Default       string                        `json:"default,omitempty"`
+	ModelMappings map[string]map[string]string  `json:"modelMappings,omitempty"`
+	Proxy         *ProxyConfig                  `json:"proxy,omitempty"`
 }
 
 type ConfigureSelection struct {
@@ -515,7 +516,7 @@ func sortedProviderNames(cfg *AppConfig, includeCustomOption bool) []string {
 	return names
 }
 
-func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, error) {
+func resolveProviderPreset(provider string, cfg *AppConfig, agent ...AgentName) (ProviderPreset, error) {
 	if preset, ok := providerPresets[provider]; ok {
 		if stored, ok := cfg.Providers[provider]; ok {
 			if strings.TrimSpace(stored.Model) != "" {
@@ -527,6 +528,9 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 	}
 
 	stored, ok := cfg.Providers[provider]
+	if !ok && len(agent) > 0 && agent[0] != "" {
+		stored, ok = storedProviderForAgent(cfg, agent[0], provider)
+	}
 	if !ok || strings.TrimSpace(stored.BaseURL) == "" {
 		return ProviderPreset{}, fmt.Errorf("unsupported provider %q", provider)
 	}
@@ -564,9 +568,12 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 	}, nil
 }
 
-func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) (ProviderPreset, error) {
+func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string, agent ...AgentName) (ProviderPreset, error) {
 	if preset, ok := providerPresets[provider]; ok {
 		stored := cfg.Providers[provider]
+		if len(agent) > 0 && agent[0] != "" {
+			stored, _ = storedProviderForAgent(cfg, agent[0], provider)
+		}
 		model := strings.TrimSpace(modelOverride)
 		if model == "" {
 			model = strings.TrimSpace(stored.Model)
@@ -580,12 +587,16 @@ func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) 
 		return preset, nil
 	}
 
-	preset, err := resolveProviderPreset(provider, cfg)
+	preset, err := resolveProviderPreset(provider, cfg, agent...)
 	if err != nil {
 		return ProviderPreset{}, err
 	}
 	preset = withSelectedModel(preset, modelOverride)
-	applyStoredTierOverrides(&preset, cfg.Providers[provider])
+	stored := cfg.Providers[provider]
+	if len(agent) > 0 && agent[0] != "" {
+		stored, _ = storedProviderForAgent(cfg, agent[0], provider)
+	}
+	applyStoredTierOverrides(&preset, stored)
 	return preset, nil
 }
 
@@ -618,9 +629,10 @@ func applyStoredEndpointOverride(preset *ProviderPreset, stored StoredProvider) 
 	}
 	preset.BaseURL = baseURL
 	preset.AuthEnv = authEnv
-	preset.Endpoints = map[ProviderProtocol]ProtocolEndpoint{
-		protocol: {BaseURL: baseURL, AuthEnv: authEnv},
+	if preset.Endpoints == nil {
+		preset.Endpoints = map[ProviderProtocol]ProtocolEndpoint{}
 	}
+	preset.Endpoints[protocol] = ProtocolEndpoint{BaseURL: baseURL, AuthEnv: authEnv}
 }
 
 func validateProviderModel(provider, model string) error {

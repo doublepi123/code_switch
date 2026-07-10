@@ -88,8 +88,8 @@ func loadAppConfigFrom(path string) (*AppConfig, error) {
 		if err := json.Unmarshal(legacyData, cfg); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", legacyPath, err)
 		}
-		migrateLegacyProviders(cfg)
-		ensureAppConfigMaps(cfg)
+			migrateLegacyProviders(cfg)
+			ensureAppConfigMaps(cfg)
 		normalizeAppConfig(cfg)
 		if err := writeJSONAtomic(path, cfg); err != nil {
 			return nil, err
