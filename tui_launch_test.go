@@ -57,7 +57,7 @@ func TestLaunchAgentBuildsDirectEnvironmentForEachAgent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve preset: %v", err)
 			}
-			plan, err := resolveConnection(tc.agent, tc.provider, preset, "direct")
+			plan, err := resolveConnection(tc.agent, cfg, tc.provider, preset, "direct")
 			if err != nil {
 				t.Fatalf("resolve direct plan: %v", err)
 			}

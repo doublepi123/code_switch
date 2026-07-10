@@ -44,7 +44,7 @@ func launchAgentWithConfig(agent AgentName, provider, modelOverride, apiKey stri
 	if err != nil {
 		return err
 	}
-	plan, err := resolveConnection(agent, provider, preset, "auto")
+	plan, err := resolveConnection(agent, cfg, provider, preset, "auto")
 	if err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func prepareTemporaryCodexHome(provider string, preset ProviderPreset, plan Conn
 		baseURL := proxyBaseURL(state.Port, true)
 		rendered = renderProxyCodexConfigForBaseURLWithCatalogProtocol(preset.Model, baseURL, "", plan.UpstreamProtocol)
 	} else {
-		rendered = applyCodexPresetTOMLWithProtocol("", preset, provider, plan.UpstreamProtocol)
+			rendered = applyCodexPresetTOMLWithProtocol("", preset, provider, plan.UpstreamProtocol, cfg)
 	}
 	if err := writeTextAtomic(configPath, rendered, 0o600); err != nil {
 		cleanup()

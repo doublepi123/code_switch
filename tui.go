@@ -170,7 +170,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		fmt.Fprintln(out, msg)
 		pa := &providerArgs{Agent: agent, Provider: provider, APIKey: apiKey, Model: selection.Model, Haiku: selection.Haiku, Sonnet: selection.Sonnet, Opus: selection.Opus, Subagent: selection.Subagent}
 		persist := func() error { return writeJSONAtomic(configPath, cfg) }
-		plan, err := resolveConnection(agent, provider, mustResolveAgentSwitchPreset(agent, provider, cfg, selection.Model), "proxy")
+		plan, err := resolveConnection(agent, cfg, provider, mustResolveAgentSwitchPreset(agent, provider, cfg, selection.Model), "proxy")
 		if err != nil {
 			return err
 		}
@@ -209,7 +209,7 @@ func configureProxyRouteForCrossProtocolSelection(cfg *AppConfig, selection Conf
 	if err != nil {
 		return "", false, err
 	}
-	plan, err := resolveConnection(agent, provider, preset, "auto")
+	plan, err := resolveConnection(agent, cfg, provider, preset, "auto")
 	if err != nil {
 		return "", false, err
 	}
@@ -294,13 +294,13 @@ func (ts *tuiState) loadModelCatalog(provider string, force bool) ProviderModelC
 	if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" && !catalogContainsModel(catalog, customModel) {
 		catalog.Models = append([]ProviderModelInfo{{ID: customModel, Description: "custom model"}}, catalog.Models...)
 	}
-	ts.modelCatalogs[provider] = catalog
-	ts.modelFetchStatus[provider] = modelCatalogStatusText(catalog)
-	if force && missingAPIKeyPreventedRemoteCatalog(catalog) {
-		ts.modelFetchStatus[provider] += "  - 需要 API key 才能从远端获取模型列表"
+		ts.modelCatalogs[provider] = catalog
+		ts.modelFetchStatus[provider] = modelCatalogStatusText(catalog)
+		if force && missingAPIKeyPreventedRemoteCatalog(catalog) {
+			ts.modelFetchStatus[provider] += "  - API key required to fetch remote model list"
+		}
+		return catalog
 	}
-	return catalog
-}
 
 func missingAPIKeyPreventedRemoteCatalog(catalog ProviderModelCatalog) bool {
 	return catalog.Provider == "openrouter" &&
@@ -423,7 +423,7 @@ func providerProtocolOptions() []ProviderProtocol {
 
 func (ts *tuiState) effectiveWorkspaceEndpoint(provider string, preset ProviderPreset) (string, ProviderProtocol, bool, bool) {
 	protocol := protocolAnthropicMessages
-	if plan, err := resolveConnection(ts.agent, provider, preset, "auto"); err == nil && plan.UpstreamProtocol != "" {
+		if plan, err := resolveConnection(ts.agent, ts.cfg, provider, preset, "auto"); err == nil && plan.UpstreamProtocol != "" {
 		protocol = plan.UpstreamProtocol
 	}
 	protocolCustom := false
@@ -485,7 +485,7 @@ func (ts *tuiState) showProviderWorkspace(provider string) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Provider: %s                 Agent: %s\n", providerTitle(provider, ts.cfg), ts.agent)
-	if plan, err := resolveConnection(ts.agent, provider, workspacePreset, "auto"); err == nil {
+	if plan, err := resolveConnection(ts.agent, ts.cfg, provider, workspacePreset, "auto"); err == nil {
 		fmt.Fprintf(&b, "Connection: %s/%s        Key: %s\n", plan.Mode, plan.UpstreamProtocol, ts.keyStatusForProvider(provider, preset))
 	} else {
 		fmt.Fprintf(&b, "Connection: unavailable        Key: %s\n", ts.keyStatusForProvider(provider, preset))
@@ -777,7 +777,7 @@ func (ts *tuiState) showAdvancedMenu(provider string) {
 	if ts.agent == agentCodex && !preset.NoModel {
 		actions.AddItem(actionLabelEditContextWindow, "", 'c', func() {
 			ts.markAdvancedReturn(provider)
-			ts.showContextWindowForm(provider)
+			ts.showContextWindowForm(provider, "advanced")
 		})
 	}
 	actions.AddItem(actionLabelProxyManager, "", 'p', func() {
@@ -881,7 +881,7 @@ func providerListItemText(agent AgentName, cfg *AppConfig, name string, preset P
 	if badges != "" {
 		title += " " + badges
 	}
-	if plan, err := resolveConnection(agent, name, preset, "auto"); err == nil {
+	if plan, err := resolveConnection(agent, cfg, name, preset, "auto"); err == nil {
 		title += " [" + string(plan.Mode) + "]"
 	}
 	return title, preset.BaseURL
@@ -997,7 +997,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	}
 	if ts.agent == agentCodex && !preset.NoModel {
 		actions.AddItem(actionLabelEditContextWindow, "", 'c', func() {
-			ts.showContextWindowForm(provider)
+			ts.showContextWindowForm(provider, backPage)
 		})
 	}
 	if ts.agent != agentOpencode && !preset.NoModel {
@@ -1026,7 +1026,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 			ts.finishSelection(provider, preset.Model)
 			return nil
 		case ts.agent == agentCodex && !preset.NoModel && (event.Rune() == 'c' || event.Rune() == 'C'):
-			ts.showContextWindowForm(provider)
+			ts.showContextWindowForm(provider, backPage)
 			return nil
 		case ts.agent != agentOpencode && !preset.NoModel && (event.Rune() == 't' || event.Rune() == 'T'):
 			ts.showTierConfig(provider, backPage)
@@ -1066,7 +1066,7 @@ func providerDetailInfoText(agent AgentName, cfg *AppConfig, provider string, pr
 			fmt.Fprintf(&b, "  %s  %s\n", protocol, endpoint.BaseURL)
 		}
 	}
-	if plan, err := resolveConnection(agent, provider, preset, "auto"); err == nil {
+	if plan, err := resolveConnection(agent, cfg, provider, preset, "auto"); err == nil {
 		fmt.Fprintf(&b, "[::b]Connection[::-] %s (%s -> %s)\n", plan.Mode, plan.ClientProtocol, plan.UpstreamProtocol)
 		if plan.Mode == connectionModeProxy {
 			fmt.Fprintf(&b, "[yellow]Cross-protocol selection will be routed through a local proxy route.[-]\n")
