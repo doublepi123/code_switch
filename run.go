@@ -64,7 +64,7 @@ func cmdRun(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	plan, err := resolveConnection(agent, pa.Provider, preset, "auto")
+		plan, err := resolveConnection(agent, cfg, pa.Provider, preset, "auto")
 	if err != nil {
 		return err
 	}

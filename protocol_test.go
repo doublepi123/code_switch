@@ -17,7 +17,7 @@ func TestAgentProfilesDeclareClientAndRoutingProtocols(t *testing.T) {
 		{agentCodex, protocolOpenAIResponses, []ProviderProtocol{protocolOpenAIResponses, protocolOpenAIChat}, []ProviderProtocol{protocolAnthropicMessages, protocolOpenAIChat, protocolOpenAIResponses}},
 		{agentOpencode, protocolOpenAIChat, []ProviderProtocol{protocolAnthropicMessages, protocolOpenAIChat}, []ProviderProtocol{protocolAnthropicMessages, protocolOpenAIChat}},
 	} {
-		profile, ok := agentProfiles[tt.agent]
+			profile, ok := getAgentProfile(nil, tt.agent)
 		if !ok {
 			t.Fatalf("agentProfiles[%q] missing", tt.agent)
 		}
@@ -137,7 +137,7 @@ func TestResolveConnectionSelectsDirectOrProxyByAgentProfileAndProviderEndpoints
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := resolveConnection(tt.agent, tt.provider, tt.preset, tt.via)
+			plan, err := resolveConnection(tt.agent, nil, tt.provider, tt.preset, tt.via)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("resolveConnection error = nil, want error")
@@ -180,7 +180,7 @@ func TestPresetEndpointNoBaseURLFallbackWhenEndpointsDeclared(t *testing.T) {
 func TestCodexKimiCodingResolvesToOpenAIChat(t *testing.T) {
 	// Codex ProxyUpstreamPreference: [anthropic-messages, openai-chat, openai-responses]
 	// kimi-coding only has openai-chat → must resolve to openai-chat, not anthropic-messages.
-	plan, err := resolveConnection(agentCodex, "kimi-coding", providerPresets["kimi-coding"], "")
+	plan, err := resolveConnection(agentCodex, nil, "kimi-coding", providerPresets["kimi-coding"], "")
 	if err != nil {
 		t.Fatalf("resolveConnection error: %v", err)
 	}

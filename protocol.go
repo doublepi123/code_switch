@@ -73,8 +73,8 @@ func (p StoredProvider) providerProtocol() ProviderProtocol {
 	return protocol
 }
 
-func resolveConnection(agent AgentName, provider string, preset ProviderPreset, via string) (ConnectionPlan, error) {
-	profile, ok := agentProfiles[agent]
+func resolveConnection(agent AgentName, cfg *AppConfig, provider string, preset ProviderPreset, via string) (ConnectionPlan, error) {
+	profile, ok := getAgentProfile(cfg, agent)
 	if !ok {
 		return ConnectionPlan{}, fmt.Errorf("unsupported agent %q", agent)
 	}
