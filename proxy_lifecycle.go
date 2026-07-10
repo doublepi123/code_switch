@@ -27,6 +27,7 @@ type ProxyRuntimeState struct {
 	Host       string    `json:"host"`
 	Port       int       `json:"port"`
 	BaseURL    string    `json:"baseURL"`
+	LogPath    string    `json:"logPath,omitempty"`
 	Token      string    `json:"token"`
 	StartedAt  time.Time `json:"startedAt"`
 	RoutesHash string    `json:"routesHash,omitempty"`
@@ -35,6 +36,7 @@ type ProxyRuntimeState struct {
 type proxyServeInstance struct {
 	server *http.Server
 	ln     net.Listener
+	logger *proxyLogger
 	state  ProxyRuntimeState
 }
 
@@ -57,7 +59,7 @@ func readProxyRuntimeState() (ProxyRuntimeState, error) {
 	}
 	var state ProxyRuntimeState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return ProxyRuntimeState{}, err
+		return ProxyRuntimeState{}, fmt.Errorf("corrupt proxy state: %w", err)
 	}
 	return state, nil
 }
@@ -80,6 +82,7 @@ func proxyRoutesHash(cfg *AppConfig) string {
 	}
 	agents := sortedProxyRouteAgents(cfg.Proxy.Routes)
 	var b strings.Builder
+	fmt.Fprintf(&b, "host:%s|port:%d\n", cfg.Proxy.Host, cfg.Proxy.Port)
 	for _, agent := range agents {
 		route := cfg.Proxy.Routes[agent]
 		fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", agent, route.Provider, route.Model, route.UpstreamProtocol, route.Token)
@@ -90,6 +93,9 @@ func proxyRoutesHash(cfg *AppConfig) string {
 		sort.Strings(keys)
 		for _, k := range keys {
 			fmt.Fprintf(&b, "%s=%s;", k, route.ModelMappings[k])
+		}
+		if route.Fallback != nil {
+			fmt.Fprintf(&b, "fallback:%s|%s|%s|%s|", route.Fallback.Provider, route.Fallback.Model, route.Fallback.UpstreamProtocol, route.Fallback.BaseURL)
 		}
 		b.WriteString("\n")
 	}
@@ -157,7 +163,13 @@ func cmdProxyStatus(args []string, out io.Writer) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		// A corrupt state file (json parse failed) is never useful: the
+		// PID is meaningless and no /healthz probe would match. Treat it
+		// as "not running" and remove the file so the next status call
+		// shows the clean output instead of re-reporting the parse error.
+		fmt.Fprintf(out, "proxy: stale state removed (corrupt: %v)\n", err)
+		_ = removeProxyRuntimeState()
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -218,11 +230,12 @@ func cmdProxyServe(args []string, out io.Writer) error {
 	hostFlag := fs.String("host", "", "host override")
 	portFlag := fs.Int("port", -1, "port override")
 	tokenFlag := fs.String("token", "", "local token (deprecated: use "+proxyTokenEnvName+" env)")
+	logFlag := fs.String("log", "", "JSONL request log path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: code-switch proxy serve [--agent agent] [--host host] [--port port]")
+		return errors.New("usage: code-switch proxy serve [--agent agent] [--host host] [--port port] [--log path]")
 	}
 	// SECURITY: the local proxy token must NEVER be passed via argv. argv is
 	// world-readable via /proc/<pid>/cmdline and `ps`, so an explicit --token
@@ -230,6 +243,29 @@ func cmdProxyServe(args []string, out io.Writer) error {
 	// var. The start path forwards the token via env only.
 	if strings.TrimSpace(*tokenFlag) != "" {
 		return fmt.Errorf("--token is no longer accepted (it leaks via argv); set the %s env var instead", proxyTokenEnvName)
+	}
+	// Validate host/port overrides before building the instance. Only
+	// validate values that were explicitly provided on the command line;
+	// the config/default fallbacks are validated inside prepareProxyServe.
+	hostProvided := false
+	portProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "host":
+			hostProvided = true
+		case "port":
+			portProvided = true
+		}
+	})
+	if hostProvided {
+		if err := validateProxyHost(*hostFlag); err != nil {
+			return err
+		}
+	}
+	if portProvided {
+		if *portFlag < 0 || *portFlag > 65535 {
+			return fmt.Errorf("--port %d out of range (must be 0..65535)", *portFlag)
+		}
 	}
 	// Token resolution: env-only. The env is set programmatically by
 	// `proxy start` and is the single source of truth.
@@ -242,10 +278,15 @@ func cmdProxyServe(args []string, out io.Writer) error {
 	// and only then to the 127.0.0.1 default. Pre-filling 127.0.0.1 in the
 	// flag handler would shadow a host the user explicitly configured via
 	// `proxy configure --host`, defeating the configured-host feature.
-	inst, err := prepareProxyServe(strings.TrimSpace(*agentFlag), strings.TrimSpace(*hostFlag), *portFlag, token)
+	logPath := strings.TrimSpace(*logFlag)
+	if logPath == "" {
+		logPath = strings.TrimSpace(os.Getenv(proxyLogEnvName))
+	}
+	inst, err := prepareProxyServe(strings.TrimSpace(*agentFlag), strings.TrimSpace(*hostFlag), *portFlag, token, logPath)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = inst.logger.close() }()
 	fmt.Fprintf(out, "proxy listening on %s\n", inst.state.BaseURL)
 	if cfg, _, cfgErr := loadAppConfig(); cfgErr == nil && cfg.Proxy != nil && len(cfg.Proxy.Routes) > 0 {
 		fmt.Fprintln(out, "routes:")
@@ -265,7 +306,11 @@ func cmdProxyServe(args []string, out io.Writer) error {
 	return err
 }
 
-func prepareProxyServe(agent, host string, port int, token string) (*proxyServeInstance, error) {
+func prepareProxyServe(agent, host string, port int, token string, logPaths ...string) (*proxyServeInstance, error) {
+	logPath := ""
+	if len(logPaths) > 0 {
+		logPath = strings.TrimSpace(logPaths[0])
+	}
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("proxy token is required")
 	}
@@ -322,6 +367,9 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 	if err := rejectControlChars("host", proxyCfg.Host); err != nil {
 		return nil, err
 	}
+	if err := validateProxyHost(proxyCfg.Host); err != nil {
+		return nil, err
+	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(proxyCfg.Host, strconv.Itoa(proxyCfg.Port)))
 	if err != nil {
 		return nil, err
@@ -350,6 +398,12 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 		Token:      token,
 		StartedAt:  time.Now().UTC(),
 		RoutesHash: proxyRoutesHash(cfg),
+		LogPath:    logPath,
+	}
+	logger, err := newProxyLogger(logPath)
+	if err != nil {
+		_ = ln.Close()
+		return nil, err
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +414,7 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 		body, _ := json.Marshal(proxyHealthReport{OK: true, InstanceID: instanceID, PID: pid})
 		_, _ = w.Write(body)
 	})
-	mux.Handle("/", newProxyMultiRouteHandler(routes, defaultProtocolRegistry()))
+	mux.Handle("/", newProxyMultiRouteHandlerWithLogger(routes, defaultProtocolRegistry(), logger))
 	server := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -370,9 +424,14 @@ func prepareProxyServe(agent, host string, port int, token string) (*proxyServeI
 	}
 	if err := writeProxyRuntimeState(state); err != nil {
 		_ = ln.Close()
+		_ = logger.close()
+		// server is not yet serving so Close is a no-op, but call it for
+		// hygiene in case a future change wires the listener before this
+		// point.
+		_ = server.Close()
 		return nil, err
 	}
-	return &proxyServeInstance{server: server, ln: ln, state: state}, nil
+	return &proxyServeInstance{server: server, ln: ln, logger: logger, state: state}, nil
 }
 
 func sortedProxyRouteAgents(routes map[string]ProxyRouteConfig) []string {
@@ -449,6 +508,7 @@ func randomProxyInstanceID() (string, error) {
 // single injectable variable keeps the production code path the source of
 // truth and avoids any parallel "test-only" start function.
 var proxyServeExec = defaultProxyServeExec
+var proxyStartLogPath string
 
 // proxyTokenEnvName is the name of the environment variable used to forward
 // the local proxy token from `proxy start` to the spawned `proxy serve` child.
@@ -457,6 +517,7 @@ var proxyServeExec = defaultProxyServeExec
 // systems. cmdProxyServe reads this env var as a fallback when --token is not
 // explicitly passed on the command line.
 const proxyTokenEnvName = "CODE_SWITCH_PROXY_TOKEN"
+const proxyLogEnvName = "CODE_SWITCH_PROXY_LOG"
 
 // proxyTokenEnv returns the environment variable name carrying the proxy
 // token from start to serve. It is a function rather than a direct constant
@@ -471,11 +532,35 @@ func proxyTokenEnv() string { return proxyTokenEnvName }
 //
 // Returns the cmd (with Env set, Process NOT started) so the caller can call
 // Start() at the chosen moment.
-func buildProxyServeCommand(exe, agent, token string) *exec.Cmd {
+func buildProxyServeCommand(exe, agent, token string, logPaths ...string) *exec.Cmd {
+	logPath := ""
+	if len(logPaths) > 0 {
+		logPath = strings.TrimSpace(logPaths[0])
+	}
 	cmd := exec.Command(exe, "proxy", "serve", "--agent", agent)
 	// Forward the token via env, never via argv. The child inherits the
-	// parent environment (HOME, etc.) plus the token.
-	cmd.Env = append(os.Environ(), proxyTokenEnvName+"="+token)
+	// parent environment (HOME, etc.) plus the token, but with one
+	// exception: an inherited CODE_SWITCH_PROXY_TOKEN is STRIPPED first
+	// so the fresh value we append is the only one the child sees. Without
+	// this, an attacker who controls the parent shell could set
+	// CODE_SWITCH_PROXY_TOKEN=<their-key> and have the proxy accept
+	// requests signed with that key, bypassing the freshly-generated
+	// token from `cs proxy start`.
+	inherited := os.Environ()
+	cleanInherited := inherited[:0:0]
+	for _, kv := range inherited {
+		if strings.HasPrefix(kv, proxyTokenEnvName+"=") {
+			continue
+		}
+		if strings.HasPrefix(kv, proxyLogEnvName+"=") {
+			continue
+		}
+		cleanInherited = append(cleanInherited, kv)
+	}
+	cmd.Env = append(cleanInherited, proxyTokenEnvName+"="+token)
+	if strings.TrimSpace(logPath) != "" {
+		cmd.Env = append(cmd.Env, proxyLogEnvName+"="+strings.TrimSpace(logPath))
+	}
 	return cmd
 }
 
@@ -490,7 +575,7 @@ func defaultProxyServeExec(agent, token string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := buildProxyServeCommand(exe, agent, token)
+	cmd := buildProxyServeCommand(exe, agent, token, proxyStartLogPath)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -527,11 +612,12 @@ func cmdProxyStart(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("proxy start", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	agentFlag := fs.String("agent", "codex", "agent route")
+	logFlag := fs.String("log", "", "JSONL request log path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: code-switch proxy start [--agent agent]")
+		return errors.New("usage: code-switch proxy start [--agent agent] [--log path]")
 	}
 	token, err := randomProxyToken()
 	if err != nil {
@@ -607,7 +693,10 @@ func cmdProxyStart(args []string, out io.Writer) error {
 	// status` would report "not running" even though the original proxy is
 	// still serving.
 	preExistingState, preExistingHadState := snapshotProxyRuntimeState()
+	previousLogPath := proxyStartLogPath
+	proxyStartLogPath = strings.TrimSpace(*logFlag)
 	cmd, err := proxyServeExec(agent, token)
+	proxyStartLogPath = previousLogPath
 	if err != nil {
 		return err
 	}

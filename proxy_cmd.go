@@ -50,7 +50,7 @@ func printProxyUsage(out io.Writer) {
 	fmt.Fprint(out, `code-switch proxy
 
 Usage:
-  cs proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port]
+	  cs proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port] [--fallback-provider provider] [--fallback-url url]
       write one route of the multi-route proxy daemon
   cs proxy preview <agent>
       show the resolved proxy route for one agent
@@ -66,7 +66,7 @@ Usage:
 }
 
 // proxyConfigureUsage is the canonical usage string for `cs proxy configure`.
-const proxyConfigureUsage = "usage: code-switch proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port]"
+const proxyConfigureUsage = "usage: code-switch proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port] [--fallback-provider provider] [--fallback-url url]"
 
 // cmdProxyConfigure writes a ProxyRouteConfig for the given agent into the
 // persisted AppConfig. It is the only writer of the proxy block, which keeps
@@ -112,6 +112,8 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 	protocolFlag := fs.String("protocol", "", "upstream protocol (defaults to anthropic-messages at preview time)")
 	hostFlag := fs.String("host", "127.0.0.1", "proxy listen host")
 	portFlag := fs.Int("port", 0, "proxy listen port (0 = auto-allocate at serve time)")
+	fallbackProviderFlag := fs.String("fallback-provider", "", "fallback provider")
+	fallbackURLFlag := fs.String("fallback-url", "", "fallback upstream base URL")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -129,11 +131,13 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 	// agent positional is args[0] (before TrimSpace), the raw provider
 	// is the untouched flag value, and so on.
 	for label, value := range map[string]string{
-		"agent":    args[0], // raw positional, pre-TrimSpace
-		"provider": *providerFlag,
-		"model":    *modelFlag,
-		"protocol": *protocolFlag,
-		"host":     *hostFlag,
+		"agent":             args[0], // raw positional, pre-TrimSpace
+		"provider":          *providerFlag,
+		"model":             *modelFlag,
+		"protocol":          *protocolFlag,
+		"host":              *hostFlag,
+		"fallback provider": *fallbackProviderFlag,
+		"fallback url":      *fallbackURLFlag,
 	} {
 		if err := rejectControlChars(label, value); err != nil {
 			return err
@@ -224,11 +228,35 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 		if !ok {
 			return fmt.Errorf("unsupported agent %q", agent)
 		}
-		plan, ok := resolveProxyConnection(AgentName(agent), provider, preset, profile)
-		if !ok {
-			return fmt.Errorf("provider %q has no proxy-compatible endpoint for agent %q", provider, agent)
+		// Resolve the agent-specific default first, then walk
+		// ProxyUpstreamPreference and pick the first protocol the provider
+		// actually supports. This keeps omit-protocol configurations valid
+		// for any provider (the persisted route must never end up with a
+		// protocol the provider cannot serve).
+		defaultProto := defaultProxyProtocolForAgent(agent)
+		if validateProxyAgentProtocol(agent, defaultProto) == nil && providerCanUseProxyProtocol(preset, defaultProto) {
+			protocolResolved = defaultProto
+		} else {
+			found := false
+			for _, candidate := range profile.ProxyUpstreamPreference {
+				if validateProxyAgentProtocol(agent, candidate) != nil {
+					continue
+				}
+				if !providerCanUseProxyProtocol(preset, candidate) {
+					continue
+				}
+				protocolResolved = candidate
+				found = true
+				break
+			}
+			if !found {
+				return fmt.Errorf("provider %q has no proxy-compatible endpoint for agent %q", provider, agent)
+			}
 		}
-		protocolResolved = plan.UpstreamProtocol
+	}
+	fallbackConfig, err := resolveProxyFallbackConfig(provider, *fallbackProviderFlag, *fallbackURLFlag, protocolResolved, cfg, AgentName(agent))
+	if err != nil {
+		return err
 	}
 
 	if cfg.Proxy == nil {
@@ -269,8 +297,10 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 	cfg.Proxy.Port = normalized.Port
 
 	routeToken := ""
+	var preservedMappings map[string]string
 	if existing, ok := cfg.Proxy.Routes[agent]; ok {
 		routeToken = strings.TrimSpace(existing.Token)
+		preservedMappings = existing.ModelMappings
 	}
 	if routeToken == "" {
 		generated, err := randomProxyRouteToken()
@@ -286,6 +316,8 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 		Model:            strings.TrimSpace(*modelFlag),
 		UpstreamProtocol: string(protocolResolved),
 		Token:            routeToken,
+		ModelMappings:    preservedMappings,
+		Fallback:         fallbackConfig,
 	}
 
 	if err := writeJSONAtomic(path, cfg); err != nil {
@@ -293,6 +325,30 @@ func cmdProxyConfigure(args []string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "configured proxy route %s -> %s\n", agent, provider)
 	return nil
+}
+
+func resolveProxyFallbackConfig(primaryProvider, providerRaw, urlRaw string, protocol ProviderProtocol, cfg *AppConfig, agent AgentName) (*ProxyRouteConfig, error) {
+	provider := canonicalProviderName(providerRaw)
+	baseURL := strings.TrimSpace(urlRaw)
+	if provider == "" && baseURL == "" {
+		return nil, nil
+	}
+	if provider == "" {
+		provider = primaryProvider
+	}
+	fallback := &ProxyRouteConfig{Provider: provider, UpstreamProtocol: string(protocol), BaseURL: baseURL}
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("unsupported fallback provider %q", provider)
+	}
+	if !providerCanUseProxyProtocol(preset, protocol) && baseURL == "" {
+		return nil, fmt.Errorf("fallback provider %q has no %s endpoint", provider, protocol)
+	}
+	if !sameCanonicalProvider(provider, primaryProvider) && !preset.NoAPIKey && strings.TrimSpace(storedAPIKeyForAgent(cfg, agent, provider)) == "" {
+		return nil, fmt.Errorf("fallback provider %q has no API key configured; run `cs set-key %s <key>` before configuring it", provider, provider)
+	}
+	fallback.Model = preset.Model
+	return fallback, nil
 }
 
 // cmdProxyPreview renders the resolved proxy route for an agent without

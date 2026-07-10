@@ -983,11 +983,11 @@ func TestProxyHandlerRejectsOversizedRequestBody(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	// MaxBytesReader surfaces as http.MaxBytesError, which the handler
-	// maps to a 400. The exact status is not load-bearing on the
-	// client contract; what matters is that the upstream was never
-	// reached and the request was rejected.
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for oversized request body\nbody: %s",
+	// maps to 413 (Payload Too Large) per HTTP semantics. The exact status
+	// is not load-bearing on the client contract; what matters is that the
+	// upstream was never reached and the request was rejected.
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 for oversized request body\nbody: %s",
 			rec.Code, rec.Body.String())
 	}
 }

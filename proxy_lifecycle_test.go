@@ -429,6 +429,59 @@ func TestPrepareProxyServeBindsAndWritesState(t *testing.T) {
 	}
 }
 
+func TestPrepareProxyServeWritesRequestLog_whenLogPathProvided(t *testing.T) {
+	// Given
+	t.Setenv("HOME", t.TempDir())
+	if err := runWithIO([]string{"set-key", "zhipu-cn", "sk-test"}, nil, io.Discard); err != nil {
+		t.Fatalf("set-key: %v", err)
+	}
+	if err := runWithIO([]string{"proxy", "configure", "codex", "--provider", "zhipu-cn", "--model", "glm-5.2"}, nil, io.Discard); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	logPath := filepath.Join(t.TempDir(), "proxy.jsonl")
+	inst, err := prepareProxyServe("codex", "127.0.0.1", 0, "csproxy-serve-tok", logPath)
+	if err != nil {
+		t.Fatalf("prepareProxyServe: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = inst.server.Shutdown(ctx)
+		_ = inst.logger.close()
+	}()
+	go func() { _ = inst.server.Serve(inst.ln) }()
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/v1/responses", inst.state.Port), strings.NewReader(`{"model":"codex-model","input":"Say hi"}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	// When
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/responses: %v", err)
+	}
+	_ = resp.Body.Close()
+	if err := inst.logger.close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+
+	// Then
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	entries := readProxyLogEntries(t, logPath)
+	if len(entries) != 1 {
+		t.Fatalf("log entry count = %d, want 1: %#v", len(entries), entries)
+	}
+	got := entries[0]
+	if got.Method != http.MethodPost || got.Path != "/v1/responses" || got.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("entry = %#v, want POST /v1/responses 401", got)
+	}
+	if got.RemoteAddr == "" {
+		t.Fatalf("remoteAddr is empty in entry %#v", got)
+	}
+}
+
 // --- Stop: no state ---
 
 func TestCmdProxyStopNotRunningWhenNoState(t *testing.T) {
@@ -492,10 +545,15 @@ func TestCmdProxyStopCleansStaleStateWithoutKilling(t *testing.T) {
 		t.Fatalf("spawn sleep: %v", err)
 	}
 	pid := cmd.Process.Pid
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	waited := false
 	defer func() {
 		// Best-effort cleanup: kill the child if it somehow survived.
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		if !waited {
+			_ = cmd.Process.Kill()
+			<-done
+		}
 	}()
 
 	state := ProxyRuntimeState{
@@ -525,12 +583,11 @@ func TestCmdProxyStopCleansStaleStateWithoutKilling(t *testing.T) {
 	// killed it — that is exactly the regression we are guarding against.
 	// We probe by checking whether cmd.Wait returns. A still-running process
 	// blocks Wait, so we use a channel with a short timeout.
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
 	select {
 	case <-time.After(500 * time.Millisecond):
 		// Good: the process is still running after the timeout window.
 	case err := <-done:
+		waited = true
 		t.Fatalf("stop killed a stale-state PID that was an unrelated live process (wait returned %v)", err)
 	}
 }
@@ -751,6 +808,7 @@ func TestCmdProxyServeEmptyHostFallsBackToConfigWhenUnset(t *testing.T) {
 type fakeProxyChild struct {
 	agent     string
 	token     string
+	logPath   string
 	unhealthy bool
 	state     *ProxyRuntimeState
 	done      chan struct{}
@@ -827,6 +885,7 @@ func (f *fakeProxyChild) run() (*exec.Cmd, error) {
 		BaseURL:    fmt.Sprintf("http://127.0.0.1:%d/v1", port),
 		Token:      f.token,
 		StartedAt:  time.Now().UTC(),
+		LogPath:    f.logPath,
 	}
 	if err := writeProxyRuntimeState(state); err != nil {
 		_ = sl.Process.Kill()
@@ -862,6 +921,7 @@ func withFakeProxyExec(unhealthy bool) (token string, child *fakeProxyChild, res
 	prev := proxyServeExec
 	proxyServeExec = func(agent, token string) (*exec.Cmd, error) {
 		child.agent = agent
+		child.logPath = proxyStartLogPath
 		return child.run()
 	}
 	return tok, child, func() {
@@ -940,6 +1000,41 @@ func TestCmdProxyStartSuccessPath(t *testing.T) {
 	}
 	if _, err := readProxyRuntimeState(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state still present after stop: %v", err)
+	}
+}
+
+func TestCmdProxyStartForwardsLogPathToServeChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("injectable sleep-based child is Unix-only")
+	}
+	// Given
+	t.Setenv("HOME", t.TempDir())
+	if err := runWithIO([]string{"set-key", "zhipu-cn", "sk-test"}, nil, io.Discard); err != nil {
+		t.Fatalf("set-key: %v", err)
+	}
+	if err := runWithIO([]string{"proxy", "configure", "codex", "--provider", "zhipu-cn", "--model", "glm-5.2"}, nil, io.Discard); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	logPath := filepath.Join(t.TempDir(), "proxy.jsonl")
+	_, child, restore := withFakeProxyExec(false)
+	defer restore()
+	var out bytes.Buffer
+
+	// When
+	if err := cmdProxyStart([]string{"--log", logPath}, &out); err != nil {
+		t.Fatalf("start returned error: %v", err)
+	}
+
+	// Then
+	if child.logPath != logPath {
+		t.Fatalf("child logPath = %q, want %q", child.logPath, logPath)
+	}
+	state, err := readProxyRuntimeState()
+	if err != nil {
+		t.Fatalf("read state after start: %v", err)
+	}
+	if state.LogPath != logPath {
+		t.Fatalf("state LogPath = %q, want %q", state.LogPath, logPath)
 	}
 }
 
@@ -1251,5 +1346,85 @@ func TestCmdProxyStartCleanupPreservesExistingState(t *testing.T) {
 	}
 	if got.PID != existing.PID {
 		t.Fatalf("state PID changed after failed start: got %d, want %d (existing state must be preserved)", got.PID, existing.PID)
+	}
+}
+
+// TestCmdProxyStatusRemovesCorruptStateFile pins the behavior that a
+// proxy state file containing invalid JSON is treated as stale: the
+// status command reports "stale state removed" and removes the file,
+// instead of surfacing a JSON parse error to the operator.
+func TestCmdProxyStatusRemovesCorruptStateFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Pre-populate the state file with invalid JSON.
+	statePath := proxyStatePath()
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(statePath, []byte("not valid json {{{"), 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := cmdProxyStatus(nil, &out); err != nil {
+		t.Fatalf("status returned error on corrupt state: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "not running") && !strings.Contains(got, "stale") && !strings.Contains(got, "corrupt") {
+		t.Fatalf("status output for corrupt state must mention not-running/stale/corrupt: %q", got)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("corrupt state file should be removed, stat err = %v", err)
+	}
+}
+
+// TestReadProxyRuntimeStateReportsParseError verifies the
+// post-fix contract: parse errors are surfaced (not silently
+// coerced to ErrNotExist) so cmdProxyStatus can distinguish a
+// missing file from a corrupt one and report accordingly.
+func TestReadProxyRuntimeStateReportsParseError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	statePath := proxyStatePath()
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(statePath, []byte("garbage"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := readProxyRuntimeState()
+	if err == nil {
+		t.Fatal("readProxyRuntimeState returned nil for corrupt state")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("corrupt state should NOT be reported as ErrNotExist, got %v", err)
+	}
+}
+
+// TestBuildProxyServeCommandStripsInheritedProxyToken pins the security
+// guarantee that a parent-shell CODE_SWITCH_PROXY_TOKEN cannot override
+// the freshly-generated token from `cs proxy start`. The proxy would
+// otherwise accept requests signed with the inherited (attacker-supplied)
+// key, bypassing the post-start token rotation.
+func TestBuildProxyServeCommandStripsInheritedProxyToken(t *testing.T) {
+	fakeExe := "/path/to/cs"
+	inheritedToken := "INHERITED-FROM-PARENT-SHELL"
+	t.Setenv(proxyTokenEnvName, inheritedToken)
+	cmd := buildProxyServeCommand(fakeExe, "codex", "FRESH-TOKEN")
+	t.Cleanup(func() { _ = cmd.Process })
+	foundCount := 0
+	foundValue := ""
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, proxyTokenEnvName+"=") {
+			foundCount++
+			foundValue = strings.TrimPrefix(kv, proxyTokenEnvName+"=")
+		}
+	}
+	if foundCount != 1 {
+		t.Fatalf("env should contain exactly one %s entry, got %d", proxyTokenEnvName, foundCount)
+	}
+	if foundValue != "FRESH-TOKEN" {
+		t.Fatalf("%s in env = %q, want %q (inherited %q must be stripped)", proxyTokenEnvName, foundValue, "FRESH-TOKEN", inheritedToken)
 	}
 }
