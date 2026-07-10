@@ -19,6 +19,7 @@ cover.out
 # Local agent workdirs
 .claude/
 .agents/
+.omo/
 
 # IDE files
 .idea/
