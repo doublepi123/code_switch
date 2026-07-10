@@ -261,7 +261,7 @@ func applyCodexPresetTOML(existing string, preset ProviderPreset, provider strin
 
 func applyCodexPresetTOMLWithProtocol(existing string, preset ProviderPreset, provider string, protocol ProviderProtocol, cfg *AppConfig) string {
 	provider = canonicalProviderName(provider)
-	cleaned := removeCodexManagedTOML(existing, true, true, cfg)
+	cleaned := removeCodexMCPConfigTOML(removeCodexManagedTOML(existing, true, true, cfg), cfg)
 	topLevel, sections := splitBeforeFirstTOMLSection(cleaned)
 	var b strings.Builder
 
@@ -291,7 +291,7 @@ func applyCodexPresetTOMLWithProtocol(existing string, preset ProviderPreset, pr
 	b.WriteString(fmt.Sprintf("\n[model_providers.%s.auth]\n", providerName))
 	b.WriteString("command = \"cs\"\n")
 	fmt.Fprintf(&b, "args = [\"token\", %s, \"--agent\", \"codex\"]\n", tomlQuoteBasicString(provider))
-	return b.String()
+	return appendCodexMCPConfigTOML(b.String(), cfg)
 }
 
 func codexWireAPIForProtocol(protocol ProviderProtocol) string {
@@ -444,7 +444,7 @@ func restoreCodexConfig(codexDir string, cfg *AppConfig, out io.Writer, dryRun b
 	if err != nil {
 		return err
 	}
-	updated := removeCodexManagedTOML(existing, true, true, cfg)
+	updated := appendCodexMCPConfigTOML(removeCodexMCPConfigTOML(removeCodexManagedTOML(existing, true, true, cfg), cfg), cfg)
 
 	if err := backupIfExists(configPath); err != nil {
 		return err

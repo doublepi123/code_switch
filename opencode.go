@@ -126,6 +126,8 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 	}
 	providers[providerKey] = providerEntry
 	root["provider"] = providers
+	removeManagedMCPFromJSON(root, cfg)
+	mergeMCPConfig(root, generateOpencodeMCPConfig(cfg))
 
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
@@ -137,6 +139,20 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 func restoreOpencodeConfig(opencodeDir string, cfg *AppConfig, out io.Writer, dryRun bool) error {
 	configPath := opencodeConfigPath(opencodeDir)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if !dryRun {
+			generated := generateOpencodeMCPConfig(cfg)
+			if len(generated) > 0 {
+				root := map[string]any{}
+				mergeMCPConfig(root, generated)
+				data, err := json.MarshalIndent(root, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshal OpenCode config: %w", err)
+				}
+				if err := writeTextAtomic(configPath, string(data)+"\n", 0o600); err != nil {
+					return err
+				}
+			}
+		}
 		fmt.Fprintf(out, "%s\n", successPrefix("restored OpenCode official config"))
 		fmt.Fprintf(out, "%s\n", formatLabel("config", configPath))
 		return nil
@@ -210,6 +226,8 @@ func removeOpencodeManagedJSON(existing string, cfg *AppConfig) (string, error) 
 			root["provider"] = providers
 		}
 	}
+	removeManagedMCPFromJSON(root, cfg)
+	mergeMCPConfig(root, generateOpencodeMCPConfig(cfg))
 
 	// If only $schema remains, return empty to trigger file deletion
 	if len(root) == 1 {

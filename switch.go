@@ -150,8 +150,10 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 
 	// persistAppConfig re-acquires the app-config lock and writes the in-memory cfg. It is called
 	// only after a successful switch so tier overrides and codex/opencode stored config persist
-	// only on success, preserving the previous behavior.
+	// only on success, preserving the previous behavior. ManagedMCPNames is synced to the current
+	// MCPServers keys so the next switch/restore knows which agent-config entries to clean up.
 	persistAppConfig := func() error {
+		cfg.ManagedMCPNames = managedMCPServerNames(cfg)
 		cf := newConfigFile(configPath)
 		relock, err := cf.lock()
 		if err != nil {
@@ -217,7 +219,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "%s\n", formatLabel("mode", string(connectionModeDirect)))
-	if shouldPersistTierOverrides && !*dryRun {
+	if !*dryRun {
 		if err := persistAppConfig(); err != nil {
 			return err
 		}
@@ -330,6 +332,8 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 	}
 
 	applyPreset(root, preset, apiKey)
+	removeManagedMCPFromJSON(root, cfg)
+	mergeMCPConfig(root, generateClaudeMCPConfig(cfg))
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err
 	}
