@@ -86,7 +86,7 @@ func computeEnvDiff(current, desired map[string]string) []envChange {
 	for k, newVal := range desired {
 		oldVal, existed := current[k]
 		switch {
-		case !existed || strings.TrimSpace(oldVal) == "":
+		case !existed:
 			changes[k] = envChange{Key: k, Status: "added", New: newVal}
 		case oldVal != newVal:
 			changes[k] = envChange{Key: k, Status: "changed", New: newVal, Old: oldVal}

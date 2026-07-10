@@ -110,16 +110,19 @@ func e2eMigrationHome(t *testing.T) string {
 
 // e2eMigrationSeedCustomProvider 写入一个指向 mock 上游的自定义 provider
 // 到 ~/.code-switch/config.json，并返回写入的 cfg 便于后续断言/修改。
-func e2eMigrationSeedCustomProvider(t *testing.T, home, name, upstreamURL, authEnv string) AppConfig {
+// protocol 非空时设置到 StoredProvider.Protocol，从而显式声明该 provider
+// 支持的协议（空字符串则保留旧默认行为，等效于 anthropic-messages）。
+func e2eMigrationSeedCustomProvider(t *testing.T, home, name, upstreamURL, authEnv string, protocol ProviderProtocol) AppConfig {
 	t.Helper()
 	cfg := AppConfig{
 		Providers: map[string]StoredProvider{
 			name: {
-				Name:    name,
-				BaseURL: upstreamURL,
-				Model:   "mock-model",
-				APIKey:  "mock-key",
-				AuthEnv: authEnv,
+				Name:     name,
+				BaseURL:  upstreamURL,
+				Model:    "mock-model",
+				APIKey:   "mock-key",
+				AuthEnv:  authEnv,
+				Protocol: protocol,
 			},
 		},
 	}
@@ -152,7 +155,7 @@ func TestE2EMigration_ClaudeToChatOnlyProviderStreamingWithTools(t *testing.T) {
 		"data: [DONE]\n\n"
 
 	upstream, cap := startStreamingUpstream(t, "text/event-stream", chatStreamWithTool)
-	e2eMigrationSeedCustomProvider(t, home, "e2e-chat-stream", upstream.URL, "ANTHROPIC_AUTH_TOKEN")
+	e2eMigrationSeedCustomProvider(t, home, "e2e-chat-stream", upstream.URL, "ANTHROPIC_AUTH_TOKEN", protocolOpenAIChat)
 
 	// 配置 claude 路由 -> openai-chat 上游协议。
 	e2eMustRun(t, []string{
@@ -293,7 +296,7 @@ func TestE2EMigration_ClaudeToChatOnlyProviderNonStreamingWithTools(t *testing.T
 	// 非流式 Chat 响应，带 tool_calls。
 	chatResp := `{"id":"chatcmpl_1","object":"chat.completion","model":"chat-model","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"hi\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8}}`
 	upstream, cap := startOpenAIChatUpstream(t, 0, chatResp)
-	e2eMigrationSeedCustomProvider(t, home, "e2e-chat-nonstream", upstream.URL, "ANTHROPIC_AUTH_TOKEN")
+	e2eMigrationSeedCustomProvider(t, home, "e2e-chat-nonstream", upstream.URL, "ANTHROPIC_AUTH_TOKEN", protocolOpenAIChat)
 
 	e2eMustRun(t, []string{
 		"proxy", "configure", "claude",
@@ -418,7 +421,7 @@ func TestE2EMigration_CodexToAnthropicOnlyProviderFullChain(t *testing.T) {
 	// Anthropic 上游响应，带 tool_use 块。
 	anthResp := `{"id":"msg_1","type":"message","role":"assistant","model":"anthropic-model","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"hi"}}],"stop_reason":"tool_use","usage":{"input_tokens":4,"output_tokens":7}}`
 	upstream, cap := startAnthropicUpstream(t, 0, anthResp)
-	e2eMigrationSeedCustomProvider(t, home, "e2e-anthropic-codex", upstream.URL, "ANTHROPIC_AUTH_TOKEN")
+	e2eMigrationSeedCustomProvider(t, home, "e2e-anthropic-codex", upstream.URL, "ANTHROPIC_AUTH_TOKEN", protocolAnthropicMessages)
 
 	e2eMustRun(t, []string{
 		"proxy", "configure", "codex",
@@ -542,138 +545,7 @@ func TestE2EMigration_CodexToAnthropicOnlyProviderFullChain(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 3. opencode -> openai-responses provider：完整链路
-// ---------------------------------------------------------------------------
 
-// TestE2EMigration_OpencodeToResponsesProviderFullChain 验证 opencode 客户端
-// 通过 OpenAI Chat 入站 (/v1/chat/completions) -> 代理翻译为 OpenAI
-// Responses 上游 (/v1/responses)。覆盖：路径、模型改写、工具调用
-// 翻译、usage 保真。
-func TestE2EMigration_OpencodeToResponsesProviderFullChain(t *testing.T) {
-	home := e2eMigrationHome(t)
-
-	// Responses 上游响应，带 function_call。
-	responsesResp := `{"id":"resp_1","object":"response","status":"completed","model":"resp-model","output":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"hi\"}"}],"output_text":"","usage":{"input_tokens":5,"output_tokens":8,"total_tokens":13}}`
-	upstream, cap := startResponsesUpstream(t, responsesResp)
-	e2eMigrationSeedCustomProvider(t, home, "e2e-responses-opencode", upstream.URL, "OPENAI_API_KEY")
-
-	e2eMustRun(t, []string{
-		"proxy", "configure", "opencode",
-		"--provider", "e2e-responses-opencode",
-		"--protocol", "openai-responses",
-		"--host", "127.0.0.1",
-		"--port", "0",
-	})
-
-	const token = "csproxy-e2e-opencode-responses"
-	inst, err := prepareProxyServe("opencode", "", 0, token)
-	if err != nil {
-		t.Fatalf("prepareProxyServe: %v", err)
-	}
-	baseURL := inst.state.BaseURL
-	srvDone := make(chan struct{})
-	go func() {
-		_ = inst.server.Serve(inst.ln)
-		close(srvDone)
-	}()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = inst.server.Shutdown(ctx)
-		select {
-		case <-srvDone:
-		case <-time.After(2 * time.Second):
-		}
-		_ = removeProxyRuntimeState()
-	})
-
-	// OpenCode Chat 入站请求，带工具定义。
-	chatReq := `{"model":"client-model","max_tokens":32,"messages":[{"role":"user","content":"Call lookup"}],"tools":[{"type":"function","function":{"name":"lookup","description":"look up","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}}]}`
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/chat/completions", strings.NewReader(chatReq))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("forward request: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("forward status = %d, want 200\nbody: %s", resp.StatusCode, body)
-	}
-
-	// 上游必须是 /v1/responses。
-	if cap.path != "/v1/responses" {
-		t.Fatalf("upstream path = %q, want /v1/responses", cap.path)
-	}
-	// Authorization 必须是 Bearer mock-key。
-	if cap.auth != "Bearer mock-key" {
-		t.Fatalf("upstream auth = %q, want Bearer mock-key", cap.auth)
-	}
-	// 上游请求体必须是 Responses 形状，模型被改写为 mock-model。
-	var upReq map[string]any
-	if err := json.Unmarshal(cap.body, &upReq); err != nil {
-		t.Fatalf("unmarshal upstream body: %v\n%s", err, cap.body)
-	}
-	if m, _ := upReq["model"].(string); m != "mock-model" {
-		t.Fatalf("upstream model = %q, want mock-model\n%s", m, cap.body)
-	}
-
-	// 客户端收到 OpenAI Chat 响应。
-	var chatResp map[string]any
-	if err := json.Unmarshal(body, &chatResp); err != nil {
-		t.Fatalf("unmarshal client response: %v\n%s", err, body)
-	}
-	if chatResp["object"] != "chat.completion" {
-		t.Fatalf("client response object = %v, want chat.completion\n%s", chatResp["object"], body)
-	}
-	// 工具调用必须出现在 choices[0].message.tool_calls。
-	choices, _ := chatResp["choices"].([]any)
-	if len(choices) == 0 {
-		t.Fatalf("client response missing choices\n%s", body)
-	}
-	choice0, _ := choices[0].(map[string]any)
-	message, _ := choice0["message"].(map[string]any)
-	if message == nil {
-		t.Fatalf("client response missing message\n%s", body)
-	}
-	toolCalls, _ := message["tool_calls"].([]any)
-	if len(toolCalls) == 0 {
-		t.Fatalf("client response missing tool_calls\n%s", body)
-	}
-	tc0, _ := toolCalls[0].(map[string]any)
-	fn, _ := tc0["function"].(map[string]any)
-	if fn == nil || fn["name"] != "lookup" {
-		t.Fatalf("tool_calls[0].function.name = %v, want lookup\n%s", fn, body)
-	}
-	if tc0["id"] != "call_1" {
-		t.Fatalf("tool_calls[0].id = %v, want call_1", tc0["id"])
-	}
-	// finish_reason 必须是 tool_calls。
-	if choice0["finish_reason"] != "tool_calls" {
-		t.Fatalf("finish_reason = %v, want tool_calls", choice0["finish_reason"])
-	}
-	// usage 保真。
-	usage, _ := chatResp["usage"].(map[string]any)
-	if usage == nil {
-		t.Fatalf("client response missing usage\n%s", body)
-	}
-	if usage["prompt_tokens"] != float64(5) {
-		t.Fatalf("usage prompt_tokens = %v, want 5", usage["prompt_tokens"])
-	}
-	if usage["completion_tokens"] != float64(8) {
-		t.Fatalf("usage completion_tokens = %v, want 8", usage["completion_tokens"])
-	}
-	if usage["total_tokens"] != float64(13) {
-		t.Fatalf("usage total_tokens = %v, want 13", usage["total_tokens"])
-	}
-}
-
-// ---------------------------------------------------------------------------
 // 4. 旧配置迁移测试
 // ---------------------------------------------------------------------------
 
@@ -844,8 +716,8 @@ func TestLegacy_ProxyRouteConfigWithoutUpstreamProtocolDefaultsPerAgent(t *testi
 //
 // 注意：buildProxyRouteFromConfig 的第一个参数既是路由 map 的 key，也
 // 被 validateProxyAgentProtocol 当作 agent 名校验，所以路由 key 必须
-// 是受支持的 agent 名 (codex/claude/opencode)。本测试分别用两个独立
-// config 各装一个 "codex" 路由来对比。
+// 是受支持的 agent 名 (codex/claude)。本测试分别用两个独立 config 各装
+// 一个 "codex" 路由来对比。
 func TestLegacy_OldCodexPresetBehaviorEquivalent(t *testing.T) {
 	// resolveSwitchPreset 要求 provider 在 providerPresets 或 cfg.Providers
 	// 里；zhipu-cn 是内置 preset，所以无需 set-key。

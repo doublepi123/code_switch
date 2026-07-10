@@ -57,6 +57,19 @@ func agentConfig(cfg *AppConfig, agent AgentName) AgentConfig {
 	return agentCfg
 }
 
+func storedProviderForAgent(cfg *AppConfig, agent AgentName, provider string) (StoredProvider, bool) {
+	if agent == agentCodex {
+		stored := codexProviderConfig(cfg, provider)
+		return stored, strings.TrimSpace(stored.BaseURL) != "" || strings.TrimSpace(stored.APIKey) != ""
+	}
+	if agent == agentOpencode {
+		stored := opencodeProviderConfig(cfg, provider)
+		return stored, strings.TrimSpace(stored.BaseURL) != "" || strings.TrimSpace(stored.APIKey) != ""
+	}
+	stored, ok := cfg.Providers[provider]
+	return stored, ok
+}
+
 func setAgentProviderConfig(cfg *AppConfig, agent AgentName, provider string, stored StoredProvider) {
 	ensureAppConfigMaps(cfg)
 	agentCfg := agentConfig(cfg, agent)
@@ -96,7 +109,7 @@ func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig
 		provider = canonicalProviderName(provider)
 		preset, err := presetForAgentDirectProtocol(agent, provider)
 		if err != nil {
-			preset, err = resolveProviderPreset(provider, cfg)
+			preset, err = resolveProviderPreset(provider, cfg, agent)
 			if err != nil {
 				return ProviderPreset{}, err
 			}
@@ -110,14 +123,14 @@ func resolveAgentProviderPreset(agent AgentName, provider string, cfg *AppConfig
 		preset.ForceModelTiers = true
 		return preset, nil
 	case agentOpencode:
-		preset, err := resolveProviderPreset(provider, cfg)
+		preset, err := resolveProviderPreset(provider, cfg, agent)
 		if err != nil {
 			return ProviderPreset{}, err
 		}
 		applyStoredEndpointOverride(&preset, opencodeProviderConfig(cfg, provider))
 		return preset, nil
 	default:
-		return resolveProviderPreset(provider, cfg)
+		return resolveProviderPreset(provider, cfg, agent)
 	}
 }
 
@@ -127,7 +140,7 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 		provider = canonicalProviderName(provider)
 		preset, err := presetForAgentDirectProtocol(agent, provider)
 		if err != nil {
-			preset, err = resolveSwitchPreset(provider, cfg, modelOverride)
+			preset, err = resolveSwitchPreset(provider, cfg, modelOverride, agent)
 			if err != nil {
 				return ProviderPreset{}, err
 			}
@@ -143,14 +156,14 @@ func resolveAgentSwitchPreset(agent AgentName, provider string, cfg *AppConfig, 
 		preset.ForceModelTiers = true
 		return preset, nil
 	case agentOpencode:
-		preset, err := resolveSwitchPreset(provider, cfg, modelOverride)
+		preset, err := resolveSwitchPreset(provider, cfg, modelOverride, agent)
 		if err != nil {
 			return ProviderPreset{}, err
 		}
 		applyStoredEndpointOverride(&preset, opencodeProviderConfig(cfg, provider))
 		return preset, nil
 	default:
-		return resolveSwitchPreset(provider, cfg, modelOverride)
+		return resolveSwitchPreset(provider, cfg, modelOverride, agent)
 	}
 }
 

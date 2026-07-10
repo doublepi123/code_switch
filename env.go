@@ -33,7 +33,7 @@ func cmdEnv(args []string, out io.Writer) error {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return fmt.Errorf("usage: code-switch env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--shell bash|fish|pwsh]")
+		return fmt.Errorf("usage: code-switch env <provider> [--agent claude|codex|opencode] [--api-key sk-xxx] [--shell bash|sh|zsh|fish|pwsh]")
 	}
 	shellName := strings.ToLower(strings.TrimSpace(*shell))
 	if !supportedEnvShells[shellName] {

@@ -813,6 +813,7 @@ func TestE2E_ProxyServeOpenAIChatUpstreamForwarding(t *testing.T) {
 				Model:   "chat-model",
 				APIKey:  "chat-key",
 				AuthEnv: "ANTHROPIC_AUTH_TOKEN",
+				Protocol: protocolOpenAIChat,
 			},
 		},
 	}

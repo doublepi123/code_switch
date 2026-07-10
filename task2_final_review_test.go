@@ -87,8 +87,8 @@ func TestProxyConfigureClaudeOmitsProtocolWritesValidRoute(t *testing.T) {
 	if route.UpstreamProtocol == "" {
 		t.Fatalf("UpstreamProtocol must not be empty when --protocol omitted")
 	}
-	if ProviderProtocol(route.UpstreamProtocol) != protocolOpenAIResponses {
-		t.Fatalf("UpstreamProtocol = %q, want %q", route.UpstreamProtocol, protocolOpenAIResponses)
+	if ProviderProtocol(route.UpstreamProtocol) != protocolAnthropicMessages {
+		t.Fatalf("UpstreamProtocol = %q, want %q (zhipu-cn only exposes anthropic-messages)", route.UpstreamProtocol, protocolAnthropicMessages)
 	}
 	// And preview must succeed (no stale-route error) since the persisted
 	// route is now valid by construction.
@@ -102,14 +102,14 @@ func TestProxyConfigureExplicitProtocolStillOverridesDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
-	if err := runWithIO([]string{"set-key", "zhipu-cn", "sk-test"}, nil, &out); err != nil {
+	if err := runWithIO([]string{"set-key", "deepseek", "sk-test"}, nil, &out); err != nil {
 		t.Fatalf("set-key: %v", err)
 	}
 	out.Reset()
-	// codex default is anthropic-messages; explicitly request openai-chat.
+	// codex default is anthropic-messages; explicitly request openai-chat on deepseek.
 	if err := runWithIO([]string{
 		"proxy", "configure", "codex",
-		"--provider", "zhipu-cn",
+		"--provider", "deepseek",
 		"--protocol", string(protocolOpenAIChat),
 	}, nil, &out); err != nil {
 		t.Fatalf("configure: %v", err)

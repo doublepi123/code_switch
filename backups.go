@@ -85,14 +85,20 @@ func scanBackups(agent, dir string) []backupEntry {
 }
 
 func isBackupFile(name string) bool {
-	return strings.Contains(name, ".bak-")
+	const marker = ".bak-"
+	i := strings.LastIndex(name, marker)
+	if i <= 0 {
+		return false
+	}
+	suffix := name[i+len(marker):]
+	return suffix != "" && !strings.ContainsAny(suffix, ".\\/")
 }
 
 func backupBase(name string) string {
 	if i := strings.LastIndex(name, ".bak-"); i >= 0 {
 		return name[:i]
 	}
-	return strings.TrimSuffix(name, ".bak")
+	return name
 }
 
 func listBackups(args []string, out io.Writer) error {
@@ -165,15 +171,29 @@ func pruneBackups(args []string, out io.Writer) error {
 	if *dryRun {
 		verb = "would delete"
 	}
+	var attempted, removed int
 	for _, e := range deletable {
 		fmt.Fprintf(out, "[%s] %s %s (%s)\n", e.Agent, verb, filepath.Base(e.Path), humanSize(e.Size))
-		if !*dryRun {
-			if err := os.Remove(e.Path); err != nil {
+		if *dryRun {
+			attempted++
+			continue
+		}
+		if err := os.Remove(e.Path); err != nil {
+			// A concurrent prune already removed the file is NOT an error;
+			// anything else (permissions, vanished dir, etc.) is reported.
+			if !os.IsNotExist(err) {
 				fmt.Fprintf(out, "  warning: failed to remove %s: %v\n", e.Path, err)
+				continue
 			}
 		}
+		removed++
+		attempted++
 	}
-	fmt.Fprintf(out, "\n%d backup(s) %s\n", len(deletable), verb)
+	if *dryRun {
+		fmt.Fprintf(out, "\n%d backup(s) %s\n", attempted, verb)
+	} else {
+		fmt.Fprintf(out, "\n%d backup(s) %s (failed: %d)\n", removed, verb, attempted-removed)
+	}
 	return nil
 }
 

@@ -250,12 +250,21 @@ func writeProxyRouteConfig(cfg *AppConfig, plan ConnectionPlan, model, token str
 		}
 		token = generated
 	}
+	// Preserve the existing route's ModelMappings so a switch doesn't
+	// silently drop per-route model rewrites the operator configured via
+	// `cs model-map set --agent <agent>`. Only when the existing route
+	// had no mappings do we fall back to the provider-level table.
+	mappings := existing.ModelMappings
+	if len(mappings) == 0 && cfg.ModelMappings != nil {
+		mappings = cfg.ModelMappings[plan.Provider]
+	}
 	cfg.Proxy.Routes[string(plan.Agent)] = ProxyRouteConfig{
 		Agent:            string(plan.Agent),
 		Provider:         plan.Provider,
 		Model:            strings.TrimSpace(model),
 		UpstreamProtocol: string(plan.UpstreamProtocol),
 		Token:            token,
+		ModelMappings:    mappings,
 	}
 	return nil
 }

@@ -462,7 +462,6 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 	const maxDownloadSize = 500 * 1024 * 1024
 	// Use limit+1 so a download of exactly maxDownloadSize bytes is accepted:
 	// LimitReader stops at the limit and io.Copy returns nil, so checking for
@@ -470,10 +469,15 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 	// that exceeds the limit indicates an oversized download.
 	written, err := io.Copy(file, io.LimitReader(resp.Body, maxDownloadSize+1))
 	if err != nil {
+		_ = file.Close()
 		return err
 	}
 	if written > maxDownloadSize {
+		_ = file.Close()
 		return fmt.Errorf("download exceeded maximum size of %d bytes; file may be corrupted", maxDownloadSize)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close downloaded file: %w", err)
 	}
 	return nil
 }
@@ -603,14 +607,34 @@ func moveFile(src, target string) error {
 	if err == nil {
 		return nil
 	}
-	// Only cross-device moves (EXDEV) require a copy+delete fallback; os.Rename
+	// Only cross-device moves (EXDEV) require a copy+rename fallback; os.Rename
 	// is otherwise atomic and any other error (permission denied, EINVAL, etc.)
 	// is a real failure that must NOT silently degrade into a non-atomic copy.
 	if !errors.Is(err, syscall.EXDEV) {
 		return fmt.Errorf("move %s to %s: rename: %w", src, target, err)
 	}
-	if copyErr := copyFile(src, target); copyErr != nil {
+	// Copy to a temp file on the SAME DEVICE as target, then rename atomically.
+	// Writing directly to target (the previous behaviour) would leave the
+	// running executable in a partially-written, broken state if the copy
+	// failed partway through; copying via a same-device temp ensures the old
+	// target stays intact and runnable until the new binary is ready.
+	tmp, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".new-*")
+	if err != nil {
+		return fmt.Errorf("move %s to %s: rename: %v; create temp: %w", src, target, err, err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+	if copyErr := copyFile(src, tmpName); copyErr != nil {
+		tmp.Close()
 		return fmt.Errorf("move %s to %s: rename: %v; copy: %w", src, target, err, copyErr)
+	}
+	if closeErr := tmp.Close(); closeErr != nil {
+		return fmt.Errorf("move %s to %s: rename: %v; close temp: %w", src, target, err, closeErr)
+	}
+	if renameErr := os.Rename(tmpName, target); renameErr != nil {
+		return fmt.Errorf("move %s to %s: rename: %v; final rename: %w", src, target, err, renameErr)
 	}
 	if err := os.Remove(src); err != nil {
 		fmt.Fprintf(os.Stderr, "code-switch: warning: could not remove temp file %s: %v\n", src, err)

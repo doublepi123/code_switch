@@ -240,9 +240,9 @@ func TestBuildProxyRouteFromConfigEmptyClaudeProtocolUsesAgentDefault(t *testing
 	if err != nil {
 		t.Fatalf("buildProxyRouteFromConfig(claude, empty protocol): %v", err)
 	}
-	if route.UpstreamProtocol != protocolOpenAIResponses {
-		t.Fatalf("claude empty protocol resolved to %q, want %q (agent-specific default via defaultProxyProtocolForAgent)",
-			route.UpstreamProtocol, protocolOpenAIResponses)
+	if route.UpstreamProtocol != protocolAnthropicMessages {
+		t.Fatalf("claude empty protocol resolved to %q, want %q (zhipu-cn only exposes anthropic-messages, so the route falls back)",
+			route.UpstreamProtocol, protocolAnthropicMessages)
 	}
 }
 

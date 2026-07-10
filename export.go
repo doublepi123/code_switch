@@ -176,5 +176,14 @@ func redactConfigKeys(cfg *AppConfig) *AppConfig {
 		}
 		clone.Agents[agentName] = AgentConfig{Providers: providers}
 	}
+	if cfg.Proxy != nil {
+		proxyCopy := *cfg.Proxy
+		proxyCopy.Routes = map[string]ProxyRouteConfig{}
+		for k, v := range cfg.Proxy.Routes {
+			v.Token = ""
+			proxyCopy.Routes[k] = v
+		}
+		clone.Proxy = &proxyCopy
+	}
 	return &clone
 }

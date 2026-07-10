@@ -262,10 +262,10 @@ func TestProxyConfigureAcceptsCodexSameProtocolPassthrough(t *testing.T) {
 	err := runWithIO([]string{
 		"proxy", "configure", "codex",
 		"--provider", "zhipu-cn",
-		"--protocol", string(protocolOpenAIResponses),
+		"--protocol", string(protocolAnthropicMessages),
 	}, nil, &out)
 	if err != nil {
-		t.Fatalf("proxy configure codex + openai-responses: %v\nout=%s", err, out.String())
+		t.Fatalf("proxy configure codex + anthropic-messages: %v\nout=%s", err, out.String())
 	}
 }
 

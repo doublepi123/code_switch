@@ -8,7 +8,7 @@ import (
 var noColor = checkNoColor()
 
 func checkNoColor() bool {
-	if os.Getenv("NO_COLOR") != "" {
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return true
 	}
 	if os.Getenv("TERM") == "dumb" {

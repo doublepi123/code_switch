@@ -302,8 +302,12 @@ func truncateForTable(s string) string {
 	// Collapse whitespace/newlines for a single-line table cell.
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > max {
-		return s[:max-1] + "…"
+	// Truncate on rune boundaries so multi-byte UTF-8 characters are not
+	// split. Counting runes (not bytes) keeps the resulting width stable
+	// across ASCII and CJK content.
+	runes := []rune(s)
+	if len(runes) > max {
+		return string(runes[:max-1]) + "…"
 	}
 	return s
 }

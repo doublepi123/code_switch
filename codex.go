@@ -235,8 +235,8 @@ func switchCodexProviderWithProtocol(provider string, cfg *AppConfig, apiKey, mo
 		return err
 	}
 
-	updated := applyCodexPresetTOMLWithProtocol(existing, preset, provider, protocol)
-	if err := writeTextAtomic(configPath, updated, 0o644); err != nil {
+	updated := applyCodexPresetTOMLWithProtocol(existing, preset, provider, protocol, cfg)
+	if err := writeTextAtomic(configPath, updated, 0o600); err != nil {
 		return err
 	}
 
@@ -255,13 +255,13 @@ func switchCodexProviderWithProtocol(provider string, cfg *AppConfig, apiKey, mo
 	return nil
 }
 
-func applyCodexPresetTOML(existing string, preset ProviderPreset, provider string) string {
-	return applyCodexPresetTOMLWithProtocol(existing, preset, provider, protocolOpenAIResponses)
+func applyCodexPresetTOML(existing string, preset ProviderPreset, provider string, cfg *AppConfig) string {
+	return applyCodexPresetTOMLWithProtocol(existing, preset, provider, protocolOpenAIResponses, cfg)
 }
 
-func applyCodexPresetTOMLWithProtocol(existing string, preset ProviderPreset, provider string, protocol ProviderProtocol) string {
+func applyCodexPresetTOMLWithProtocol(existing string, preset ProviderPreset, provider string, protocol ProviderProtocol, cfg *AppConfig) string {
 	provider = canonicalProviderName(provider)
-	cleaned := removeCodexManagedTOML(existing, true, true, nil)
+	cleaned := removeCodexManagedTOML(existing, true, true, cfg)
 	topLevel, sections := splitBeforeFirstTOMLSection(cleaned)
 	var b strings.Builder
 
