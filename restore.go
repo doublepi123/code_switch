@@ -27,25 +27,51 @@ func cmdRestore(args []string, out io.Writer) error {
 	}
 	switch agent {
 	case agentCodex:
-		cfg, _, unlock, err := loadAppConfigLocked()
+		cfg, path, unlock, err := loadAppConfigLocked()
 		if err != nil {
 			return err
 		}
 		defer unlock()
-		return restoreCodexConfig(*codexDir, cfg, out, *dryRun)
+		if err := restoreCodexConfig(*codexDir, cfg, out, *dryRun); err != nil {
+			return err
+		}
+		if !*dryRun {
+			cfg.ManagedMCPNames = managedMCPServerNames(cfg)
+			return writeJSONAtomic(path, cfg)
+		}
+		return nil
 	case agentOpencode:
-		cfg, _, unlock, err := loadAppConfigLocked()
+		cfg, path, unlock, err := loadAppConfigLocked()
 		if err != nil {
 			return err
 		}
 		defer unlock()
-		return restoreOpencodeConfig(*opencodeDir, cfg, out, *dryRun)
+		if err := restoreOpencodeConfig(*opencodeDir, cfg, out, *dryRun); err != nil {
+			return err
+		}
+		if !*dryRun {
+			cfg.ManagedMCPNames = managedMCPServerNames(cfg)
+			return writeJSONAtomic(path, cfg)
+		}
+		return nil
 	default:
-		return restoreClaudeConfig(*claudeDir, out, *dryRun)
+		cfg, path, unlock, err := loadAppConfigLocked()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		if err := restoreClaudeConfig(*claudeDir, cfg, out, *dryRun); err != nil {
+			return err
+		}
+		if !*dryRun {
+			cfg.ManagedMCPNames = managedMCPServerNames(cfg)
+			return writeJSONAtomic(path, cfg)
+		}
+		return nil
 	}
 }
 
-func restoreClaudeConfig(claudeDir string, out io.Writer, dryRun bool) error {
+func restoreClaudeConfig(claudeDir string, cfg *AppConfig, out io.Writer, dryRun bool) error {
 	settingsPath := claudeSettingsPath(claudeDir)
 	if dryRun {
 		fmt.Fprintf(out, "[dry-run] would restore Claude official config\n")
@@ -73,6 +99,8 @@ func restoreClaudeConfig(claudeDir string, out io.Writer, dryRun bool) error {
 			delete(root, "env")
 		}
 	}
+	removeManagedMCPFromJSON(root, cfg)
+	mergeMCPConfig(root, generateClaudeMCPConfig(cfg))
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err
 	}

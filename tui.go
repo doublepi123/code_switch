@@ -78,7 +78,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		case agentOpencode:
 			return restoreOpencodeConfig(*opencodeDir, cfg, out, *dryRun)
 		default:
-			return restoreClaudeConfig(*claudeDir, out, *dryRun)
+			return restoreClaudeConfig(*claudeDir, cfg, out, *dryRun)
 		}
 	}
 	if strings.TrimSpace(selection.BaseURL) != "" || selection.Protocol != "" {
@@ -294,13 +294,13 @@ func (ts *tuiState) loadModelCatalog(provider string, force bool) ProviderModelC
 	if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" && !catalogContainsModel(catalog, customModel) {
 		catalog.Models = append([]ProviderModelInfo{{ID: customModel, Description: "custom model"}}, catalog.Models...)
 	}
-		ts.modelCatalogs[provider] = catalog
-		ts.modelFetchStatus[provider] = modelCatalogStatusText(catalog)
-		if force && missingAPIKeyPreventedRemoteCatalog(catalog) {
-			ts.modelFetchStatus[provider] += "  - API key required to fetch remote model list"
-		}
-		return catalog
+	ts.modelCatalogs[provider] = catalog
+	ts.modelFetchStatus[provider] = modelCatalogStatusText(catalog)
+	if force && missingAPIKeyPreventedRemoteCatalog(catalog) {
+		ts.modelFetchStatus[provider] += "  - API key required to fetch remote model list"
 	}
+	return catalog
+}
 
 func missingAPIKeyPreventedRemoteCatalog(catalog ProviderModelCatalog) bool {
 	return catalog.Provider == "openrouter" &&
@@ -423,7 +423,7 @@ func providerProtocolOptions() []ProviderProtocol {
 
 func (ts *tuiState) effectiveWorkspaceEndpoint(provider string, preset ProviderPreset) (string, ProviderProtocol, bool, bool) {
 	protocol := protocolAnthropicMessages
-		if plan, err := resolveConnection(ts.agent, ts.cfg, provider, preset, "auto"); err == nil && plan.UpstreamProtocol != "" {
+	if plan, err := resolveConnection(ts.agent, ts.cfg, provider, preset, "auto"); err == nil && plan.UpstreamProtocol != "" {
 		protocol = plan.UpstreamProtocol
 	}
 	protocolCustom := false

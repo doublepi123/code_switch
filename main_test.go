@@ -10781,7 +10781,7 @@ func TestRestoreClaudeConfig(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 	output := &bytes.Buffer{}
-	if err := restoreClaudeConfig(claudeDir, output, false); err != nil {
+	if err := restoreClaudeConfig(claudeDir, &AppConfig{}, output, false); err != nil {
 		t.Fatalf("restoreClaudeConfig: %v", err)
 	}
 }
