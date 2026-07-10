@@ -142,24 +142,6 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 
 	shouldPersistTierOverrides := pa.Haiku != "" || pa.Sonnet != "" || pa.Opus != "" || pa.Subagent != ""
 
-	// Apply Claude CLI tier overrides to cfg in memory; they are persisted after a successful switch.
-	if shouldPersistTierOverrides && agent == agentClaude {
-		stored := cfg.Providers[pa.Provider]
-		if pa.Haiku != "" {
-			stored.Haiku = pa.Haiku
-		}
-		if pa.Sonnet != "" {
-			stored.Sonnet = pa.Sonnet
-		}
-		if pa.Opus != "" {
-			stored.Opus = pa.Opus
-		}
-		if pa.Subagent != "" {
-			stored.Subagent = pa.Subagent
-		}
-		cfg.Providers[pa.Provider] = stored
-	}
-
 	// Release the app-config lock BEFORE switching. switchProvider/switchCodexProvider/
 	// switchOpencode each acquire their own per-target file lock; holding the app-config lock
 	// across those calls would nest locks. This mirrors cmdConfigure in tui.go, which unlocks
@@ -183,7 +165,16 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	plan, err := resolveConnection(agent, pa.Provider, presetForPlan, *viaFlag)
+	resolvedTiers := resolveModelTiers(presetForPlan, cfg.Providers[pa.Provider], ModelTiers{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent})
+	if shouldPersistTierOverrides && agent == agentClaude {
+		stored := cfg.Providers[pa.Provider]
+		stored.Haiku = resolvedTiers.Haiku
+		stored.Sonnet = resolvedTiers.Sonnet
+		stored.Opus = resolvedTiers.Opus
+		stored.Subagent = resolvedTiers.Subagent
+		cfg.Providers[pa.Provider] = stored
+	}
+	plan, err := resolveConnection(agent, cfg, pa.Provider, presetForPlan, *viaFlag)
 	if err != nil {
 		return err
 	}
@@ -222,7 +213,7 @@ func cmdSwitchWithOutput(args []string, out io.Writer) error {
 		}
 		return nil
 	}
-	if err := switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: pa.Haiku, Sonnet: pa.Sonnet, Opus: pa.Opus, Subagent: pa.Subagent}); err != nil {
+	if err := switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, out, *dryRun, withTierOverrides{Haiku: resolvedTiers.Haiku, Sonnet: resolvedTiers.Sonnet, Opus: resolvedTiers.Opus, Subagent: resolvedTiers.Subagent}); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "%s\n", formatLabel("mode", string(connectionModeDirect)))
