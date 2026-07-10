@@ -339,7 +339,7 @@ func modelCatalogStatusText(catalog ProviderModelCatalog) string {
 		status += fmt.Sprintf(" (%d models)", len(catalog.Models))
 	}
 	if strings.TrimSpace(catalog.Err) != "" {
-		status += " - 远端获取失败: " + catalog.Err
+		status += " - remote fetch failed: " + catalog.Err
 	}
 	return status
 }

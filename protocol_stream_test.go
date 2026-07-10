@@ -327,6 +327,7 @@ func TestOpenAIChatStreamUsageOnlyChunkEncodesUsageBeforeStop(t *testing.T) {
 }
 
 func TestProxyStreamingRequestContextCancelsUpstream(t *testing.T) {
+	upstreamReady := make(chan struct{})
 	cancelled := make(chan struct{})
 	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -334,6 +335,7 @@ func TestProxyStreamingRequestContextCancelsUpstream(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
+		close(upstreamReady)
 		<-r.Context().Done()
 		close(cancelled)
 	}))
@@ -343,7 +345,7 @@ func TestProxyStreamingRequestContextCancelsUpstream(t *testing.T) {
 	ctx, cancel := contextWithCancelForTest()
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"ignored","stream":true,"input":"Say hi"}`)).WithContext(ctx)
 	go func() {
-		time.Sleep(25 * time.Millisecond)
+		<-upstreamReady
 		cancel()
 	}()
 	handler.ServeHTTP(httptest.NewRecorder(), req)

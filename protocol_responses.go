@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"bytes"
 )
 
 // responsesInputTextType is the content-block type used by OpenAI's
@@ -217,7 +218,7 @@ func responsesRequestToIR(body []byte) (IRRequest, error) {
 	// non-string value is rejected because the MVP only supports the
 	// documented string form.
 	var instructions string
-	if len(raw.Instructions) > 0 {
+	if len(raw.Instructions) > 0 && !bytes.Equal(raw.Instructions, []byte("null")) {
 		if err := json.Unmarshal(raw.Instructions, &instructions); err != nil {
 			return IRRequest{}, fmt.Errorf("responses request: instructions must be a string")
 		}
@@ -302,34 +303,57 @@ func irToResponsesRequest(req IRRequest) ([]byte, error) {
 	var instructions []string
 	input := make([]any, 0, len(req.Messages))
 	for _, msg := range req.Messages {
-		var b strings.Builder
-		for _, part := range msg.Parts {
-			switch part.Type {
-			case irPartText:
-				b.WriteString(part.Text)
-			case irPartToolUse:
-				input = append(input, map[string]any{"type": "function_call", "call_id": part.ToolCall.ID, "name": part.ToolCall.Name, "arguments": string(part.ToolCall.Input)})
-			case irPartToolResult:
-				input = append(input, map[string]any{"type": "function_call_output", "call_id": part.ToolResult.ToolUseID, "output": part.ToolResult.Content})
-			}
-		}
 		if msg.Role == "system" {
+			var b strings.Builder
+			for _, part := range msg.Parts {
+				if part.Type == irPartText {
+					b.WriteString(part.Text)
+				}
+			}
 			instructions = append(instructions, b.String())
 			continue
 		}
-		if b.String() == "" {
-			continue
+		var pendingText strings.Builder
+		flushText := func() error {
+			if pendingText.Len() == 0 {
+				return nil
+			}
+			contentType := responsesInputTextType
+			if msg.Role == "assistant" {
+				contentType = responsesOutputTextType
+			}
+			content, err := json.Marshal([]responsesRawContentPart{{Type: contentType, Text: pendingText.String()}})
+			if err != nil {
+				return fmt.Errorf("responses request: marshal content: %w", err)
+			}
+			role := msg.Role
+			input = append(input, responsesRawMessage{RolePtr: &role, Content: content})
+			pendingText.Reset()
+			return nil
 		}
-		contentType := responsesInputTextType
-		if msg.Role == "assistant" {
-			contentType = responsesOutputTextType
+		for _, part := range msg.Parts {
+			switch part.Type {
+			case irPartText:
+				pendingText.WriteString(part.Text)
+			case irPartToolUse:
+				if err := flushText(); err != nil {
+					return nil, err
+				}
+				args := string(part.ToolCall.Input)
+				if args == "" {
+					args = "{}"
+				}
+				input = append(input, map[string]any{"type": "function_call", "call_id": part.ToolCall.ID, "name": part.ToolCall.Name, "arguments": args})
+			case irPartToolResult:
+				if err := flushText(); err != nil {
+					return nil, err
+				}
+				input = append(input, map[string]any{"type": "function_call_output", "call_id": part.ToolResult.ToolUseID, "output": part.ToolResult.Content})
+			}
 		}
-		content, err := json.Marshal([]responsesRawContentPart{{Type: contentType, Text: b.String()}})
-		if err != nil {
-			return nil, fmt.Errorf("responses request: marshal content: %w", err)
+		if err := flushText(); err != nil {
+			return nil, err
 		}
-		role := msg.Role
-		input = append(input, responsesRawMessage{RolePtr: &role, Content: content})
 	}
 	out := responsesOutboundRequest{Model: req.Model, Instructions: strings.Join(instructions, "\n"), Input: input, Tools: irToolsToResponses(req.Tools), MaxOutputTokens: req.MaxTokens, Stream: req.Stream}
 	return json.Marshal(out)
@@ -607,6 +631,10 @@ func responsesStreamToIR(body []byte) (IRResponse, error) {
 	frames := strings.Split(normalised, "\n\n")
 	var text strings.Builder
 	var completed *IRResponse
+	var calls []IRToolCall
+	callIDByIndex := map[int]string{}
+	nameByIndex := map[int]string{}
+	argsByIndex := map[int]string{}
 	for _, frame := range frames {
 		frame = strings.TrimSpace(frame)
 		if frame == "" {
@@ -626,8 +654,15 @@ func responsesStreamToIR(body []byte) (IRResponse, error) {
 			continue
 		}
 		var event struct {
-			Type     string          `json:"type"`
-			Delta    string          `json:"delta"`
+			Type        string          `json:"type"`
+			Delta       string          `json:"delta"`
+			OutputIndex int             `json:"output_index"`
+			Item        struct {
+				Type      string `json:"type"`
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"item"`
 			Response json.RawMessage `json:"response"`
 		}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -636,6 +671,34 @@ func responsesStreamToIR(body []byte) (IRResponse, error) {
 		switch event.Type {
 		case "response.output_text.delta":
 			text.WriteString(event.Delta)
+		case "response.output_item.added":
+			if event.Item.Type == "function_call" {
+				callIDByIndex[event.OutputIndex] = event.Item.CallID
+				nameByIndex[event.OutputIndex] = event.Item.Name
+				if event.Item.Arguments != "" {
+					argsByIndex[event.OutputIndex] = event.Item.Arguments
+				}
+			}
+		case "response.function_call_arguments.delta":
+			if _, ok := callIDByIndex[event.OutputIndex]; ok {
+				argsByIndex[event.OutputIndex] += event.Delta
+			}
+		case "response.output_item.done":
+			if event.Item.Type == "function_call" {
+				id := event.Item.CallID
+				if id == "" {
+					id = callIDByIndex[event.OutputIndex]
+				}
+				name := event.Item.Name
+				if name == "" {
+					name = nameByIndex[event.OutputIndex]
+				}
+				args := event.Item.Arguments
+				if args == "" {
+					args = argsByIndex[event.OutputIndex]
+				}
+				calls = append(calls, IRToolCall{ID: id, Name: name, Input: json.RawMessage(args)})
+			}
 		case "response.completed":
 			if len(event.Response) > 0 {
 				resp, err := responsesResponseToIR(event.Response)
@@ -650,12 +713,22 @@ func responsesStreamToIR(body []byte) (IRResponse, error) {
 		if completed.Text == "" {
 			completed.Text = text.String()
 		}
+		if len(completed.ToolCalls) == 0 {
+			completed.ToolCalls = calls
+		}
+		if len(completed.ToolCalls) > 0 {
+			completed.StopReason = "tool_use"
+		}
 		return *completed, nil
 	}
-	if text.Len() == 0 {
+	if text.Len() == 0 && len(calls) == 0 {
 		return IRResponse{}, fmt.Errorf("responses stream: no completed response or text delta")
 	}
-	return IRResponse{Text: text.String(), StopReason: "stop"}, nil
+	resp := IRResponse{Text: text.String(), ToolCalls: calls, StopReason: "stop"}
+	if len(calls) > 0 {
+		resp.StopReason = "tool_use"
+	}
+	return resp, nil
 }
 
 // responsesResponseID normalises the top-level response identifier so it

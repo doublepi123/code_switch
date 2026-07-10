@@ -67,7 +67,11 @@ func openAIChatRequestToIR(body []byte) (IRRequest, error) {
 			parts = append(parts, IRPart{Type: irPartText, Text: msg.Content})
 		}
 		for _, tc := range msg.ToolCalls {
-			parts = append(parts, IRPart{Type: irPartToolUse, ToolCall: &IRToolCall{ID: tc.ID, Name: tc.Function.Name, Input: json.RawMessage(tc.Function.Arguments)}})
+			args := tc.Function.Arguments
+			if args == "" {
+				args = "{}"
+			}
+			parts = append(parts, IRPart{Type: irPartToolUse, ToolCall: &IRToolCall{ID: tc.ID, Name: tc.Function.Name, Input: json.RawMessage(args)}})
 		}
 		messages = append(messages, IRMessage{Role: msg.Role, Parts: parts})
 	}
@@ -90,29 +94,36 @@ func irToOpenAIChatRequest(req IRRequest) ([]byte, error) {
 	}
 	messages := make([]openAIChatMessage, 0, len(req.Messages))
 	for _, msg := range req.Messages {
-		var b strings.Builder
-		var toolCalls []openAIChatToolCall
-		var toolResult *IRToolResult
+		var pendingText strings.Builder
+		var pendingToolCalls []openAIChatToolCall
+		flushPending := func() {
+			if pendingText.Len() > 0 || len(pendingToolCalls) > 0 {
+				messages = append(messages, openAIChatMessage{Role: msg.Role, Content: pendingText.String(), ToolCalls: pendingToolCalls})
+				pendingText.Reset()
+				pendingToolCalls = nil
+			}
+		}
 		for _, part := range msg.Parts {
 			switch part.Type {
 			case irPartText:
-				b.WriteString(part.Text)
+				pendingText.WriteString(part.Text)
 			case irPartToolUse:
+				args := string(part.ToolCall.Input)
+				if args == "" {
+					args = "{}"
+				}
 				var tc openAIChatToolCall
 				tc.ID = part.ToolCall.ID
 				tc.Type = "function"
 				tc.Function.Name = part.ToolCall.Name
-				tc.Function.Arguments = string(part.ToolCall.Input)
-				toolCalls = append(toolCalls, tc)
+				tc.Function.Arguments = args
+				pendingToolCalls = append(pendingToolCalls, tc)
 			case irPartToolResult:
-				toolResult = part.ToolResult
+				flushPending()
+				messages = append(messages, openAIChatMessage{Role: "tool", ToolCallID: part.ToolResult.ToolUseID, Content: part.ToolResult.Content})
 			}
 		}
-		if toolResult != nil {
-			messages = append(messages, openAIChatMessage{Role: "tool", ToolCallID: toolResult.ToolUseID, Content: toolResult.Content})
-			continue
-		}
-		messages = append(messages, openAIChatMessage{Role: msg.Role, Content: b.String(), ToolCalls: toolCalls})
+		flushPending()
 	}
 	tools := make([]openAIChatTool, 0, len(req.Tools))
 	for _, tool := range req.Tools {
@@ -175,7 +186,11 @@ func irToOpenAIChatResponse(resp IRResponse) ([]byte, error) {
 		tc.ID = call.ID
 		tc.Type = "function"
 		tc.Function.Name = call.Name
-		tc.Function.Arguments = string(call.Input)
+		args := string(call.Input)
+		if args == "" {
+			args = "{}"
+		}
+		tc.Function.Arguments = args
 		out.Choices[0].Message.ToolCalls = append(out.Choices[0].Message.ToolCalls, tc)
 	}
 	if resp.Usage != nil {

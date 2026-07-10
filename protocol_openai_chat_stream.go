@@ -11,6 +11,7 @@ type openAIChatStreamDecoder struct{}
 func (openAIChatStreamDecoder) DecodeStream(r io.Reader, emit func(StreamEvent) error) error {
 	sr := newSSEReader(r, maxSSEEventBytes)
 	toolIDsByIndex := map[int]string{}
+	pendingArgsByIndex := map[int][]string{}
 	pendingStopReason := ""
 	flushStop := func() error {
 		if pendingStopReason == "" {
@@ -23,6 +24,9 @@ func (openAIChatStreamDecoder) DecodeStream(r io.Reader, emit func(StreamEvent) 
 	for {
 		event, err := sr.ReadEvent()
 		if err == io.EOF {
+			if len(pendingArgsByIndex) > 0 {
+				return fmt.Errorf("openai chat stream: tool arguments received without tool id")
+			}
 			return flushStop()
 		}
 		if err != nil {
@@ -32,6 +36,9 @@ func (openAIChatStreamDecoder) DecodeStream(r io.Reader, emit func(StreamEvent) 
 			continue
 		}
 		if event.Data == "[DONE]" {
+			if len(pendingArgsByIndex) > 0 {
+				return fmt.Errorf("openai chat stream: tool arguments received without tool id")
+			}
 			if err := flushStop(); err != nil {
 				return err
 			}
@@ -95,10 +102,21 @@ func (openAIChatStreamDecoder) DecodeStream(r io.Reader, emit func(StreamEvent) 
 				if err := emit(StreamEvent{Type: streamEventToolStart, ToolID: tc.ID, ToolName: tc.Function.Name}); err != nil {
 					return err
 				}
+				for _, arg := range pendingArgsByIndex[tc.Index] {
+					if err := emit(StreamEvent{Type: streamEventToolDelta, ToolID: tc.ID, Text: arg}); err != nil {
+						return err
+					}
+				}
+				delete(pendingArgsByIndex, tc.Index)
 			}
 			if tc.Function.Arguments != "" {
-				if err := emit(StreamEvent{Type: streamEventToolDelta, ToolID: toolIDsByIndex[tc.Index], Text: tc.Function.Arguments}); err != nil {
-					return err
+				id := toolIDsByIndex[tc.Index]
+				if id == "" {
+					pendingArgsByIndex[tc.Index] = append(pendingArgsByIndex[tc.Index], tc.Function.Arguments)
+				} else {
+					if err := emit(StreamEvent{Type: streamEventToolDelta, ToolID: id, Text: tc.Function.Arguments}); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -109,11 +127,12 @@ func (openAIChatStreamDecoder) DecodeStream(r io.Reader, emit func(StreamEvent) 
 }
 
 type openAIChatStreamEncoder struct {
-	started bool
-	stopped bool
-	id      string
-	model   string
-	usage   *IRUsage
+	started   bool
+	stopped   bool
+	id        string
+	model     string
+	usage     *IRUsage
+	toolIndex int
 }
 
 func (e *openAIChatStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEvent) error {
@@ -139,6 +158,7 @@ func (e *openAIChatStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEve
 				return err
 			}
 		}
+		e.toolIndex = e.nextToolIndex()
 		return writeRawSSE(w, "", mustMarshalJSON(e.toolChunk(event, true)))
 	case streamEventToolDelta:
 		if !e.started {
@@ -171,16 +191,26 @@ func (e *openAIChatStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEve
 	return nil
 }
 
+func (e *openAIChatStreamEncoder) nextToolIndex() int {
+	idx := e.toolIndex
+	e.toolIndex++
+	return idx
+}
+
 func (e *openAIChatStreamEncoder) toolChunk(event StreamEvent, start bool) map[string]any {
 	id := e.id
 	if id == "" {
 		id = "chatcmpl_code_switch"
 	}
-	function := map[string]any{"arguments": event.Text}
+	args := event.Text
+	if args == "" {
+		args = "{}"
+	}
+	function := map[string]any{"arguments": args}
 	if start {
 		function["name"] = event.ToolName
 	}
-	toolCall := map[string]any{"index": 0, "function": function}
+	toolCall := map[string]any{"index": e.toolIndex, "function": function}
 	if start {
 		toolCall["id"] = event.ToolID
 		toolCall["type"] = "function"

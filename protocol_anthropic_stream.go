@@ -108,12 +108,13 @@ type anthropicUsage struct {
 }
 
 type anthropicStreamEncoder struct {
-	started      bool
-	stopped      bool
-	blockOpen    bool
-	currentIndex int
-	nextIndex    int
-	usage        *IRUsage
+	started        bool
+	stopped        bool
+	blockOpen      bool
+	currentBlockType string
+	currentIndex   int
+	nextIndex      int
+	usage          *IRUsage
 }
 
 func (e *anthropicStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEvent) error {
@@ -124,15 +125,14 @@ func (e *anthropicStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEven
 		if id == "" {
 			id = "msg_code_switch"
 		}
-		usage := anthropicUsage{}
-		if event.Usage != nil {
-			usage.InputTokens = event.Usage.InputTokens
-			usage.OutputTokens = event.Usage.OutputTokens
-		}
-		if err := writeRawSSE(w, "message_start", mustMarshalJSON(map[string]any{
+		msg := map[string]any{
 			"type":    "message_start",
-			"message": map[string]any{"id": id, "type": "message", "role": "assistant", "model": event.Model, "content": []any{}, "stop_reason": nil, "usage": usage},
-		})); err != nil {
+			"message": map[string]any{"id": id, "type": "message", "role": "assistant", "model": event.Model, "content": []any{}, "stop_reason": nil},
+		}
+		if event.Usage != nil {
+			msg["message"].(map[string]any)["usage"] = anthropicUsage{InputTokens: event.Usage.InputTokens, OutputTokens: event.Usage.OutputTokens}
+		}
+		if err := writeRawSSE(w, "message_start", mustMarshalJSON(msg)); err != nil {
 			return err
 		}
 		return nil
@@ -142,10 +142,17 @@ func (e *anthropicStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEven
 				return err
 			}
 		}
+		if e.blockOpen && e.currentBlockType != irPartText {
+			e.blockOpen = false
+			if err := writeRawSSE(w, "content_block_stop", mustMarshalJSON(map[string]any{"type": "content_block_stop", "index": e.currentIndex})); err != nil {
+				return err
+			}
+		}
 		if !e.blockOpen {
 			e.currentIndex = e.nextIndex
 			e.nextIndex++
 			e.blockOpen = true
+			e.currentBlockType = irPartText
 			if err := writeRawSSE(w, "content_block_start", mustMarshalJSON(map[string]any{"type": "content_block_start", "index": e.currentIndex, "content_block": map[string]string{"type": irPartText, "text": ""}})); err != nil {
 				return err
 			}
@@ -165,8 +172,12 @@ func (e *anthropicStreamEncoder) EncodeStreamEvent(w io.Writer, event StreamEven
 		e.currentIndex = e.nextIndex
 		e.nextIndex++
 		e.blockOpen = true
+		e.currentBlockType = irPartToolUse
 		return writeRawSSE(w, "content_block_start", mustMarshalJSON(map[string]any{"type": "content_block_start", "index": e.currentIndex, "content_block": map[string]any{"type": irPartToolUse, "id": event.ToolID, "name": event.ToolName, "input": map[string]any{}}}))
 	case streamEventToolDelta:
+		if !e.blockOpen || e.currentBlockType != irPartToolUse {
+			return fmt.Errorf("anthropic stream encoder: tool_delta without open tool block")
+		}
 		return writeRawSSE(w, "content_block_delta", mustMarshalJSON(map[string]any{"type": "content_block_delta", "index": e.currentIndex, "delta": map[string]string{"type": "input_json_delta", "partial_json": event.Text}}))
 	case streamEventToolStop:
 		if !e.blockOpen {

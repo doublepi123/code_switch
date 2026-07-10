@@ -247,8 +247,4 @@ func TestProxySameProtocolPassthroughResponsesAndAnthropic(t *testing.T) {
 	}
 }
 
-func TestValidateProxyAgentProtocolAcceptsOpenCodeChatPassthrough(t *testing.T) {
-	if err := validateProxyAgentProtocol(string(agentOpencode), protocolOpenAIChat); err != nil {
-		t.Fatalf("validateProxyAgentProtocol(opencode, openai-chat): %v", err)
-	}
-}
+

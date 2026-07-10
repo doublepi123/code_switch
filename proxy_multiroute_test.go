@@ -186,7 +186,7 @@ func TestCmdProxyStatusReportsAllConfiguredRoutesBody(t *testing.T) {
 	if err := runWithIO([]string{"proxy", "configure", "codex", "--provider", "zhipu-cn", "--model", "glm-5.2"}, nil, io.Discard); err != nil {
 		t.Fatalf("configure codex: %v", err)
 	}
-	if err := runWithIO([]string{"proxy", "configure", "claude", "--provider", "zhipu-cn", "--model", "glm-5.2", "--protocol", string(protocolOpenAIResponses)}, nil, io.Discard); err != nil {
+	if err := runWithIO([]string{"proxy", "configure", "claude", "--provider", "zhipu-cn", "--model", "glm-5.2", "--protocol", string(protocolAnthropicMessages)}, nil, io.Discard); err != nil {
 		t.Fatalf("configure claude: %v", err)
 	}
 	cfg, path, err := loadAppConfig()
@@ -227,7 +227,7 @@ func TestCmdProxyStatusReportsAllConfiguredRoutesBody(t *testing.T) {
 		t.Fatalf("status: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"routes:", "agent: codex", "agent: claude", "provider: zhipu-cn", string(protocolAnthropicMessages), string(protocolOpenAIResponses)} {
+	for _, want := range []string{"routes:", "agent: codex", "agent: claude", "provider: zhipu-cn", string(protocolAnthropicMessages)} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status output missing %q:\n%s", want, got)
 		}

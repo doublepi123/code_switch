@@ -1338,3 +1338,87 @@ func TestAnthropicResponseToIROmitsUsageWhenAbsent(t *testing.T) {
 		t.Fatalf("usage = %+v, want nil when upstream omitted it", resp.Usage)
 	}
 }
+
+
+// TestIrToOpenAIChatRequestDefaultsEmptyArgumentsToEmptyObject pins the
+// fix that prevents tool-call wire payloads from carrying a bare
+// arguments="" string. OpenAI Chat upstreams expect arguments to be a
+// JSON-encoded object; "" would be rejected by clients parsing the
+// response.
+func TestIrToOpenAIChatRequestDefaultsEmptyArgumentsToEmptyObject(t *testing.T) {
+	req := IRRequest{
+		Model: "m",
+		Messages: []IRMessage{{
+			Role: "assistant",
+			Parts: []IRPart{{
+				Type:     irPartToolUse,
+				ToolCall: &IRToolCall{ID: "call_1", Name: "noop", Input: nil},
+			}},
+		}},
+	}
+	body, err := irToOpenAIChatRequest(req)
+	if err != nil {
+		t.Fatalf("irToOpenAIChatRequest: %v", err)
+	}
+	if !strings.Contains(string(body), `"arguments":"{}"`) {
+		t.Fatalf("empty arguments not defaulted to {}; body=%s", body)
+	}
+}
+
+// TestOpenAIChatRequestToIRDefaultsEmptyArgumentsToEmptyObject mirrors the
+// outbound fix on the inbound side: a client sending arguments="" is
+// normalized to "{}" so downstream encoders can pass it through without
+// producing invalid JSON.
+func TestOpenAIChatRequestToIRDefaultsEmptyArgumentsToEmptyObject(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"noop","arguments":""}}]}]}`)
+	ir, err := openAIChatRequestToIR(body)
+	if err != nil {
+		t.Fatalf("openAIChatRequestToIR: %v", err)
+	}
+	var firstCall *IRToolCall
+	for _, m := range ir.Messages {
+		for _, p := range m.Parts {
+			if p.ToolCall != nil {
+				firstCall = p.ToolCall
+				break
+			}
+		}
+		if firstCall != nil {
+			break
+		}
+	}
+	if firstCall == nil {
+		t.Fatal("expected a tool call in the IR")
+	}
+	if string(firstCall.Input) != "{}" {
+		t.Fatalf("input = %q, want %q", string(firstCall.Input), "{}")
+	}
+}
+
+
+// TestResponsesRequestToIRAcceptsNullInstructions pins the behavior
+// that JSON `null` for the top-level instructions field is treated as
+// absent. Without this, a request with `"instructions": null` would be
+// rejected as "instructions must not be empty" because raw bytes "null"
+// passed the existing presence check and then unmarshalled to "".
+func TestResponsesRequestToIRAcceptsNullInstructions(t *testing.T) {
+	body := []byte(`{"model":"m","input":"hi","instructions":null}`)
+	req, err := responsesRequestToIR(body)
+	if err != nil {
+		t.Fatalf("responsesRequestToIR returned error: %v", err)
+	}
+	// Null instructions should NOT produce a system message: only an
+	// explicit non-empty string (or text config) does. The request has
+	// just the user turn.
+	for _, m := range req.Messages {
+		if m.Role == "system" {
+			t.Fatalf("null instructions should not produce a system message: %+v", m)
+		}
+	}
+	if len(req.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1 (just the user turn)", len(req.Messages))
+	}
+	if req.Messages[0].Role != "user" {
+		t.Fatalf("first message role = %q, want user", req.Messages[0].Role)
+	}
+}

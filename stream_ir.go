@@ -52,8 +52,7 @@ func mergeStreamUsage(existing, next *IRUsage) *IRUsage {
 	}
 	if next.TotalTokens != 0 {
 		merged.TotalTokens = next.TotalTokens
-	}
-	if merged.TotalTokens == 0 && (merged.InputTokens != 0 || merged.OutputTokens != 0) {
+	} else if next.InputTokens != 0 || next.OutputTokens != 0 {
 		merged.TotalTokens = merged.InputTokens + merged.OutputTokens
 	}
 	return &merged

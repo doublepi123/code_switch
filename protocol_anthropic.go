@@ -105,12 +105,14 @@ func anthropicParseSystemField(raw json.RawMessage) ([]IRPart, error) {
 
 // anthropicRequestToIR translates an Anthropic Messages API request body
 // into the provider-agnostic IRRequest. Only text content is supported
-// in the MVP; any tool/image/audio part surfaces as an error. Streaming
-// is rejected. An absent or empty "model" field is NOT rejected here:
-// the proxy's model-resolution layer (route.ModelMappings["default"]
-// then route.Model) supplies the upstream model, so an empty incoming
-// model must be allowed to reach that layer. The model-empty check is
-// enforced by the proxy after resolution.
+// in the MVP; any tool/image/audio part surfaces as an error. The
+// incoming stream flag is passed through to IRRequest.Stream so the proxy
+// can wrap the completed response as an SSE stream client-side; upstream
+// Anthropic SSE is not implemented in the MVP. An absent or empty "model"
+// field is NOT rejected here: the proxy's model-resolution layer
+// (route.ModelMappings["default"] then route.Model) supplies the upstream
+// model, so an empty incoming model must be allowed to reach that layer.
+// The model-empty check is enforced by the proxy after resolution.
 func anthropicRequestToIR(body []byte) (IRRequest, error) {
 	var raw anthropicRawRequest
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -269,7 +271,7 @@ func irToAnthropicResponse(resp IRResponse) ([]byte, error) {
 		content = append(content, anthropicResponseContent{Type: irPartToolUse, ID: call.ID, Name: call.Name, Input: call.Input})
 	}
 	out := anthropicResponseBody{
-		ID:         responsesMessageID(resp.ID),
+		ID:         anthropicMessageID(resp.ID),
 		Type:       "message",
 		Role:       "assistant",
 		Model:      resp.Model,
@@ -284,6 +286,14 @@ func irToAnthropicResponse(resp IRResponse) ([]byte, error) {
 		return nil, fmt.Errorf("anthropic response: marshal: %w", err)
 	}
 	return data, nil
+}
+
+// anthropicMessageID derives a stable identifier for Anthropic message
+// objects from the response id. It reuses the same "msg_..." namespace
+// rules as responsesMessageID so identifiers are consistent across
+// adapters that share this helper.
+func anthropicMessageID(respID string) string {
+	return responsesMessageID(respID)
 }
 
 // anthropicResponseContent is a single content block inside the Anthropic
