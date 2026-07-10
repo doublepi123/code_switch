@@ -59,7 +59,7 @@ const (
 )
 
 func providerDetailActionLabels(noModel bool) []string {
-	labels := make([]string, 0, 9)
+	labels := make([]string, 0, 7)
 	if !noModel {
 		labels = append(labels, actionLabelChooseModel, actionLabelUseModel)
 	}
@@ -197,7 +197,7 @@ func contextWindowFormDefault(agent AgentName, cfg *AppConfig, provider, model s
 // showContextWindowForm lets the operator override the Codex model-catalog
 // context window for a provider/model pair. An empty value clears the override
 // and falls back to name-based auto detection on the next switch.
-func (ts *tuiState) showContextWindowForm(provider string) {
+func (ts *tuiState) showContextWindowForm(provider, backPage string) {
 	model := useModelFormDefault(ts.agent, ts.cfg, provider, ts.customModels[provider])
 	autoWindow := resolveModelContextWindow(model, 0)
 	windowValue := contextWindowFormDefault(ts.agent, ts.cfg, provider, model)
@@ -229,19 +229,36 @@ func (ts *tuiState) showContextWindowForm(provider string) {
 		}
 		unlock()
 		ts.cfg = cfg
+		goBack := func() {
+			if backPage == "advanced" {
+				ts.showAdvancedMenu(provider)
+			} else {
+				ts.showDetail(provider, backPage)
+			}
+		}
 		if err := refreshCodexModelCatalogForProvider(cfg, ts.codexDir, provider); err != nil {
 			errLabel.SetText(err.Error())
 			return
 		}
-		ts.showDetail(provider, "detail")
+		goBack()
 	})
-	form.AddButton("Cancel", func() { ts.showDetail(provider, "detail") })
+	form.AddButton("Cancel", func() {
+		if backPage == "advanced" {
+			ts.showAdvancedMenu(provider)
+		} else {
+			ts.showDetail(provider, backPage)
+		}
+	})
 	form.SetBorder(true)
 	form.SetTitle(" Context Window ")
 	form.SetButtonsAlign(tview.AlignLeft)
 	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			ts.showDetail(provider, "detail")
+			if backPage == "advanced" {
+				ts.showAdvancedMenu(provider)
+			} else {
+				ts.showDetail(provider, backPage)
+			}
 			return nil
 		}
 		return event
@@ -741,8 +758,70 @@ func proxyRouteFormSubmitArgs(spec proxyRouteFormSpec) []string {
 	if strings.TrimSpace(spec.Model) != "" {
 		args = append(args, "--model", spec.Model)
 	}
-	args = append(args, "--protocol", spec.Protocol)
+	// The argv always includes --protocol so the persisted route is valid
+	// by construction (matches cmdProxyConfigure's expectation). When the
+	// form's spec.Protocol is not supported by the resolved provider, walk
+	// the agent's ProxyUpstreamPreference and emit the first protocol the
+	// provider can actually serve — this keeps the form submission usable
+	// for legacy providers (e.g. zhipu-cn only exposes anthropic-messages)
+	// without forcing the operator to manually re-pick a protocol that
+	// would otherwise be rejected.
+	proto := spec.Protocol
+	if !protocolIsProviderSupported(spec) {
+		proto = string(firstProviderSupportedProtocol(spec))
+	}
+	if strings.TrimSpace(proto) != "" {
+		args = append(args, "--protocol", proto)
+	}
 	return args
+}
+
+// protocolIsProviderSupported reports whether the form's spec.Protocol is
+// served by the configured provider. It loads the on-disk AppConfig so the
+// check stays in sync with cmdProxyConfigure's validator.
+func protocolIsProviderSupported(spec proxyRouteFormSpec) bool {
+	proto := ProviderProtocol(strings.TrimSpace(spec.Protocol))
+	if proto == "" {
+		return false
+	}
+	cfg, _, err := loadAppConfig()
+	if err != nil || cfg == nil {
+		return false
+	}
+	preset, err := resolveProviderPreset(spec.Provider, cfg)
+	if err != nil {
+		return false
+	}
+	return providerCanUseProxyProtocol(preset, proto)
+}
+
+// firstProviderSupportedProtocol walks the honoured agent's
+// ProxyUpstreamPreference and returns the first protocol the configured
+// provider actually supports. Used by proxyRouteFormSubmitArgs to pick a
+// argv --protocol when the form's selected Protocol is provider-incompatible.
+func firstProviderSupportedProtocol(spec proxyRouteFormSpec) ProviderProtocol {
+	cfg, _, err := loadAppConfig()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	preset, err := resolveProviderPreset(spec.Provider, cfg)
+	if err != nil {
+		return ""
+	}
+	profile, ok := agentProfiles[AgentName(spec.Agent)]
+	if !ok {
+		return ""
+	}
+	for _, candidate := range profile.ProxyUpstreamPreference {
+		if validateProxyAgentProtocol(spec.Agent, candidate) != nil {
+			continue
+		}
+		if !providerCanUseProxyProtocol(preset, candidate) {
+			continue
+		}
+		return candidate
+	}
+	return ""
 }
 
 // proxyRouteFormSaveResult is the pure helper behind the route
@@ -776,10 +855,16 @@ func proxyRouteFormSaveResult(spec proxyRouteFormSpec) (reloaded *AppConfig, err
 	if err := cmdProxyConfigure(args, &out); err != nil {
 		return nil, err.Error(), out.String()
 	}
-	cfg, _, err := loadAppConfig()
+	// Re-acquire the app-config lock while reloading so a concurrent
+	// cs invocation (e.g. another `cs set-key`) cannot mutate the config
+	// between our write and our reload. Without locking we could read a
+	// stale or partially-written cfg, then assign it as ts.cfg, silently
+	// clobbering the concurrent writer's changes.
+	cfg, _, unlock, err := loadAppConfigLocked()
 	if err != nil {
 		return nil, "route saved, but failed to reload config: " + err.Error(), out.String()
 	}
+	unlock()
 	return cfg, "", out.String()
 }
 

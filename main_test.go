@@ -6223,7 +6223,7 @@ func TestTUIStateLoadModelCatalogRefreshWithoutKeyShowsKeyHintNoNetwork(t *testi
 	if catalog.Source != modelCatalogSourceFallback {
 		t.Fatalf("catalog source = %q, want fallback", catalog.Source)
 	}
-	if got := ts.modelFetchStatus["openrouter"]; !strings.Contains(got, "需要 API key 才能从远端获取模型列表") {
+	if got := ts.modelFetchStatus["openrouter"]; !strings.Contains(got, "API key required to fetch remote model list") {
 		t.Fatalf("status = %q, want missing-key hint", got)
 	}
 }
@@ -10239,8 +10239,8 @@ func TestCheckNoColorNeitherSet(t *testing.T) {
 	noColor = checkNoColor()
 	t.Cleanup(func() { noColor = orig })
 
-	if noColor {
-		t.Fatalf("checkNoColor should return false when neither NO_COLOR nor TERM=dumb")
+	if !noColor {
+		t.Fatalf("checkNoColor should return true when NO_COLOR is present even if empty")
 	}
 }
 
@@ -10625,8 +10625,8 @@ func TestCheckNoColorTermDumb(t *testing.T) {
 func TestCheckNoColorNoneSet(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("TERM", "xterm-256color")
-	if checkNoColor() {
-		t.Fatalf("checkNoColor should return false with nothing set")
+	if !checkNoColor() {
+		t.Fatalf("checkNoColor should return true when NO_COLOR is present even if empty")
 	}
 }
 

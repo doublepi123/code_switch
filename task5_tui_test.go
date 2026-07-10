@@ -114,8 +114,15 @@ func TestProxyRouteFormAgentSwitchEndToEnd(t *testing.T) {
 		t.Fatalf("no --protocol in submit args %#v", args)
 	}
 	wantProto := string(defaultProxyProtocolForAgent("claude"))
+	// zhipu-cn only exposes anthropic-messages, so the form submission
+	// silently falls back to the first provider-supported protocol in
+	// claude's ProxyUpstreamPreference (anthropic-messages, after openai-
+	// responses / openai-chat are skipped because the provider doesn't expose
+	// them). The visible DropDown still shows the claude default; only the
+	// emitted argv is provider-aware.
+	wantProto = string(protocolAnthropicMessages)
 	if args[protoIdx] != wantProto {
-		t.Fatalf("submitted protocol = %q, want %q (claude default)", args[protoIdx], wantProto)
+		t.Fatalf("submitted protocol = %q, want %q (claude fallback for zhipu-cn)", args[protoIdx], wantProto)
 	}
 	if applied.Agent != "claude" {
 		t.Fatalf("submitted agent = %q, want claude", applied.Agent)
@@ -541,7 +548,7 @@ func TestProxyRouteFormRoundTripHonoursClaudeAgent(t *testing.T) {
 	if route.Agent != "claude" {
 		t.Fatalf("route agent = %q, want claude", route.Agent)
 	}
-	if route.UpstreamProtocol != string(defaultProxyProtocolForAgent("claude")) {
-		t.Fatalf("route protocol = %q, want claude default", route.UpstreamProtocol)
+	if route.UpstreamProtocol != string(protocolAnthropicMessages) {
+		t.Fatalf("route protocol = %q, want claude fallback protocol %q", route.UpstreamProtocol, protocolAnthropicMessages)
 	}
 }

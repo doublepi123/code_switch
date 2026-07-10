@@ -125,9 +125,14 @@ func TestCmdProxyStopRefusesKillOnInstanceMismatch(t *testing.T) {
 		t.Fatalf("spawn sleep: %v", err)
 	}
 	pid := cmd.Process.Pid
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	waited := false
 	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		if !waited {
+			_ = cmd.Process.Kill()
+			<-done
+		}
 	}()
 
 	state := ProxyRuntimeState{
@@ -151,12 +156,11 @@ func TestCmdProxyStopRefusesKillOnInstanceMismatch(t *testing.T) {
 		t.Fatalf("stop output for mismatch must mention mismatch/stale: %q", got)
 	}
 	// The unrelated live process MUST still be alive.
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
 	select {
 	case <-time.After(500 * time.Millisecond):
 		// Good: process still alive.
 	case err := <-done:
+		waited = true
 		t.Fatalf("stop killed a recorded PID even though the responding health server was a different instance (wait returned %v)", err)
 	}
 }

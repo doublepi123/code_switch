@@ -91,9 +91,14 @@ func TestCmdProxyStopRefusesKillOnPIDMismatch(t *testing.T) {
 	if pid == os.Getpid() {
 		t.Fatalf("test setup error: sleep pid %d == test pid %d", pid, os.Getpid())
 	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	waited := false
 	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		if !waited {
+			_ = cmd.Process.Kill()
+			<-done
+		}
 	}()
 
 	state := ProxyRuntimeState{
@@ -121,12 +126,11 @@ func TestCmdProxyStopRefusesKillOnPIDMismatch(t *testing.T) {
 		t.Fatalf("state file should be removed after pid-mismatch stop: %v", err)
 	}
 	// The unrelated live process MUST still be alive.
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
 	select {
 	case <-time.After(500 * time.Millisecond):
 		// Good: process still alive.
 	case err := <-done:
+		waited = true
 		t.Fatalf("stop killed a recorded PID even though the health-reported pid differed (wait returned %v)", err)
 	}
 }

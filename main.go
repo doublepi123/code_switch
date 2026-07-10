@@ -15,6 +15,12 @@ import (
 
 var errCancelled = errors.New("cancelled")
 
+var csCommandNames = []string{
+	"list", "models", "model", "model-map", "use-model", "configure", "current",
+	"set-key", "switch", "default", "env", "token", "restore", "diff", "upgrade",
+	"test", "remove", "backups", "doctor", "export", "import", "completion", "run", "proxy", "help",
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		if errors.Is(err, errCancelled) {
@@ -106,12 +112,13 @@ func printVersion(out io.Writer) {
 
 func isVersionRequest(args []string) bool {
 	if len(args) == 1 {
-		return args[0] == "--version" || args[0] == "version"
+		return args[0] == "--version" || args[0] == "-version" || args[0] == "version"
 	}
-	if len(args) == 2 && args[1] == "--version" {
-		switch args[0] {
-		case "list", "models", "model", "model-map", "use-model", "configure", "current", "set-key", "switch", "default", "env", "token", "restore", "diff", "upgrade", "help", "test", "remove", "backups", "doctor", "export", "import", "completion", "run", "proxy":
-			return true
+	if len(args) == 2 && (args[1] == "--version" || args[1] == "-version") {
+		for _, cmd := range csCommandNames {
+			if args[0] == cmd {
+				return true
+			}
 		}
 	}
 	return false
@@ -142,7 +149,12 @@ func cmdList(args []string, out io.Writer) error {
 	for _, name := range names {
 		preset, err := resolveAgentProviderPreset(agent, name, cfg)
 		if err != nil {
-			return err
+			// Skip providers we can't resolve (e.g. a custom provider whose
+			// preset was removed in a later version). Continue listing the
+			// remaining providers so one broken entry doesn't make the whole
+			// command unusable.
+			fmt.Fprintf(os.Stderr, "warning: skip provider %q: %v\n", name, err)
+			continue
 		}
 		keyStatus := "✗"
 		if preset.NoAPIKey {
@@ -334,8 +346,12 @@ func cmdSetKey(args []string, out io.Writer) error {
 	provider := canonicalProviderName(remaining[0])
 
 	if agent == agentCodex {
-		if _, err := presetForAgentDirectProtocol(agentCodex, provider); err != nil {
+		preset, err := presetForAgentDirectProtocol(agentCodex, provider)
+		if err != nil {
 			return err
+		}
+		if preset.NoAPIKey {
+			return fmt.Errorf("provider %q does not require an API key", provider)
 		}
 		cfg, path, unlock, err := loadAppConfigLocked()
 		if err != nil {
@@ -362,7 +378,12 @@ func cmdSetKey(args []string, out io.Writer) error {
 		defer unlock()
 		preset, err := resolveProviderPreset(provider, cfg)
 		if err != nil {
-			return fmt.Errorf("unsupported provider %q for agent opencode", remaining[0])
+			// Use the canonical name (e.g. "zhipu-cn") rather than the raw
+			// alias the user typed (e.g. "bigModel") so the error reflects
+			// what the lookup actually tried, and so the alias the user
+			// thought they were using is at least visible if they want to
+			// debug a typo.
+			return fmt.Errorf("unsupported provider %q for agent opencode (canonicalized from %q)", provider, remaining[0])
 		}
 		if preset.NoAPIKey {
 			return fmt.Errorf("provider %q does not require an API key", provider)
@@ -628,17 +649,29 @@ complete -c cs -l help -d 'Show help'
 }
 
 func providerCompletionWordList() string {
-	names := sortedPresetNames()
+	return providerCompletionWordListForAgent(agentClaude)
+}
+
+func providerCompletionWordListForAgent(agent AgentName) string {
+	names := presetNamesForAgentDirectProtocols(agent)
 	cfg, _, err := loadAppConfig()
 	if err == nil {
-		for name, stored := range cfg.Providers {
-			if strings.TrimSpace(stored.BaseURL) != "" && !isPresetProvider(name) {
-				names = append(names, name)
+		profile, ok := agentProfiles[agent]
+		if ok {
+			for name, stored := range cfg.Providers {
+				if strings.TrimSpace(stored.BaseURL) == "" || isPresetProvider(name) {
+					continue
+				}
+				protocol := stored.providerProtocol()
+				for _, allowed := range profile.DirectProtocols {
+					if protocol == allowed {
+						names = append(names, name)
+						break
+					}
+				}
 			}
 		}
 	}
-	// Weak dependency: failing to load app config for shell completion
-	// gracefully falls back to preset-only completion words.
 	sort.Strings(names)
 	return strings.Join(names, " ")
 }
@@ -694,11 +727,17 @@ func printUsage(out io.Writer) {
 	b.WriteString("  cs proxy serve                            # run the multi-route proxy HTTP daemon in the foreground\n")
 	b.WriteString("\nClaude providers:\n")
 	fmt.Fprint(out, b.String())
-	for _, name := range sortedPresetNames() {
+	for _, name := range presetNamesForAgentDirectProtocols(agentClaude) {
 		fmt.Fprintf(out, "  %s\n", name)
 	}
-	fmt.Fprint(out, "\nCodex providers:\n  deepseek\n  kimi-coding\n  ollama-cloud\n  openrouter\n")
-	fmt.Fprint(out, "\nOpenCode providers:\n  <all Claude providers>\n")
+	fmt.Fprint(out, "\nCodex providers:\n")
+	for _, name := range presetNamesForAgentDirectProtocols(agentCodex) {
+		fmt.Fprintf(out, "  %s\n", name)
+	}
+	fmt.Fprint(out, "\nOpenCode providers:\n")
+	for _, name := range presetNamesForAgentDirectProtocols(agentOpencode) {
+		fmt.Fprintf(out, "  %s\n", name)
+	}
 }
 
 func makeCustomProviderKey(name string) string {
@@ -767,6 +806,16 @@ func validateBaseURL(rawURL string) error {
 	}
 	if parsed.Hostname() == "" {
 		return fmt.Errorf("base URL must have a valid host")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("base URL must not contain embedded credentials; pass credentials via --api-key or stored config")
+	}
+	// Reject fragments and query strings: a base URL is the upstream origin
+	// root, not a request URL. A trailing "?key=abc" or "#fragment" would be
+	// silently embedded in every outbound request, leaking credentials or
+	// producing surprising request shapes.
+	if parsed.Fragment != "" || parsed.RawQuery != "" {
+		return fmt.Errorf("base URL must not contain a query string or fragment")
 	}
 	return nil
 }
