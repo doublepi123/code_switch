@@ -118,12 +118,14 @@ type AgentConfig struct {
 }
 
 type AppConfig struct {
-	Providers     map[string]StoredProvider     `json:"providers"`
-	Agents        map[string]AgentConfig        `json:"agents,omitempty"`
-	AgentProfiles map[string]AgentProfile       `json:"agentProfiles,omitempty"`
-	Default       string                        `json:"default,omitempty"`
-	ModelMappings map[string]map[string]string  `json:"modelMappings,omitempty"`
-	Proxy         *ProxyConfig                  `json:"proxy,omitempty"`
+	Providers       map[string]StoredProvider    `json:"providers"`
+	Agents          map[string]AgentConfig       `json:"agents,omitempty"`
+	AgentProfiles   map[string]AgentProfile      `json:"agentProfiles,omitempty"`
+	Default         string                       `json:"default,omitempty"`
+	ModelMappings   map[string]map[string]string `json:"modelMappings,omitempty"`
+	Proxy           *ProxyConfig                 `json:"proxy,omitempty"`
+	MCPServers      map[string]MCPServerConfig   `json:"mcpServers,omitempty"`
+	ManagedMCPNames []string                     `json:"managedMcpNames,omitempty"`
 }
 
 type ConfigureSelection struct {

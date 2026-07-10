@@ -40,6 +40,9 @@ func ensureAppConfigMaps(cfg *AppConfig) {
 	if cfg.Agents == nil {
 		cfg.Agents = map[string]AgentConfig{}
 	}
+	if cfg.MCPServers == nil {
+		cfg.MCPServers = map[string]MCPServerConfig{}
+	}
 	for name, agentCfg := range cfg.Agents {
 		if agentCfg.Providers == nil {
 			agentCfg.Providers = map[string]StoredProvider{}
