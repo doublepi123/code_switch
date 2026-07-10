@@ -101,6 +101,8 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdRun(args[1:], out)
 	case "proxy":
 		return cmdProxy(args[1:], out)
+	case "mcp":
+		return cmdMCP(args[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -717,6 +719,11 @@ func printUsage(out io.Writer) {
 	b.WriteString("  cs doctor [--json]                        # health-check configs, permissions, drift\n")
 	b.WriteString("  cs export [--redact-keys]                 # dump app config to stdout (for another machine)\n")
 	b.WriteString("  cs import <file> [--force]                # merge an exported config into your app config\n")
+	b.WriteString("  cs mcp list                               # list configured MCP servers\n")
+	b.WriteString("  cs mcp add <name> --transport stdio --command <cmd> [-- arg1 arg2 ...]\n")
+	b.WriteString("  cs mcp add <name> --transport sse --url <url>\n")
+	b.WriteString("  cs mcp remove <name>                      # remove a configured MCP server\n")
+	b.WriteString("  cs mcp test <name>                        # probe an MCP server\n")
 	b.WriteString("  cs completion bash|zsh|fish\n")
 	b.WriteString("  cs run <agent> --provider <provider> [--model model-id] [--dry-run]   # MVP: codex --dry-run only\n")
 	b.WriteString("  cs proxy configure <agent> --provider <provider> [--model model] [--protocol protocol] [--host host] [--port port]   # write one route of the multi-route daemon\n")
