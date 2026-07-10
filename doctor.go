@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // checkResult is one doctor finding.
@@ -77,12 +79,33 @@ func runDoctor(claudeDir, codexDir, opencodeDir string) []checkResult {
 	results = append(results, checkOpencodeFile(opencodeConfigPath(opencodeDir)))
 	results = append(results, checkProxyDaemon())
 	if cfg, _, err := loadAppConfig(); err == nil {
+		results = append(results, checkMCPHealth(cfg))
 		results = append(results, checkClaudeDrift(claudeDir, cfg))
 		results = append(results, checkCodexDrift(codexDir, cfg))
 		results = append(results, checkOpencodeDrift(opencodeDir, cfg))
 	}
 	results = append(results, checkOrphanedTempFiles(claudeDir, codexDir, opencodeDir))
 	return results
+}
+
+func checkMCPHealth(cfg *AppConfig) checkResult {
+	if cfg == nil || len(cfg.MCPServers) == 0 {
+		return okResult("mcp servers", "no MCP servers configured")
+	}
+
+	var failures []string
+	for name, server := range cfg.MCPServers {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := testMCPServer(ctx, server)
+		cancel()
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+		}
+	}
+	if len(failures) > 0 {
+		return warnResult("mcp servers", strings.Join(failures, "; "))
+	}
+	return okResult("mcp servers", "all configured MCP servers passed")
 }
 
 func checkProxyDaemon() checkResult {
