@@ -311,6 +311,13 @@ func prepareProxyServe(agent, host string, port int, token string, logPaths ...s
 	if len(logPaths) > 0 {
 		logPath = strings.TrimSpace(logPaths[0])
 	}
+	if logPath == "" {
+		// Default to ~/.code-switch/proxy.jsonl so `cs proxy stats` works
+		// without requiring operators to pass --log on every start/serve.
+		if p, err := defaultProxyLogPath(); err == nil {
+			logPath = p
+		}
+	}
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("proxy token is required")
 	}

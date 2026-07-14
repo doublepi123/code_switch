@@ -65,6 +65,7 @@ func TestPrintUsageIncludesAllProxySubcommandsTask6(t *testing.T) {
 		"cs proxy configure",
 		"cs proxy preview",
 		"cs proxy status",
+		"cs proxy stats",
 		"cs proxy start",
 		"cs proxy stop",
 		"cs proxy serve",
@@ -88,6 +89,7 @@ func TestRunProxyHelpShowsMultiRouteUsageTask6(t *testing.T) {
 		"multi-route proxy daemon",
 		"cs proxy preview <agent>",
 		"cs proxy status",
+		"cs proxy stats",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("proxy --help missing %q\noutput:\n%s", want, s)
@@ -104,8 +106,8 @@ func TestBashCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 	if !strings.Contains(s, " proxy ") {
 		t.Fatalf("bash completion top-level word list missing proxy:\n%s", s)
 	}
-	// Second-level: the proxy case must enumerate all six subcommands.
-	for _, sub := range []string{"configure", "start", "stop", "status", "preview", "serve"} {
+	// Second-level: the proxy case must enumerate all seven subcommands.
+	for _, sub := range []string{"configure", "start", "stop", "status", "stats", "preview", "serve"} {
 		marker := "\"" + sub + "\""
 		// bash completion string contains the subcommand list inside the
 		// proxy case; assert each word is present at least once.
@@ -115,7 +117,7 @@ func TestBashCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 		_ = marker
 	}
 	// Sanity: the proxy second-level completion line is present verbatim.
-	if !strings.Contains(s, "configure start stop status preview serve") {
+	if !strings.Contains(s, "configure start stop status stats preview serve") {
 		t.Fatalf("bash completion missing proxy subcommand word list:\n%s", s)
 	}
 }
@@ -127,11 +129,12 @@ func TestZshCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 	if !strings.Contains(s, "'proxy:") {
 		t.Fatalf("zsh completion top-level missing proxy entry:\n%s", s)
 	}
-	// Second-level: proxy_subcommands array lists all six.
+	// Second-level: proxy_subcommands array lists all seven.
 	for _, want := range []string{
 		"'configure:",
 		"'preview:",
 		"'status:",
+		"'stats:",
 		"'start:",
 		"'stop:",
 		"'serve:",
@@ -149,8 +152,8 @@ func TestFishCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 	if !strings.Contains(s, "'proxy'") {
 		t.Fatalf("fish completion top-level missing proxy:\n%s", s)
 	}
-	// Second-level: a single complete line listing all six subcommands.
-	if !strings.Contains(s, "configure start stop status preview serve") {
+	// Second-level: a single complete line listing all seven subcommands.
+	if !strings.Contains(s, "configure start stop status stats preview serve") {
 		t.Fatalf("fish completion missing proxy subcommand list:\n%s", s)
 	}
 }

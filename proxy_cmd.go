@@ -23,7 +23,7 @@ import (
 // positional argument.
 func cmdProxy(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: code-switch proxy <configure|start|stop|status|preview|serve> ...")
+		return errors.New("usage: code-switch proxy <configure|start|stop|status|stats|preview|serve> ...")
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -35,6 +35,8 @@ func cmdProxy(args []string, out io.Writer) error {
 		return cmdProxyPreview(args[1:], out)
 	case "status":
 		return cmdProxyStatus(args[1:], out)
+	case "stats":
+		return cmdProxyStats(args[1:], out)
 	case "start":
 		return cmdProxyStart(args[1:], out)
 	case "stop":
@@ -42,7 +44,7 @@ func cmdProxy(args []string, out io.Writer) error {
 	case "serve":
 		return cmdProxyServe(args[1:], out)
 	default:
-		return fmt.Errorf("unknown proxy subcommand %q (supported: configure, start, stop, status, preview, serve)", args[0])
+		return fmt.Errorf("unknown proxy subcommand %q (supported: configure, start, stop, status, stats, preview, serve)", args[0])
 	}
 }
 
@@ -56,6 +58,8 @@ Usage:
       show the resolved proxy route for one agent
   cs proxy status
       show proxy runtime status for all configured routes
+  cs proxy stats [--log path] [--since duration|RFC3339] [--agent name] [--json]
+      aggregate request counts, latency, and token usage from the proxy JSONL log
   cs proxy start
       launch the multi-route proxy daemon as a background process
   cs proxy stop
