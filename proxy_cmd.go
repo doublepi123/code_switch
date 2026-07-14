@@ -15,7 +15,7 @@ import (
 //
 //   - configure <agent> --provider <p> [--model m] [--protocol pr] [--host h] [--port n]
 //   - preview <agent>
-//   - status              (lifecycle: show proxy runtime state)
+//   - status / health     (lifecycle: show proxy runtime state / upstream reachability)
 //   - start / stop / serve (lifecycle: launch / terminate / foreground the proxy)
 //
 // The dispatcher is intentionally strict about the subcommand name so typos
@@ -23,7 +23,7 @@ import (
 // positional argument.
 func cmdProxy(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: code-switch proxy <configure|start|stop|status|stats|preview|serve> ...")
+		return errors.New("usage: code-switch proxy <configure|start|stop|status|health|stats|preview|serve> ...")
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -35,6 +35,8 @@ func cmdProxy(args []string, out io.Writer) error {
 		return cmdProxyPreview(args[1:], out)
 	case "status":
 		return cmdProxyStatus(args[1:], out)
+	case "health":
+		return cmdProxyHealth(args[1:], out)
 	case "stats":
 		return cmdProxyStats(args[1:], out)
 	case "start":
@@ -44,7 +46,7 @@ func cmdProxy(args []string, out io.Writer) error {
 	case "serve":
 		return cmdProxyServe(args[1:], out)
 	default:
-		return fmt.Errorf("unknown proxy subcommand %q (supported: configure, start, stop, status, stats, preview, serve)", args[0])
+		return fmt.Errorf("unknown proxy subcommand %q (supported: configure, start, stop, status, health, stats, preview, serve)", args[0])
 	}
 }
 
@@ -58,6 +60,8 @@ Usage:
       show the resolved proxy route for one agent
   cs proxy status
       show proxy runtime status for all configured routes
+  cs proxy health
+      probe configured route upstreams with HTTP HEAD
   cs proxy stats [--log path] [--since duration|RFC3339] [--agent name] [--json]
       aggregate request counts, latency, and token usage from the proxy JSONL log
   cs proxy start

@@ -580,7 +580,7 @@ _cs() {
 			COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
 			;;
 		proxy)
-			COMPREPLY=($(compgen -W "configure start stop status stats preview serve" -- "$cur"))
+			COMPREPLY=($(compgen -W "configure start stop status health stats preview serve" -- "$cur"))
 			;;
 		esac
 		;;
@@ -604,7 +604,7 @@ func zshCompletionString() string {
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(&b, "\t\t'%s'\n", name)
 	}
-	b.WriteString("\t)\n\n\tlocal -a shells\n\tshells=('bash' 'zsh' 'fish')\n\n\tlocal -a proxy_subcommands\n\tproxy_subcommands=(\n\t\t'configure:write a proxy route for an agent (multi-route daemon)'\n\t\t'preview:show the resolved proxy route and codex config for an agent'\n\t\t'status:show proxy daemon runtime status (all configured routes)'\n\t\t'stats:aggregate proxy request counts, latency, and token usage'\n\t\t'start:launch the multi-route proxy daemon as a background process'\n\t\t'stop:terminate a running proxy daemon'\n\t\t'serve:run the multi-route proxy HTTP daemon in the foreground'\n\t)\n\n\t_arguments \\\n\t\t'--version[show version]' \\\n\t\t'--help[show help]' \\\n\t\t'--via[connection mode for switch]:connection mode:(auto direct proxy)' \\\n\t\t'1:command:_describe command commands' \\\n\t\t'2: :->second' \\\n\t\t'*::arg:->args'\n\n\tcase $state in\n\tsecond)\n\t\tcase ${words[1]} in\n\t\tswitch)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tset-key|env|token|test|remove|models|default|model-map|use-model|diff)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tmodel)\n\t\t\t_values 'subcommand' 'get' 'set' 'list'\n\t\t\t;;\n\t\tmodel-map)\n\t\t\t_values 'subcommand' 'set' 'get' 'list' 'remove'\n\t\t\t;;\n\t\tcompletion)\n\t\t\t_values 'shell' $shells\n\t\t\t;;\n\t\tproxy)\n\t\t\t_describe 'proxy subcommand' proxy_subcommands\n\t\t\t;;\n\t\tesac\n\t\t;;\n\tesac\n}\n_cs\n")
+	b.WriteString("\t)\n\n\tlocal -a shells\n\tshells=('bash' 'zsh' 'fish')\n\n\tlocal -a proxy_subcommands\n\tproxy_subcommands=(\n\t\t'configure:write a proxy route for an agent (multi-route daemon)'\n\t\t'preview:show the resolved proxy route and codex config for an agent'\n\t\t'status:show proxy daemon runtime status (all configured routes)'\n\t\t'health:probe configured route upstreams with HTTP HEAD'\n\t\t'stats:aggregate proxy request counts, latency, and token usage'\n\t\t'start:launch the multi-route proxy daemon as a background process'\n\t\t'stop:terminate a running proxy daemon'\n\t\t'serve:run the multi-route proxy HTTP daemon in the foreground'\n\t)\n\n\t_arguments \\\n\t\t'--version[show version]' \\\n\t\t'--help[show help]' \\\n\t\t'--via[connection mode for switch]:connection mode:(auto direct proxy)' \\\n\t\t'1:command:_describe command commands' \\\n\t\t'2: :->second' \\\n\t\t'*::arg:->args'\n\n\tcase $state in\n\tsecond)\n\t\tcase ${words[1]} in\n\t\tswitch)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tset-key|env|token|test|remove|models|default|model-map|use-model|diff)\n\t\t\t_values 'provider' $providers\n\t\t\t;;\n\t\tmodel)\n\t\t\t_values 'subcommand' 'get' 'set' 'list'\n\t\t\t;;\n\t\tmodel-map)\n\t\t\t_values 'subcommand' 'set' 'get' 'list' 'remove'\n\t\t\t;;\n\t\tcompletion)\n\t\t\t_values 'shell' $shells\n\t\t\t;;\n\t\tproxy)\n\t\t\t_describe 'proxy subcommand' proxy_subcommands\n\t\t\t;;\n\t\tesac\n\t\t;;\n\tesac\n}\n_cs\n")
 	return b.String()
 }
 
@@ -643,7 +643,7 @@ complete -c cs -n '__fish_seen_subcommand_from switch' -l via -d 'Connection mod
 complete -c cs -n '__fish_seen_subcommand_from model' -a 'get set list'
 complete -c cs -n '__fish_seen_subcommand_from model-map' -a 'set get list remove'
 complete -c cs -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
-complete -c cs -n '__fish_seen_subcommand_from proxy' -a 'configure start stop status stats preview serve'
+complete -c cs -n '__fish_seen_subcommand_from proxy' -a 'configure start stop status health stats preview serve'
 
 complete -c cs -l version -d 'Show version'
 complete -c cs -l help -d 'Show help'

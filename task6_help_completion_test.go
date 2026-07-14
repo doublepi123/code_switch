@@ -106,8 +106,8 @@ func TestBashCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 	if !strings.Contains(s, " proxy ") {
 		t.Fatalf("bash completion top-level word list missing proxy:\n%s", s)
 	}
-	// Second-level: the proxy case must enumerate all seven subcommands.
-	for _, sub := range []string{"configure", "start", "stop", "status", "stats", "preview", "serve"} {
+	// Second-level: the proxy case must enumerate all eight subcommands.
+	for _, sub := range []string{"configure", "start", "stop", "status", "health", "stats", "preview", "serve"} {
 		marker := "\"" + sub + "\""
 		// bash completion string contains the subcommand list inside the
 		// proxy case; assert each word is present at least once.
@@ -117,7 +117,7 @@ func TestBashCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 		_ = marker
 	}
 	// Sanity: the proxy second-level completion line is present verbatim.
-	if !strings.Contains(s, "configure start stop status stats preview serve") {
+	if !strings.Contains(s, "configure start stop status health stats preview serve") {
 		t.Fatalf("bash completion missing proxy subcommand word list:\n%s", s)
 	}
 }
@@ -129,11 +129,12 @@ func TestZshCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 	if !strings.Contains(s, "'proxy:") {
 		t.Fatalf("zsh completion top-level missing proxy entry:\n%s", s)
 	}
-	// Second-level: proxy_subcommands array lists all seven.
+	// Second-level: proxy_subcommands array lists all eight.
 	for _, want := range []string{
 		"'configure:",
 		"'preview:",
 		"'status:",
+		"'health:",
 		"'stats:",
 		"'start:",
 		"'stop:",
@@ -152,8 +153,8 @@ func TestFishCompletionIncludesProxyTopLevelAndSubcommandsTask6(t *testing.T) {
 	if !strings.Contains(s, "'proxy'") {
 		t.Fatalf("fish completion top-level missing proxy:\n%s", s)
 	}
-	// Second-level: a single complete line listing all seven subcommands.
-	if !strings.Contains(s, "configure start stop status stats preview serve") {
+	// Second-level: a single complete line listing all eight subcommands.
+	if !strings.Contains(s, "configure start stop status health stats preview serve") {
 		t.Fatalf("fish completion missing proxy subcommand list:\n%s", s)
 	}
 }

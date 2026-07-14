@@ -469,6 +469,7 @@ cs proxy configure codex --provider zai        # 只写路由，不启动 daemon
 cs proxy preview codex                         # 查看解析后的路由
 cs proxy start --agent codex                   # 启动 daemon
 cs proxy status                                # 查看运行状态与全部路由
+cs proxy health                                # 用 HTTP HEAD 探测每个路由的上游可达性
 cs proxy stats                                 # 聚合请求数 / 延迟 / token 用量（默认读 ~/.code-switch/proxy.jsonl）
 cs proxy stats --since 24h --agent codex --json
 cs proxy stop                                  # 停止 daemon

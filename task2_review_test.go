@@ -37,7 +37,7 @@ func TestBashCompletionIncludesProxy(t *testing.T) {
 		t.Fatalf("bash completion top-level missing proxy:\n%s", s)
 	}
 	// second-level subcommands for proxy
-	if !strings.Contains(s, "configure start stop status stats preview serve") {
+	if !strings.Contains(s, "configure start stop status health stats preview serve") {
 		t.Fatalf("bash completion missing proxy subcommands:\n%s", s)
 	}
 }
@@ -58,7 +58,7 @@ func TestFishCompletionIncludesProxy(t *testing.T) {
 	if !strings.Contains(s, "'proxy'") {
 		t.Fatalf("fish completion top-level missing proxy:\n%s", s)
 	}
-	if !strings.Contains(s, "configure start stop status stats preview serve") {
+	if !strings.Contains(s, "configure start stop status health stats preview serve") {
 		t.Fatalf("fish completion missing proxy subcommands:\n%s", s)
 	}
 }
