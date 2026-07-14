@@ -90,22 +90,31 @@ func newProxyHandlerWithRegistry(route ProxyRoute, providerKey string, registry 
 }
 
 func newProxyHandlerWithRegistryAndLogger(route ProxyRoute, providerKey string, registry *ProtocolRegistry, logger *proxyLogger) http.Handler {
+	return newProxyHandlerWithRegistryLoggerAndAgent(route, providerKey, registry, logger, "")
+}
+
+func newProxyHandlerWithRegistryLoggerAndAgent(route ProxyRoute, providerKey string, registry *ProtocolRegistry, logger *proxyLogger, agent string) http.Handler {
 	if registry == nil {
 		registry = defaultProtocolRegistry()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		lw := &proxyLoggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		lw := &proxyLoggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK, agent: agent}
 		defer func() {
 			logger.logRequest(proxyLogEntry{
-				Timestamp:  start.UTC(),
-				Method:     r.Method,
-				Path:       r.URL.Path,
-				Provider:   route.Provider,
-				Model:      route.Model,
-				StatusCode: lw.statusCode,
-				Error:      lw.errorMessage,
-				DurationMs: time.Since(start).Milliseconds(),
+				Timestamp:    start.UTC(),
+				Kind:         proxyLogKindRequest,
+				Agent:        lw.agent,
+				Method:       r.Method,
+				Path:         r.URL.Path,
+				Provider:     route.Provider,
+				Model:        route.Model,
+				StatusCode:   lw.statusCode,
+				Error:        lw.errorMessage,
+				DurationMs:   time.Since(start).Milliseconds(),
+				InputTokens:  lw.inputTokens,
+				OutputTokens: lw.outputTokens,
+				TotalTokens:  lw.totalTokens,
 			})
 		}()
 		w = lw
@@ -215,7 +224,15 @@ func newProxyHandlerWithRegistryAndLogger(route ProxyRoute, providerKey string, 
 			writeProxyError(w, http.StatusBadRequest, message)
 			return
 		}
-		serveProtocolUpstream(w, r, route, providerKey, ir, inboundAdapter, upstreamAdapter, logger)
+		usage := serveProtocolUpstream(w, r, route, providerKey, ir, inboundAdapter, upstreamAdapter, logger)
+		if usage != nil {
+			lw.inputTokens = usage.InputTokens
+			lw.outputTokens = usage.OutputTokens
+			lw.totalTokens = usage.TotalTokens
+			if lw.totalTokens == 0 {
+				lw.totalTokens = usage.InputTokens + usage.OutputTokens
+			}
+		}
 	})
 }
 
@@ -224,6 +241,10 @@ type proxyLoggingResponseWriter struct {
 	statusCode   int
 	errorMessage string
 	routed       bool
+	agent        string
+	inputTokens  int
+	outputTokens int
+	totalTokens  int
 }
 
 func (w *proxyLoggingResponseWriter) WriteHeader(statusCode int) {
@@ -262,6 +283,7 @@ func newProxyMultiRouteHandlerWithLogger(routes []proxyServedRoute, registry *Pr
 			}
 			logger.logRequest(proxyLogEntry{
 				Timestamp:  start.UTC(),
+				Kind:       proxyLogKindRequest,
 				Method:     r.Method,
 				Path:       r.URL.Path,
 				RemoteAddr: r.RemoteAddr,
@@ -283,7 +305,7 @@ func newProxyMultiRouteHandlerWithLogger(routes []proxyServedRoute, registry *Pr
 			return
 		}
 		lw.routed = true
-		newProxyHandlerWithRegistryAndLogger(selected.Route, selected.ProviderKey, registry, logger).ServeHTTP(w, r)
+		newProxyHandlerWithRegistryLoggerAndAgent(selected.Route, selected.ProviderKey, registry, logger, selected.Agent).ServeHTTP(w, r)
 	})
 }
 
@@ -496,6 +518,7 @@ func serveRawProtocolUpstream(w http.ResponseWriter, r *http.Request, route Prox
 func logRawUpstreamAttempt(logger *proxyLogger, r *http.Request, route ProxyRoute, result proxyRawUpstreamResult, start time.Time) {
 	logger.logRequest(proxyLogEntry{
 		Timestamp:  start.UTC(),
+		Kind:       proxyLogKindUpstream,
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		RemoteAddr: r.RemoteAddr,
@@ -569,11 +592,11 @@ type proxyProtocolUpstreamResult struct {
 	err         error
 }
 
-func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest, inboundAdapter, upstreamAdapter ProtocolAdapter, logger *proxyLogger) {
+func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest, inboundAdapter, upstreamAdapter ProtocolAdapter, logger *proxyLogger) *IRUsage {
 	start := time.Now()
 	result := doProtocolUpstream(w, r, route, providerKey, ir, inboundAdapter, upstreamAdapter)
 	if result == nil {
-		return
+		return nil
 	}
 	logProtocolUpstreamAttempt(logger, r, route, result, start)
 	if isRetryableUpstreamError(result.statusCode, result.err) && route.Fallback != nil {
@@ -583,22 +606,22 @@ func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRo
 		}
 		fallbackKey, ok := fallbackProviderKey(*route.Fallback, route, providerKey)
 		if !ok {
-			writeProtocolResult(w, result, ir.Stream, inboundAdapter, upstreamAdapter)
-			return
+			return writeProtocolResult(w, result, ir.Stream, inboundAdapter, upstreamAdapter)
 		}
 		fallbackStart := time.Now()
 		result = doProtocolUpstream(w, r, *route.Fallback, fallbackKey, fallbackIR, inboundAdapter, upstreamAdapter)
 		if result == nil {
-			return
+			return nil
 		}
 		logProtocolUpstreamAttempt(logger, r, *route.Fallback, result, fallbackStart)
 	}
-	writeProtocolResult(w, result, ir.Stream, inboundAdapter, upstreamAdapter)
+	return writeProtocolResult(w, result, ir.Stream, inboundAdapter, upstreamAdapter)
 }
 
 func logProtocolUpstreamAttempt(logger *proxyLogger, r *http.Request, route ProxyRoute, result *proxyProtocolUpstreamResult, start time.Time) {
 	logger.logRequest(proxyLogEntry{
 		Timestamp:  start.UTC(),
+		Kind:       proxyLogKindUpstream,
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		RemoteAddr: r.RemoteAddr,
@@ -647,10 +670,10 @@ func doProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute
 	return &proxyProtocolUpstreamResult{statusCode: resp.StatusCode, header: resp.Header.Clone(), body: respBody, contentType: resp.Header.Get("Content-Type")}
 }
 
-func writeProtocolResult(w http.ResponseWriter, result *proxyProtocolUpstreamResult, stream bool, inboundAdapter, upstreamAdapter ProtocolAdapter) {
+func writeProtocolResult(w http.ResponseWriter, result *proxyProtocolUpstreamResult, stream bool, inboundAdapter, upstreamAdapter ProtocolAdapter) *IRUsage {
 	if result.err != nil {
 		writeProxyError(w, result.statusCode, result.err.Error())
-		return
+		return nil
 	}
 	if result.statusCode < 200 || result.statusCode >= 300 {
 		// Forward upstream headers (excluding hop-by-hop) so the client sees
@@ -664,15 +687,16 @@ func writeProtocolResult(w http.ResponseWriter, result *proxyProtocolUpstreamRes
 		}
 		w.WriteHeader(result.statusCode)
 		_, _ = w.Write(result.body)
-		return
+		return nil
 	}
 	irResp, err := upstreamAdapter.ParseUpstreamResponse(result.body, result.contentType)
 	if err != nil {
 		writeProxyError(w, http.StatusBadGateway,
 			fmt.Sprintf("parse upstream response: %v", err))
-		return
+		return nil
 	}
 	inboundAdapter.WriteClientResponse(w, irResp, stream)
+	return irResp.Usage
 }
 
 func fallbackProviderKey(route ProxyRoute, primaryRoute ProxyRoute, primaryKey string) (string, bool) {
