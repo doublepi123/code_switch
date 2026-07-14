@@ -100,3 +100,66 @@ func TestMCPManagerTracksManagedMCPNames(t *testing.T) {
 		t.Fatalf("ManagedMCPNames after remove = %v, want %v", cfg.ManagedMCPNames, want)
 	}
 }
+
+func TestNormalizeAppConfigMigratesLegacyManagedMCPNames(t *testing.T) {
+	t.Parallel()
+
+	legacyNames := []string{"beta", "alpha"}
+	cfg := &AppConfig{
+		ManagedMCPNames: legacyNames,
+		ManagedMCPNamesByAgent: map[string][]string{
+			string(agentCodex): {},
+		},
+	}
+
+	normalizeAppConfig(cfg)
+
+	if len(cfg.ManagedMCPNames) != 0 {
+		t.Fatalf("ManagedMCPNames after migration = %v, want empty", cfg.ManagedMCPNames)
+	}
+	if got := cfg.ManagedMCPNamesByAgent[string(agentClaude)]; !reflect.DeepEqual(got, legacyNames) {
+		t.Fatalf("claude managed names = %v, want %v", got, legacyNames)
+	}
+	if got := cfg.ManagedMCPNamesByAgent[string(agentCodex)]; len(got) != 0 {
+		t.Fatalf("codex managed names = %v, want existing empty list preserved", got)
+	}
+	if got := cfg.ManagedMCPNamesByAgent[string(agentOpencode)]; !reflect.DeepEqual(got, legacyNames) {
+		t.Fatalf("opencode managed names = %v, want %v", got, legacyNames)
+	}
+
+	cfg.ManagedMCPNamesByAgent[string(agentClaude)][0] = "changed"
+	if got := cfg.ManagedMCPNamesByAgent[string(agentOpencode)]; !reflect.DeepEqual(got, legacyNames) {
+		t.Fatalf("opencode managed names after claude mutation = %v, want %v", got, legacyNames)
+	}
+}
+
+func TestManagedMCPNamesForAgentIsolation(t *testing.T) {
+	t.Parallel()
+
+	cfg := &AppConfig{MCPServers: map[string]MCPServerConfig{
+		"beta":  {Name: "beta"},
+		"alpha": {Name: "alpha"},
+	}}
+	setManagedMCPNamesForAgent(cfg, agentClaude)
+
+	cfg.MCPServers = map[string]MCPServerConfig{"codex-only": {Name: "codex-only"}}
+	setManagedMCPNamesForAgent(cfg, agentCodex)
+
+	wantClaude := []string{"alpha", "beta"}
+	if got := managedMCPNamesForAgent(cfg, agentClaude); !reflect.DeepEqual(got, wantClaude) {
+		t.Fatalf("claude managed names = %v, want %v", got, wantClaude)
+	}
+	wantCodex := []string{"codex-only"}
+	if got := managedMCPNamesForAgent(cfg, agentCodex); !reflect.DeepEqual(got, wantCodex) {
+		t.Fatalf("codex managed names = %v, want %v", got, wantCodex)
+	}
+
+	claudeNames := managedMCPNamesForAgent(cfg, agentClaude)
+	claudeNames[0] = "changed"
+	if got := managedMCPNamesForAgent(cfg, agentClaude); !reflect.DeepEqual(got, wantClaude) {
+		t.Fatalf("claude managed names after returned slice mutation = %v, want %v", got, wantClaude)
+	}
+	if got := managedMCPNamesForAgent(cfg, agentCodex); !reflect.DeepEqual(got, wantCodex) {
+		t.Fatalf("codex managed names after claude mutation = %v, want %v", got, wantCodex)
+	}
+}

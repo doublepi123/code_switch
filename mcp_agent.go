@@ -112,8 +112,9 @@ func mergeMCPConfig(root map[string]any, generated map[string]any) {
 	}
 }
 
-func removeManagedMCPFromJSON(root map[string]any, cfg *AppConfig) {
-	if cfg == nil || len(cfg.ManagedMCPNames) == 0 {
+func removeManagedMCPFromJSON(root map[string]any, cfg *AppConfig, agent AgentName) {
+	managedNames := managedMCPNamesForAgent(cfg, agent)
+	if len(managedNames) == 0 {
 		return
 	}
 	for _, key := range []string{"mcpServers", "mcp"} {
@@ -121,7 +122,7 @@ func removeManagedMCPFromJSON(root map[string]any, cfg *AppConfig) {
 		if !ok {
 			continue
 		}
-		for _, name := range cfg.ManagedMCPNames {
+		for _, name := range managedNames {
 			delete(servers, name)
 		}
 		if len(servers) == 0 {

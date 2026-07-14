@@ -126,7 +126,7 @@ func applyOpencodePresetJSON(existing string, preset ProviderPreset, providerKey
 	}
 	providers[providerKey] = providerEntry
 	root["provider"] = providers
-	removeManagedMCPFromJSON(root, cfg)
+	removeManagedMCPFromJSON(root, cfg, agentOpencode)
 	mergeMCPConfig(root, generateOpencodeMCPConfig(cfg))
 
 	data, err := json.MarshalIndent(root, "", "  ")
@@ -226,7 +226,7 @@ func removeOpencodeManagedJSON(existing string, cfg *AppConfig) (string, error) 
 			root["provider"] = providers
 		}
 	}
-	removeManagedMCPFromJSON(root, cfg)
+	removeManagedMCPFromJSON(root, cfg, agentOpencode)
 	mergeMCPConfig(root, generateOpencodeMCPConfig(cfg))
 
 	// If only $schema remains, return empty to trigger file deletion

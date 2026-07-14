@@ -332,7 +332,7 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 	}
 
 	applyPreset(root, preset, apiKey)
-	removeManagedMCPFromJSON(root, cfg)
+	removeManagedMCPFromJSON(root, cfg, agentClaude)
 	mergeMCPConfig(root, generateClaudeMCPConfig(cfg))
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err

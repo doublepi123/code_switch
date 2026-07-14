@@ -87,3 +87,18 @@ func managedMCPServerNames(cfg *AppConfig) []string {
 	sort.Strings(names)
 	return names
 }
+
+func managedMCPNamesForAgent(cfg *AppConfig, agent AgentName) []string {
+	if cfg == nil {
+		return nil
+	}
+	return append([]string(nil), cfg.ManagedMCPNamesByAgent[string(agent)]...)
+}
+
+func setManagedMCPNamesForAgent(cfg *AppConfig, agent AgentName) {
+	if cfg == nil {
+		return
+	}
+	ensureAppConfigMaps(cfg)
+	cfg.ManagedMCPNamesByAgent[string(agent)] = append([]string(nil), managedMCPServerNames(cfg)...)
+}

@@ -117,8 +117,8 @@ func normalizeProxyConfig(cfg ProxyConfig) ProxyConfig {
 	return cfg
 }
 
-// normalizeAppConfig applies all per-section normalizations (currently just
-// ProxyConfig host/port defaults) to an in-memory AppConfig. It is the single
+// normalizeAppConfig applies all per-section normalizations to an in-memory
+// AppConfig. It is the single
 // entry point used by loadAppConfigFrom so every reader sees a consistent,
 // normalized config without each caller having to remember to call the
 // per-section normalizers.
@@ -137,7 +137,21 @@ func normalizeProxyConfig(cfg ProxyConfig) ProxyConfig {
 // value. Only the empty/whitespace-only case is normalized; any other value
 // is preserved verbatim so the downstream control-char screen can reject it.
 func normalizeAppConfig(cfg *AppConfig) {
-	if cfg == nil || cfg.Proxy == nil {
+	if cfg == nil {
+		return
+	}
+	ensureAppConfigMaps(cfg)
+	if len(cfg.ManagedMCPNames) > 0 {
+		for _, agent := range []AgentName{agentClaude, agentCodex, agentOpencode} {
+			key := string(agent)
+			if _, exists := cfg.ManagedMCPNamesByAgent[key]; exists {
+				continue
+			}
+			cfg.ManagedMCPNamesByAgent[key] = append([]string(nil), cfg.ManagedMCPNames...)
+		}
+		cfg.ManagedMCPNames = nil
+	}
+	if cfg.Proxy == nil {
 		return
 	}
 	if strings.TrimSpace(cfg.Proxy.Host) == "" {

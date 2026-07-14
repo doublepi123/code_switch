@@ -99,7 +99,7 @@ func restoreClaudeConfig(claudeDir string, cfg *AppConfig, out io.Writer, dryRun
 			delete(root, "env")
 		}
 	}
-	removeManagedMCPFromJSON(root, cfg)
+	removeManagedMCPFromJSON(root, cfg, agentClaude)
 	mergeMCPConfig(root, generateClaudeMCPConfig(cfg))
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err
