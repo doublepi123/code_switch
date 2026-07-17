@@ -490,6 +490,7 @@ type proxyRawUpstreamResult struct {
 	body       []byte
 	statusCode int
 	err        error
+	usage      *IRUsage
 }
 
 func serveRawProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, upstreamBody []byte, upstreamAdapter ProtocolAdapter, logger *proxyLogger) {
@@ -513,10 +514,15 @@ func serveRawProtocolUpstream(w http.ResponseWriter, r *http.Request, route Prox
 		logRawUpstreamAttempt(logger, r, *route.Fallback, result, fallbackStart)
 	}
 	writeRawProtocolResult(w, result)
+	if result.usage != nil {
+		if lw, ok := w.(*proxyLoggingResponseWriter); ok {
+			lw.inputTokens, lw.outputTokens, lw.totalTokens = proxyUsageTotals(result.usage)
+		}
+	}
 }
 
 func logRawUpstreamAttempt(logger *proxyLogger, r *http.Request, route ProxyRoute, result proxyRawUpstreamResult, start time.Time) {
-	logger.logRequest(proxyLogEntry{
+	entry := proxyLogEntry{
 		Timestamp:  start.UTC(),
 		Kind:       proxyLogKindUpstream,
 		Method:     r.Method,
@@ -527,7 +533,9 @@ func logRawUpstreamAttempt(logger *proxyLogger, r *http.Request, route ProxyRout
 		StatusCode: result.statusCode,
 		Error:      upstreamResultError(result.err),
 		DurationMs: time.Since(start).Milliseconds(),
-	})
+	}
+	entry.InputTokens, entry.OutputTokens, entry.TotalTokens = proxyUsageTotals(result.usage)
+	logger.logRequest(entry)
 }
 
 func doRawProtocolUpstream(r *http.Request, route ProxyRoute, providerKey string, upstreamBody []byte, upstreamAdapter ProtocolAdapter) proxyRawUpstreamResult {
@@ -550,7 +558,16 @@ func doRawProtocolUpstream(r *http.Request, route ProxyRoute, providerKey string
 	if int64(len(respBody)) > proxyMaxUpstreamBodyBytes {
 		return proxyRawUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes)}
 	}
-	return proxyRawUpstreamResult{statusCode: resp.StatusCode, header: resp.Header.Clone(), body: respBody}
+	result := proxyRawUpstreamResult{statusCode: resp.StatusCode, header: resp.Header.Clone(), body: respBody}
+	// Best-effort usage extraction for the stats log. The body is passed to
+	// the client verbatim regardless, so a parse failure must not change the
+	// response — it only means this attempt logs no tokens.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if irResp, parseErr := upstreamAdapter.ParseUpstreamResponse(respBody, resp.Header.Get("Content-Type")); parseErr == nil {
+			result.usage = irResp.Usage
+		}
+	}
+	return result
 }
 
 func writeRawProtocolResult(w http.ResponseWriter, result proxyRawUpstreamResult) {
@@ -594,9 +611,13 @@ type proxyProtocolUpstreamResult struct {
 
 func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest, inboundAdapter, upstreamAdapter ProtocolAdapter, logger *proxyLogger) *IRUsage {
 	start := time.Now()
-	result := doProtocolUpstream(w, r, route, providerKey, ir, inboundAdapter, upstreamAdapter)
+	result, streamUsage := doProtocolUpstream(w, r, route, providerKey, ir, inboundAdapter, upstreamAdapter)
 	if result == nil {
-		return nil
+		// Streaming response was already written to the client. Log the
+		// attempt (with any usage the decoder captured) so request stats
+		// treat streamed calls like any other upstream call.
+		logProtocolStreamSuccess(logger, r, route, streamUsage, start)
+		return streamUsage
 	}
 	logProtocolUpstreamAttempt(logger, r, route, result, start)
 	if isRetryableUpstreamError(result.statusCode, result.err) && route.Fallback != nil {
@@ -609,13 +630,47 @@ func serveProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRo
 			return writeProtocolResult(w, result, ir.Stream, inboundAdapter, upstreamAdapter)
 		}
 		fallbackStart := time.Now()
-		result = doProtocolUpstream(w, r, *route.Fallback, fallbackKey, fallbackIR, inboundAdapter, upstreamAdapter)
+		result, streamUsage = doProtocolUpstream(w, r, *route.Fallback, fallbackKey, fallbackIR, inboundAdapter, upstreamAdapter)
 		if result == nil {
-			return nil
+			logProtocolStreamSuccess(logger, r, *route.Fallback, streamUsage, fallbackStart)
+			return streamUsage
 		}
 		logProtocolUpstreamAttempt(logger, r, *route.Fallback, result, fallbackStart)
 	}
 	return writeProtocolResult(w, result, ir.Stream, inboundAdapter, upstreamAdapter)
+}
+
+// logProtocolStreamSuccess records a successful streamed upstream attempt.
+// The client already received a 200 + SSE stream, so the entry always
+// carries status 200; token usage is attached when the upstream emitted
+// usage events.
+func logProtocolStreamSuccess(logger *proxyLogger, r *http.Request, route ProxyRoute, usage *IRUsage, start time.Time) {
+	entry := proxyLogEntry{
+		Timestamp:  start.UTC(),
+		Kind:       proxyLogKindUpstream,
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		RemoteAddr: r.RemoteAddr,
+		Provider:   route.Provider,
+		Model:      route.Model,
+		StatusCode: http.StatusOK,
+		DurationMs: time.Since(start).Milliseconds(),
+	}
+	entry.InputTokens, entry.OutputTokens, entry.TotalTokens = proxyUsageTotals(usage)
+	logger.logRequest(entry)
+}
+
+// proxyUsageTotals flattens an IRUsage into log fields, deriving the total
+// when the upstream did not report one.
+func proxyUsageTotals(usage *IRUsage) (input, output, total int) {
+	if usage == nil {
+		return 0, 0, 0
+	}
+	total = usage.TotalTokens
+	if total == 0 {
+		total = usage.InputTokens + usage.OutputTokens
+	}
+	return usage.InputTokens, usage.OutputTokens, total
 }
 
 func logProtocolUpstreamAttempt(logger *proxyLogger, r *http.Request, route ProxyRoute, result *proxyProtocolUpstreamResult, start time.Time) {
@@ -640,14 +695,14 @@ func upstreamResultError(err error) string {
 	return err.Error()
 }
 
-func doProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest, inboundAdapter, upstreamAdapter ProtocolAdapter) *proxyProtocolUpstreamResult {
+func doProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute, providerKey string, ir IRRequest, inboundAdapter, upstreamAdapter ProtocolAdapter) (*proxyProtocolUpstreamResult, *IRUsage) {
 	upstreamBody, err := upstreamAdapter.BuildUpstreamRequest(ir)
 	if err != nil {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadRequest, err: fmt.Errorf("translate to %s request: %w", upstreamAdapter.Name(), err)}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadRequest, err: fmt.Errorf("translate to %s request: %w", upstreamAdapter.Name(), err)}, nil
 	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL(route.UpstreamBaseURL, upstreamAdapter.UpstreamPath()), bytes.NewReader(upstreamBody))
 	if err != nil {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusInternalServerError, err: fmt.Errorf("build upstream request: %w", err)}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusInternalServerError, err: fmt.Errorf("build upstream request: %w", err)}, nil
 	}
 	upstreamAdapter.ConfigureUpstreamRequest(req, providerKey)
 	configureProxyUpstreamAuth(req, route, upstreamAdapter.Name(), providerKey)
@@ -656,18 +711,18 @@ func doProtocolUpstream(w http.ResponseWriter, r *http.Request, route ProxyRoute
 	}
 	resp, err := proxyHTTPClient.Do(req)
 	if err != nil {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream request: %w", err)}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream request: %w", err)}, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 	limitedUpstream := io.LimitReader(resp.Body, proxyMaxUpstreamBodyBytes+1)
 	respBody, err := io.ReadAll(limitedUpstream)
 	if err != nil {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("read upstream response: %w", err)}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("read upstream response: %w", err)}, nil
 	}
 	if int64(len(respBody)) > proxyMaxUpstreamBodyBytes {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes)}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes)}, nil
 	}
-	return &proxyProtocolUpstreamResult{statusCode: resp.StatusCode, header: resp.Header.Clone(), body: respBody, contentType: resp.Header.Get("Content-Type")}
+	return &proxyProtocolUpstreamResult{statusCode: resp.StatusCode, header: resp.Header.Clone(), body: respBody, contentType: resp.Header.Get("Content-Type")}, nil
 }
 
 func writeProtocolResult(w http.ResponseWriter, result *proxyProtocolUpstreamResult, stream bool, inboundAdapter, upstreamAdapter ProtocolAdapter) *IRUsage {
@@ -745,42 +800,50 @@ func proxyRouteAuthEnv(route ProxyRoute) string {
 	return strings.TrimSpace(preset.AuthEnv)
 }
 
-func serveStreamingProtocolUpstream(w http.ResponseWriter, r *http.Request, req *http.Request, inboundAdapter, upstreamAdapter ProtocolAdapter) *proxyProtocolUpstreamResult {
+func serveStreamingProtocolUpstream(w http.ResponseWriter, r *http.Request, req *http.Request, inboundAdapter, upstreamAdapter ProtocolAdapter) (*proxyProtocolUpstreamResult, *IRUsage) {
 	resp, err := proxyStreamingHTTPClient.Do(req)
 	if err != nil {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream request: %w", err)}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream request: %w", err)}, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		limitedUpstream := io.LimitReader(resp.Body, proxyMaxUpstreamBodyBytes+1)
 		respBody, readErr := io.ReadAll(limitedUpstream)
 		if readErr != nil {
-			return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("read upstream response: %w", readErr)}
+			return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("read upstream response: %w", readErr)}, nil
 		}
 		if int64(len(respBody)) > proxyMaxUpstreamBodyBytes {
-			return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes)}
+			return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: fmt.Errorf("upstream response exceeds limit of %d bytes", proxyMaxUpstreamBodyBytes)}, nil
 		}
-		return &proxyProtocolUpstreamResult{statusCode: resp.StatusCode, header: resp.Header.Clone(), body: respBody, contentType: resp.Header.Get("Content-Type")}
+		return &proxyProtocolUpstreamResult{statusCode: resp.StatusCode, header: resp.Header.Clone(), body: respBody, contentType: resp.Header.Get("Content-Type")}, nil
 	}
 	decoder, err := streamDecoderForProtocol(upstreamAdapter.Name())
 	if err != nil {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: err}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: err}, nil
 	}
 	encoder, err := streamEncoderForProtocol(inboundAdapter.Name())
 	if err != nil {
-		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: err}
+		return &proxyProtocolUpstreamResult{statusCode: http.StatusBadGateway, err: err}, nil
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(http.StatusOK)
+	var streamUsage *IRUsage
 	if err := decoder.DecodeStream(resp.Body, func(event StreamEvent) error {
+		// Usage can ride on any event type: Anthropic attaches the input
+		// count to message_start and the output count to message_delta,
+		// while OpenAI shapes emit a dedicated usage event. Merging is
+		// field-wise and idempotent, so overlapping reports are safe.
+		if event.Usage != nil {
+			streamUsage = mergeStreamUsage(streamUsage, event.Usage)
+		}
 		return encoder.EncodeStreamEvent(w, event)
 	}); err != nil && r.Context().Err() == nil {
 		_ = encoder.EncodeStreamEvent(w, StreamEvent{Type: streamEventError, Err: err.Error()})
 	}
-	return nil
+	return nil, streamUsage
 }
 
 func upstreamURL(baseURL, path string) string {

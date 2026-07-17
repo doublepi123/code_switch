@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -389,5 +390,182 @@ func TestProxyHandlerLogger_recordsUsageTokensOnSuccessfulNonStream(t *testing.T
 	}
 	if requestEntry.TotalTokens != 10 {
 		t.Fatalf("totalTokens = %d, want 10", requestEntry.TotalTokens)
+	}
+}
+
+func TestProxyHandlerLogger_recordsUsageTokensOnStreamedRequest(t *testing.T) {
+	// Given
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, anthropicStreamFixture)
+	}))
+	t.Cleanup(upstream.Close)
+	logPath := filepath.Join(t.TempDir(), "proxy.jsonl")
+	logger, err := newProxyLogger(logPath)
+	if err != nil {
+		t.Fatalf("newProxyLogger: %v", err)
+	}
+	handler := newProxyHandlerWithRegistryLoggerAndAgent(ProxyRoute{
+		Provider:         "zhipu-cn",
+		Model:            "glm-5.2",
+		UpstreamProtocol: protocolAnthropicMessages,
+		UpstreamBaseURL:  upstream.URL,
+		LocalToken:       "local-token",
+	}, "provider-key", defaultProtocolRegistry(), logger, "claude")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"glm-5.2","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer local-token")
+	rec := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(rec, req)
+	if err := logger.close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+
+	// Then
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200\nbody: %s", rec.Code, rec.Body.String())
+	}
+	entries := readProxyLogEntries(t, logPath)
+	var requestEntry, upstreamEntry *proxyLogEntry
+	for i := range entries {
+		switch entries[i].Kind {
+		case proxyLogKindRequest, "":
+			requestEntry = &entries[i]
+		case proxyLogKindUpstream:
+			upstreamEntry = &entries[i]
+		}
+	}
+	if requestEntry == nil {
+		t.Fatalf("no request entry in %#v", entries)
+	}
+	if requestEntry.Agent != "claude" {
+		t.Fatalf("request agent = %q, want claude", requestEntry.Agent)
+	}
+	if requestEntry.InputTokens != 7 || requestEntry.OutputTokens != 2 || requestEntry.TotalTokens != 9 {
+		t.Fatalf("request tokens = %d/%d/%d, want 7/2/9; entry=%#v",
+			requestEntry.InputTokens, requestEntry.OutputTokens, requestEntry.TotalTokens, *requestEntry)
+	}
+	if upstreamEntry == nil {
+		t.Fatalf("no upstream attempt entry for streamed request in %#v", entries)
+	}
+	if upstreamEntry.StatusCode != http.StatusOK {
+		t.Fatalf("upstream status = %d, want 200", upstreamEntry.StatusCode)
+	}
+	if upstreamEntry.InputTokens != 7 || upstreamEntry.OutputTokens != 2 {
+		t.Fatalf("upstream tokens = %d/%d, want 7/2; entry=%#v",
+			upstreamEntry.InputTokens, upstreamEntry.OutputTokens, *upstreamEntry)
+	}
+}
+
+func TestProxyHandlerLogger_recordsStreamAttemptWithoutUsageEvents(t *testing.T) {
+	// Given
+	streamNoUsage := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+	upstream := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, streamNoUsage)
+	}))
+	t.Cleanup(upstream.Close)
+	logPath := filepath.Join(t.TempDir(), "proxy.jsonl")
+	logger, err := newProxyLogger(logPath)
+	if err != nil {
+		t.Fatalf("newProxyLogger: %v", err)
+	}
+	handler := newProxyHandlerWithRegistryLoggerAndAgent(ProxyRoute{
+		Provider:         "zhipu-cn",
+		Model:            "glm-5.2",
+		UpstreamProtocol: protocolAnthropicMessages,
+		UpstreamBaseURL:  upstream.URL,
+		LocalToken:       "local-token",
+	}, "provider-key", defaultProtocolRegistry(), logger, "claude")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"glm-5.2","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer local-token")
+	rec := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(rec, req)
+	if err := logger.close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+
+	// Then
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200\nbody: %s", rec.Code, rec.Body.String())
+	}
+	entries := readProxyLogEntries(t, logPath)
+	var upstreamEntry *proxyLogEntry
+	for i := range entries {
+		if entries[i].Kind == proxyLogKindUpstream {
+			upstreamEntry = &entries[i]
+		}
+	}
+	if upstreamEntry == nil {
+		t.Fatalf("stream success must log an upstream attempt; entries=%#v", entries)
+	}
+	if upstreamEntry.StatusCode != http.StatusOK {
+		t.Fatalf("upstream status = %d, want 200", upstreamEntry.StatusCode)
+	}
+	if upstreamEntry.TotalTokens != 0 || upstreamEntry.InputTokens != 0 {
+		t.Fatalf("tokens should be zero without usage events; entry=%#v", *upstreamEntry)
+	}
+}
+
+func TestProxyHandlerLogger_recordsUsageTokensOnRawPassthrough(t *testing.T) {
+	// Given: same-protocol non-stream request hits the raw passthrough path.
+	upstream, _ := startAnthropicUpstream(t, 0, `{"id":"msg_ok","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":4}}`)
+	logPath := filepath.Join(t.TempDir(), "proxy.jsonl")
+	logger, err := newProxyLogger(logPath)
+	if err != nil {
+		t.Fatalf("newProxyLogger: %v", err)
+	}
+	handler := newProxyHandlerWithRegistryLoggerAndAgent(ProxyRoute{
+		Provider:         "zhipu-cn",
+		Model:            "claude-test",
+		UpstreamProtocol: protocolAnthropicMessages,
+		UpstreamBaseURL:  upstream.URL,
+		LocalToken:       "local-token",
+	}, "provider-key", defaultProtocolRegistry(), logger, "claude")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-test","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer local-token")
+	rec := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(rec, req)
+	if err := logger.close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+
+	// Then
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200\nbody: %s", rec.Code, rec.Body.String())
+	}
+	entries := readProxyLogEntries(t, logPath)
+	var requestEntry, upstreamEntry *proxyLogEntry
+	for i := range entries {
+		switch entries[i].Kind {
+		case proxyLogKindRequest, "":
+			requestEntry = &entries[i]
+		case proxyLogKindUpstream:
+			upstreamEntry = &entries[i]
+		}
+	}
+	if requestEntry == nil || upstreamEntry == nil {
+		t.Fatalf("want request+upstream entries, got %#v", entries)
+	}
+	if requestEntry.InputTokens != 5 || requestEntry.OutputTokens != 4 || requestEntry.TotalTokens != 9 {
+		t.Fatalf("request tokens = %d/%d/%d, want 5/4/9; entry=%#v",
+			requestEntry.InputTokens, requestEntry.OutputTokens, requestEntry.TotalTokens, *requestEntry)
+	}
+	if upstreamEntry.InputTokens != 5 || upstreamEntry.OutputTokens != 4 {
+		t.Fatalf("upstream tokens = %d/%d, want 5/4; entry=%#v",
+			upstreamEntry.InputTokens, upstreamEntry.OutputTokens, *upstreamEntry)
 	}
 }
